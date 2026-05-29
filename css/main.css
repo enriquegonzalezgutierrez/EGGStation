@@ -1,0 +1,224 @@
+/* Author: Enrique González Gutiérrez */
+
+/* Theme Abstraction Variables (DIP Principle) */
+:root {
+    --bg-primary: #0a0a0e;
+    --bg-panel: #12121a;
+    --accent-color: #8a2be2;
+    --accent-hover: #a04ef6;
+    --text-main: #f0f0f5;
+    --text-muted: #8e8e9f;
+    --border-color: #242435;
+}
+
+/* Page base layouts with enabled vertical scrolling */
+html, body {
+    overflow-y: auto;
+    overflow-x: hidden;
+    background-color: var(--bg-primary);
+    color: var(--text-main);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    box-sizing: border-box;
+}
+
+#nomargin {
+    padding: 0;
+    margin: 0;
+}
+
+/* Canvas render optimization */
+canvas { 
+    image-rendering: pixelated; 
+    user-select: none;
+}
+
+/* Debugger font if needed */
+@font-face {
+    font-family: 'terminalfont';
+    src: url('../fonts/TerminusTTF-4.49.2.ttf');
+}
+
+/* Header & Status Indicator Panel */
+#titleDiv {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 20px;
+    padding: 10px 20px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    font-weight: 600;
+    color: var(--text-main);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.logo-text {
+    font-size: 1.15rem; 
+    letter-spacing: 0.05em;
+}
+
+.divider {
+    color: var(--border-color);
+}
+
+.fps-counter {
+    font-size: 0.95rem;
+}
+
+#fpsSpan {
+    color: var(--accent-color);
+    font-family: monospace;
+    font-weight: bold;
+}
+
+/* Original Legacy Tooltips implementation, sanitized */
+.tooltip {
+    text-decoration: none;
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+   
+.tooltip span {
+    display: none;
+    border-radius: 6px;
+    color: black;
+    background: white; 
+}
+   
+.tooltip span img {
+    float: left;
+    margin: 0px 4px 4px 0;
+}
+   
+.tooltip:hover span {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 1000;
+    width: auto;
+    max-width: 280px;
+    min-height: 240px;
+    border: 1px solid black;
+    margin-top: 12px;
+    margin-left: 32px;
+    overflow: hidden;
+    padding: 8px;
+}
+
+/* Refined help tooltip specific styling */
+.help-tooltip {
+    min-width: 180px; 
+    font-weight: normal; 
+    font-size: 0.85rem; 
+    line-height: 1.4;
+}
+
+/* Central Emulator Display Frame */
+#emulator-container {
+    position: relative;
+    background: #000;
+    padding: 6px;
+    border-radius: 12px;
+    border: 2px solid var(--border-color);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    margin-bottom: 20px;
+    transition: border-color 0.3s;
+}
+
+#emulator-container:hover {
+    border-color: var(--accent-color);
+}
+
+#smsdisplay {
+    display: block;
+    border-radius: 6px;
+    max-width: 100%;
+    height: auto;
+}
+
+/* Controller Board Panel (DIT / Grid Principle) */
+.control-panel {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 15px;
+    width: 100%;
+    max-width: 500px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 20px;
+    box-sizing: border-box;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.control-group label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+/* Control Element Overrides */
+button, select {
+    background-color: #1a1a26;
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    padding: 10px 14px;
+    font-size: 0.9rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 500;
+    outline: none;
+}
+
+button:hover, select:hover {
+    background-color: var(--border-color);
+    border-color: var(--text-muted);
+}
+
+#romLoaderBtn {
+    background-color: var(--accent-color);
+    border: none;
+    color: #fff;
+    font-weight: bold;
+}
+
+#romLoaderBtn:hover {
+    background-color: var(--accent-hover);
+}
+
+/* Helper details bar */
+.instructions {
+    margin-top: 25px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1.5;
+    max-width: 500px;
+    background: rgba(18, 18, 26, 0.5);
+    padding: 10px 20px;
+    border-radius: 20px;
+    border: 1px dashed var(--border-color);
+}
+
+/* Global utility selectors */
+.hidden {
+    display: none !important;
+}

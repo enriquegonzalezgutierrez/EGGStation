@@ -1,0 +1,120 @@
+<!doctype html>
+<!-- Author: Enrique González Gutiérrez -->
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="description" content="AURASMS - Sega Master System Emulator">
+        <meta name="keywords" content="Sega Master System emulator, AURASMS, emulation, SEGA, retro games">
+
+        <link rel="icon" type="image/png" href="img/favicon.ico"/>
+        <title>AURASMS - version 1.0</title>
+
+        <!-- Main external stylesheet -->
+        <link rel="stylesheet" href="css/main.css"/>
+        
+        <!-- Legacy Audio Chip Emulator -->
+        <script src="js/sn79489.js"></script>
+        
+        <!-- Domain Layer: Cartridge Mapper Strategies (Refactored) -->
+        <script src="js/domain/cartridge/mappers/BaseMapper.js"></script>
+        <script src="js/domain/cartridge/mappers/SegaMapper.js"></script>
+        <script src="js/domain/cartridge/mappers/CodemastersMapper.js"></script>
+        <script src="js/domain/cartridge/mappers/KoreanMapper.js"></script>
+        <script src="js/domain/cartridge/mappers/SmsMapperFactory.js"></script>
+        
+        <!-- Domain Layer: Controller Port State Machine (Refactored) -->
+        <script src="js/domain/controller/Sega315_5297.js"></script>
+        
+        <!-- Domain Layer: Memory and I/O Bus (Refactored) -->
+        <script src="js/domain/bus/SmsSystemBus.js"></script>
+        
+        <!-- Legacy Video Chip Emulator -->
+        <script src="js/smsVdp.js"></script>
+        <script src="js/testMMU.js"></script>
+
+        <!-- Domain Layer: CPU registers and ALU (Refactored) -->
+        <script src="js/domain/cpu/Z80Registers.js"></script>
+        <script src="js/domain/cpu/Z80Alu.js"></script>
+
+        <!-- Domain Layer: CPU Functional Instruction Registries (Refactored) -->
+        <script src="js/domain/cpu/instructions/Z80DataTransfer.js"></script>
+        <script src="js/domain/cpu/instructions/Z80Arithmetic.js"></script>
+        <script src="js/domain/cpu/instructions/Z80Bitwise.js"></script>
+        <script src="js/domain/cpu/instructions/Z80ShiftRotate.js"></script>
+        <script src="js/domain/cpu/instructions/Z80ProgramFlow.js"></script>
+        <script src="js/domain/cpu/instructions/Z80BlockOps.js"></script>
+        <script src="js/domain/cpu/instructions/Z80SystemIO.js"></script>
+
+        <!-- Domain Layer: CPU Orchestrator (Refactored) -->
+        <script src="js/domain/cpu/ZilogZ80.js"></script>
+
+        <!-- Legacy Platform / Application Utilities -->
+        <script src="js/cpuTestRunner.js"></script>
+        <script src="js/cartridge.js"></script>
+        <script src="js/serializer.js"></script>
+        <script src="js/main.js"></script>
+    </head>
+
+    <body>
+        <!-- Header & Info Area -->
+        <div id="titleDiv">
+            <span class="logo-text">AURASMS</span>
+            <span class="divider">|</span>
+            <span class="fps-counter">FPS: <span id="fpsSpan">--</span></span>
+            
+            <a class="tooltip" href="#" onclick="return false;">
+                <img src="img/camera.png" alt="Savestate snapshot" />
+                <span><img src="img/defaultss.png" id="savestateImg" alt="Snapshot slot" /></span>
+            </a>
+            
+            <a class="tooltip" href="#" onclick="return false;">
+                <img src="img/info.png" alt="Help" />
+                <span class="help-tooltip">
+                    <strong>Controls:</strong><br>
+                    - Z, X & Arrows: Controls<br>
+                    - \ : Fast Forward<br>
+                    - P : Pause Emulation<br>
+                    - O : SMS Pause button<br>
+                    - F2 / F3 : Save / Load State
+                </span>
+            </a>
+        </div>
+
+        <!-- Visualizer CRT Frame -->
+        <div id="emulator-container">
+            <canvas width="256" height="240" id="smsdisplay"></canvas>
+        </div>
+
+        <!-- Interactive Control Board -->
+        <div class="control-panel">
+            <!-- ROM Loader Form -->
+            <div class="control-group" id="fileselector">
+                <label for="romLoaderBtn">Cartridge ROM</label>
+                <button id="romLoaderBtn">Load ROM (.sms/.sg)</button>
+                <input type="file" id="cartridgeSelector" class="hidden" onchange="handleCartridgeUpload(this.files)">
+            </div>
+
+            <!-- Standard Selector -->
+            <div class="control-group" id="vdpMode">
+                <label for="vdpModeSelector">TV Signal Standard</label>
+                <select name="vdpMode" id="vdpModeSelector" onchange="setVdpStandard(this)">
+                    <option value="NTSC">NTSC (60Hz)</option>
+                    <option value="PAL">PAL (50Hz)</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Clean Inline Keyboard Helpers -->
+        <div class="instructions">
+            Use <strong>Z / X</strong> for Button 1/2, <strong>Arrows</strong> to move. 
+            Press <strong>F2 / F3</strong> to instantly save and load your current state.
+        </div>
+
+        <!-- Hidden placeholders to avoid runtime crashes in legacy main.js -->
+        <div id="softLoader" class="hidden"></div>
+        <canvas width="800" height="400" id="debugCanvas" class="hidden"></canvas>
+        <button id="fsbutton" onclick="fullscreen();" class="hidden">Fullscreen</button>
+        <div id="debugButtons" class="hidden"></div>
+    </body>
+</html>
