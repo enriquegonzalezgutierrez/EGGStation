@@ -15,11 +15,7 @@ let glbCartridge;
 let glbVDP;
 let glbSoundchip;
 
-// FPS tracking variables
-let frameTime = 0;
-let lastLoop;
-let thisLoop;
-
+// Timing metrics
 let glbBpLine = 0;
 let glbBreakpoint = -1;
 const numDebuggerLines = 20;
@@ -28,12 +24,20 @@ const numDebuggerLines = 20;
 let glbEmulatorStatus = -1; 
 let glbVideoctx;
 let glbMaxSpeed = false;
-let glbScheduleInterval = 16;
 let glbFrames = 0;
 let glbSerializer;
 let glbSerCounterL = -1;
 let glbSerCounterS = -1;
 let glbVdpMode = 0; // 0: NTSC, 1: PAL
+
+// High-precision requestAnimationFrame synchronization variables
+let animationFrameId = null;
+let lastTime = 0;
+let accumulatedTime = 0;
+
+// SMS native timing targets
+const SMS_NTSC_FPS = 59.922743; // Standard NTSC rate (~16.688 ms per frame)
+const SMS_PAL_FPS = 49.701459;  // Standard PAL rate (~20.120 ms per frame)
 
 /**
  * Reconstitutes and loads the preview snapshot for savestates.
@@ -189,81 +193,96 @@ function drawStatus(s) {
     ctx.fillText(s, 180, 180);        
 }
 
+// ========================================================================
+// HIGH-PRECISION TIMING & EXECUTION LOOP (REFUGE FROM TIMEOUT JITTER)
+// ========================================================================
+
 /**
- * Main execution and timing frame sync loop.
+ * High-precision execution loop driven by the browser's refresh rate (V-Sync).
+ * Employs a delta-time accumulator to isolate emulation speed from display Hz.
+ * @param {number} currentTime - High-resolution timestamp from requestAnimationFrame.
  */
-function emulate() {
-    let smsFps = 59.922743; // Standard NTSC rate
-    if (glbVdpMode === 1) {
-        smsFps = 49.701459; // Standard PAL rate
+function emulate(currentTime) {
+    let targetFps = (glbVdpMode === 1) ? SMS_PAL_FPS : SMS_NTSC_FPS;
+    const targetFrameTime = 1000 / targetFps; // Target milliseconds per frame
+
+    if (!lastTime) {
+        lastTime = currentTime;
     }
 
-    // Dynamic FPS throttling calculation
-    const filterStrength = 20;
-    const thisFrameTime = (thisLoop = new Date()) - lastLoop;
-    frameTime += (thisFrameTime - frameTime) / filterStrength;
-    lastLoop = thisLoop;
+    // Calculate real-world elapsed time since the last browser render tick
+    let deltaTime = currentTime - lastTime;
+    lastTime = currentTime;
 
-    const fpsOut = document.getElementById('fpsSpan');
-    const fpeez = (1000 / frameTime).toFixed(1);
-    if (fpsOut) {
-        fpsOut.innerHTML = fpeez + " FPS";
-    }
-    glbFrames++;
-
-    // Fine-tune timing schedule bounds
-    if ((!glbMaxSpeed) && (glbFrames > 60)) {
-        if (fpeez < smsFps) {
-            if (glbScheduleInterval > 1) glbScheduleInterval--;
-        } else if (fpeez > smsFps) {
-            glbScheduleInterval++;
-        }
-    }
-
-    if (!glbMaxSpeed) {
-        setTimeout(emulate, glbScheduleInterval);
-    } else {
-        setTimeout(emulate, 0);
-    }
-
-    if (glbEmulatorStatus === 1) {
-        let emulatedCycles = 0;
-        const targetCycles = Math.floor(glbCPU.clockRate / smsFps);
-
-        while (emulatedCycles < targetCycles) {
-            const cyc = glbCPU.executeOne();
-            if (!glbMaxSpeed) {
-                glbSoundchip.step(glbCPU.totCycles);
-            }
-            const needsBlit = glbVDP.update(glbCPU, cyc);
-
-            if (needsBlit) {
-                drawScreen();
-            }
-
-            emulatedCycles += cyc;
-        }
-    }
-    else if (glbEmulatorStatus === 2) {
-        drawScreen();
-        drawPauseIcon();
-    }
-    else if (glbEmulatorStatus === 0) {
-        drawScreen();
+    // Cap deltaTime to avoid "spiral of death" during heavy CPU load or tab suspension
+    if (deltaTime > 100) {
+        deltaTime = targetFrameTime;
     }
 
     if (glbMaxSpeed) {
-        drawFFWDIcon();
+        // Fast-forward mode: Run multiple frames per screen refresh cycle
+        for (let f = 0; f < 4; f++) {
+            runSingleFrame(targetFps);
+        }
+        drawScreen();
+    } else if (glbEmulatorStatus === 1) {
+        accumulatedTime += deltaTime;
+
+        // Process as many target frame slices as accumulated in real-world time
+        while (accumulatedTime >= targetFrameTime) {
+            runSingleFrame(targetFps);
+            accumulatedTime -= targetFrameTime;
+        }
+        drawScreen();
+    } else if (glbEmulatorStatus === 2) {
+        drawScreen();
+        drawPauseIcon();
+    } else if (glbEmulatorStatus === 0) {
+        drawScreen();
     }
 
+    // Render diagnostic status alerts
+    if (glbMaxSpeed) {
+        drawFFWDIcon();
+    }
     if (glbSerCounterL > 0) {
         glbSerCounterL--;
         drawStatus("State Loaded");
     }
-
     if (glbSerCounterS > 0) {
         glbSerCounterS--;
         drawStatus("State Saved");
+    }
+
+    // Calculate and render current FPS metrics
+    glbFrames++;
+    if (deltaTime > 0) {
+        const currentFps = (1000 / deltaTime).toFixed(1);
+        const fpsOut = document.getElementById('fpsSpan');
+        if (fpsOut) {
+            fpsOut.innerHTML = currentFps + " FPS";
+        }
+    }
+
+    // Request the next animation frame recursively
+    animationFrameId = requestAnimationFrame(emulate);
+}
+
+/**
+ * Simulates exactly one frame's worth of CPU cycles and hardware updates.
+ * @param {number} targetFps - Active signal FPS (NTSC vs PAL).
+ */
+function runSingleFrame(targetFps) {
+    let emulatedCycles = 0;
+    const targetCycles = Math.floor(glbCPU.clockRate / targetFps);
+
+    while (emulatedCycles < targetCycles) {
+        const cyc = glbCPU.executeOne();
+        if (!glbMaxSpeed) {
+            glbSoundchip.step(glbCPU.totCycles);
+        }
+        glbVDP.update(glbCPU, cyc);
+        emulatedCycles += cyc;
     }
 }
 
@@ -284,6 +303,11 @@ function drawScreen() {
  * Initializes and wires all system entities under EGGStation workspace.
  */
 function loadBinary(fname, abuf) {
+    // Cancel any active animation frame request to prevent dual-loop collisions
+    if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+    }
+
     glbCartridge = new SegaMasterSystemCartridge(fname);
     glbCartridge.load(abuf);
     glbVDP = new Sega315_5124_Vdp(glbVdpMode);
@@ -293,10 +317,13 @@ function loadBinary(fname, abuf) {
     glbSoundchip.startMix(glbCPU);
 
     glbEmulatorStatus = 1; // Transition to active running loop
-    lastLoop = new Date();
-    thisLoop = undefined;
+    lastTime = 0;
+    accumulatedTime = 0;
+    
     hideDebugStuff();
-    emulate();
+    
+    // Kickstart the high-precision requestAnimationFrame loop
+    animationFrameId = requestAnimationFrame(emulate);
 }
 
 function setVdpStandard(th) {
