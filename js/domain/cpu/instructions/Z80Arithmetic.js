@@ -1,18 +1,18 @@
 /* 
+ * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
  * Domain Layer: Z80 Arithmetic and Logical Instruction Registry
  * 
  * This class encapsulates all Z80 CPU instructions designed for arithmetic and 
- * logical operations on 8-bit and 16-bit operands (ADD, ADC, SUB, SBC, INC, DEC, 
- * AND, OR, XOR, CP, DAA, CPL, NEG, SCF, CCF). It delegates the heavy mathematical 
- * calculations and flag updates directly to the Z80Alu.
+ * logical operations on 8-bit and 16-bit operands. It delegates heavy mathematical 
+ * calculations and flag updates directly to the Z80Alu instance.
  */
 
 class Z80Arithmetic {
     static register(cpu, registers, alu, registry) {
 
-        // Helper for displacement address
+        // Helper for displacement address computation used in index-relative addressing (IX+d, IY+d)
         const getDisplacement = (indexValue) => {
             const d = cpu.theMMU.readAddr(cpu.registers.pc + 2);
             const incr = (d & 0x80) === 0x80 ? -0x80 + (d & 0x7F) : d;
@@ -159,7 +159,7 @@ class Z80Arithmetic {
         registry.standard[0xb6] = [() => { registers.a = alu.or_8bit(registers, registers.a, cpu.theMMU.readAddr(registers.hl)); cpu.incPc(1); }, "OR (HL)", 7, 0, false];
         registry.standard[0xb7] = [() => { registers.a = alu.or_8bit(registers, registers.a, registers.a); cpu.incPc(1); }, "OR A", 4, 0, false];
 
-        // --- Comparations ---
+        // --- Comparisons ---
         registry.standard[0xb8] = [() => { alu.sub_8bit(registers, registers.a, registers.b); cpu.incPc(1); }, "CP B", 4, 0, false];
         registry.standard[0xb9] = [() => { alu.sub_8bit(registers, registers.a, registers.c); cpu.incPc(1); }, "CP C", 4, 0, false];
         registry.standard[0xba] = [() => { alu.sub_8bit(registers, registers.a, registers.d); cpu.incPc(1); }, "CP D", 4, 0, false];

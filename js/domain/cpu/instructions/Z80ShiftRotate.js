@@ -1,4 +1,5 @@
 /* 
+ * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
  * Domain Layer: Z80 Shift and Rotate Instruction Registry
@@ -11,7 +12,7 @@
 class Z80ShiftRotate {
     static register(cpu, registers, alu, registry) {
 
-        // Helper for displacement address
+        // Helper for displacement address computation used in index-relative addressing (IX+d, IY+d)
         const getDisplacement = (indexValue) => {
             const d = cpu.theMMU.readAddr(cpu.registers.pc + 2);
             const incr = (d & 0x80) === 0x80 ? -0x80 + (d & 0x7F) : d;

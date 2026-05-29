@@ -1,61 +1,65 @@
 /* 
+ * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: Sega 315-5297 I/O Controller Chip
+ * Domain Layer: Sega315_5297
  * 
- * Emulates the physical Sega 315-5297 input/output chip used in the Master System.
- * It manages the active-low voltage states of the DB-9 Controller Ports, exposing
- * them through virtual hardware registers mapped to I/O ports 0xDC and 0xDD.
+ * Emulates the physical Sega 315-5297 input/output controller chip.
+ * It coordinates the DB-9 input pin active-low states, which drop to 0 volts (ground)
+ * when a directional key or button is pressed, mirroring the real hardware behavior.
  */
 
-// Hardware active-low pin bitmasks for DB-9 Controller Port 1 (mapped to Port 0xDC)
+// Hardware bitmasks representing each pin on Controller Port 1 and Port 2
 const SEGA_IO_PIN_MASK = {
-    PORT_1_UP:       0x01, // Bit 0: Controller Port 1 Up
-    PORT_1_DOWN:     0x02, // Bit 1: Controller Port 1 Down
-    PORT_1_LEFT:     0x04, // Bit 2: Controller Port 1 Left
-    PORT_1_RIGHT:    0x08, // Bit 3: Controller Port 1 Right
-    PORT_1_BUTTON_1: 0x10, // Bit 4: Controller Port 1 Button 1 / TL (Active-Low)
-    PORT_1_BUTTON_2: 0x20, // Bit 5: Controller Port 1 Button 2 / TR (Active-Low)
-    PORT_2_UP:       0x40, // Bit 6: Controller Port 2 Up
-    PORT_2_DOWN:     0x80  // Bit 7: Controller Port 2 Down
+    PORT_1_UP:       0x01, // Bit 0: Up directional switch (Port 1)
+    PORT_1_DOWN:     0x02, // Bit 1: Down directional switch (Port 1)
+    PORT_1_LEFT:     0x04, // Bit 2: Left directional switch (Port 1)
+    PORT_1_RIGHT:    0x08, // Bit 3: Right directional switch (Port 1)
+    PORT_1_BUTTON_1: 0x10, // Bit 4: Button 1 / Fire 1 (Port 1 - TL line)
+    PORT_1_BUTTON_2: 0x20, // Bit 5: Button 2 / Fire 2 (Port 1 - TR line)
+    PORT_2_UP:       0x40, // Bit 6: Up directional switch (Port 2)
+    PORT_2_DOWN:     0x80  // Bit 7: Down directional switch (Port 2)
 };
 
 class Sega315_5297 {
     constructor() {
-        // Registers initialize to 0xFF (pull-up resistors mean 5V/Inactive when no buttons are pressed)
-        this.portRegDC = 0xff;
-        this.portRegDD = 0xff; 
+        // Internal state registers default to 0xFF (VCC pull-up logic, inactive state)
+        this.portRegisterDC = 0xff;
+        this.portRegisterDD = 0xff; 
     }
 
     /**
-     * Set state of a physical pin on the controller ports.
-     * Emulates active-low logic: pressing a button grounds the pin (voltage drops to 0).
+     * Toggles the low-voltage ground state of a DB-9 register pin.
+     * @param {string} pinName - Name of the pin defined in SEGA_IO_PIN_MASK.
+     * @param {boolean} isPressed - True if active-low state is triggered (0V/Ground).
      */
-    writePinState(pin, isPressed) {
+    writePinState(pinName, isPressed) {
         if (isPressed) {
-            this.portRegDC &= ~SEGA_IO_PIN_MASK[pin]; // Drop voltage to 0 (Active)
+            this.portRegisterDC &= ~SEGA_IO_PIN_MASK[pinName]; // Drop to low-level (0)
         } else {
-            this.portRegDC |= SEGA_IO_PIN_MASK[pin];  // Pull-up to 1 (Inactive)
+            this.portRegisterDC |= SEGA_IO_PIN_MASK[pinName];  // Return to pull-up (1)
         }
     }
 
     /**
-     * Reads register 0xDC (Port A/B inputs)
+     * Reads register 0xDC (exposes Port 1 buttons and partial Port 2 directionals).
+     * @returns {number} 8-bit state.
      */
     readRegisterDC() {
-        return this.portRegDC;
+        return this.portRegisterDC;
     }
 
     /**
-     * Reads register 0xDD (Port B / Misc inputs)
+     * Reads register 0xDD (exposes Port 2 buttons and system configuration switches).
+     * @returns {number} 8-bit state.
      */
     readRegisterDD() {
-        return this.portRegDD;
+        return this.portRegisterDD;
     }
 
-    // ------------------------------------------------------------------------
-    // BACKWARD COMPATIBILITY ALIASES (For browser keyboard handlers)
-    // ------------------------------------------------------------------------
+    // ========================================================================
+    // SEGA GAMEPAD DELEGATE INPUT INTERFACE
+    // ========================================================================
     pressButton1()   { this.writePinState('PORT_1_BUTTON_1', true); }
     depressButton1() { this.writePinState('PORT_1_BUTTON_1', false); }
     pressButton2()   { this.writePinState('PORT_1_BUTTON_2', true); }

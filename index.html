@@ -1,43 +1,48 @@
 <!doctype html>
-<!-- Author: Enrique González Gutiérrez -->
+<!-- 
+ * Project: EGGStation - Sega Master System Emulator
+ * Author: Enrique González Gutiérrez
+-->
 <html lang="en">
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta name="description" content="AURASMS - Sega Master System Emulator">
-        <meta name="keywords" content="Sega Master System emulator, AURASMS, emulation, SEGA, retro games">
+        <meta name="description" content="EGGStation - Sega Master System Emulator">
+        <meta name="keywords" content="Sega Master System emulator, EGGStation, emulation, SEGA, retro games, clean code">
 
         <link rel="icon" type="image/png" href="img/favicon.ico"/>
-        <title>AURASMS - version 1.0</title>
+        <title>EGGStation - Sega Master System Emulator</title>
 
         <!-- Main external stylesheet -->
         <link rel="stylesheet" href="css/main.css"/>
         
-        <!-- Legacy Audio Chip Emulator -->
-        <script src="js/sn79489.js"></script>
+        <!-- Infrastructure Layer: Integrated Sound Chip -->
+        <script src="js/infrastructure/audio/Sega315_5124_Psg.js"></script>
         
-        <!-- Domain Layer: Cartridge Mapper Strategies (Refactored) -->
+        <!-- Domain Layer: Cartridge Mapper Strategies -->
         <script src="js/domain/cartridge/mappers/BaseMapper.js"></script>
         <script src="js/domain/cartridge/mappers/SegaMapper.js"></script>
         <script src="js/domain/cartridge/mappers/CodemastersMapper.js"></script>
         <script src="js/domain/cartridge/mappers/KoreanMapper.js"></script>
-        <script src="js/domain/cartridge/mappers/SmsMapperFactory.js"></script>
+        <script src="js/domain/cartridge/mappers/SegaMasterSystemMapperFactory.js"></script>
         
-        <!-- Domain Layer: Controller Port State Machine (Refactored) -->
+        <!-- Domain Layer: Controller Port Chip -->
         <script src="js/domain/controller/Sega315_5297.js"></script>
         
-        <!-- Domain Layer: Memory and I/O Bus (Refactored) -->
-        <script src="js/domain/bus/SmsSystemBus.js"></script>
+        <!-- Domain Layer: Memory and I/O Bus -->
+        <script src="js/domain/bus/SegaMasterSystemBus.js"></script>
         
-        <!-- Legacy Video Chip Emulator -->
-        <script src="js/smsVdp.js"></script>
-        <script src="js/testMMU.js"></script>
+        <!-- Infrastructure Layer: Video Display Processor -->
+        <script src="js/infrastructure/video/Sega315_5124_Vdp.js"></script>
+        
+        <!-- Diagnostic Layer: Mock Memory for Dry-run Validation -->
+        <script src="js/diagnostic/Z80DiagnosticMemory.js"></script>
 
-        <!-- Domain Layer: CPU registers and ALU (Refactored) -->
+        <!-- Domain Layer: CPU Registers and ALU -->
         <script src="js/domain/cpu/Z80Registers.js"></script>
         <script src="js/domain/cpu/Z80Alu.js"></script>
 
-        <!-- Domain Layer: CPU Functional Instruction Registries (Refactored) -->
+        <!-- Domain Layer: Z80 Instructions Registries -->
         <script src="js/domain/cpu/instructions/Z80DataTransfer.js"></script>
         <script src="js/domain/cpu/instructions/Z80Arithmetic.js"></script>
         <script src="js/domain/cpu/instructions/Z80Bitwise.js"></script>
@@ -46,37 +51,44 @@
         <script src="js/domain/cpu/instructions/Z80BlockOps.js"></script>
         <script src="js/domain/cpu/instructions/Z80SystemIO.js"></script>
 
-        <!-- Domain Layer: CPU Orchestrator (Refactored) -->
+        <!-- Domain Layer: CPU Orchestrator -->
         <script src="js/domain/cpu/ZilogZ80.js"></script>
 
-        <!-- Legacy Platform / Application Utilities -->
-        <script src="js/cpuTestRunner.js"></script>
-        <script src="js/cartridge.js"></script>
-        <script src="js/serializer.js"></script>
-        <script src="js/main.js"></script>
+        <!-- Diagnostic Layer: JSON Test Suite Runner -->
+        <script src="js/diagnostic/Z80TestSuiteRunner.js"></script>
+        
+        <!-- Domain Layer: Physical Cartridge Loader -->
+        <script src="js/domain/cartridge/SegaMasterSystemCartridge.js"></script>
+        
+        <!-- Infrastructure Layer: Save State Storage Handler -->
+        <script src="js/infrastructure/storage/WebLocalStorageSerializer.js"></script>
+        
+        <!-- Application Coordinator Entrypoint -->
+        <script src="js/app.js"></script>
     </head>
 
     <body>
         <!-- Header & Info Area -->
         <div id="titleDiv">
-            <span class="logo-text">AURASMS</span>
+            <span class="logo-text">EGGStation</span>
             <span class="divider">|</span>
-            <span class="fps-counter">FPS: <span id="fpsSpan">--</span></span>
+            <span class="fps-counter">Performance: <span id="fpsSpan">--</span></span>
             
             <a class="tooltip" href="#" onclick="return false;">
                 <img src="img/camera.png" alt="Savestate snapshot" />
-                <span><img src="img/defaultss.png" id="savestateImg" alt="Snapshot slot" /></span>
+                <span><img src="img/defaultss.png" id="savestateImg" alt="Snapshot slot preview" /></span>
             </a>
             
             <a class="tooltip" href="#" onclick="return false;">
-                <img src="img/info.png" alt="Help" />
+                <img src="img/info.png" alt="Help information" />
                 <span class="help-tooltip">
-                    <strong>Controls:</strong><br>
-                    - Z, X & Arrows: Controls<br>
-                    - \ : Fast Forward<br>
-                    - P : Pause Emulation<br>
-                    - O : SMS Pause button<br>
-                    - F2 / F3 : Save / Load State
+                    <strong>Keyboard Controls:</strong><br>
+                    - Z / X : Button 1 / Button 2<br>
+                    - Arrow Keys : Directional D-Pad<br>
+                    - \ : Toggle Fast Forward<br>
+                    - P : Pause Emulator Execution<br>
+                    - O : Emulate SMS Physical PAUSE Button<br>
+                    - F2 / F3 : Instantly Save / Load Savestate Slot
                 </span>
             </a>
         </div>
@@ -90,12 +102,12 @@
         <div class="control-panel">
             <!-- ROM Loader Form -->
             <div class="control-group" id="fileselector">
-                <label for="romLoaderBtn">Cartridge ROM</label>
-                <button id="romLoaderBtn">Load ROM (.sms/.sg)</button>
+                <label for="romLoaderBtn">Console Slot</label>
+                <button id="romLoaderBtn">Load ROM Cartridge (.sms/.sg)</button>
                 <input type="file" id="cartridgeSelector" class="hidden" onchange="handleCartridgeUpload(this.files)">
             </div>
 
-            <!-- Standard Selector -->
+            <!-- Standard Signal Selector -->
             <div class="control-group" id="vdpMode">
                 <label for="vdpModeSelector">TV Signal Standard</label>
                 <select name="vdpMode" id="vdpModeSelector" onchange="setVdpStandard(this)">
@@ -107,14 +119,25 @@
 
         <!-- Clean Inline Keyboard Helpers -->
         <div class="instructions">
-            Use <strong>Z / X</strong> for Button 1/2, <strong>Arrows</strong> to move. 
-            Press <strong>F2 / F3</strong> to instantly save and load your current state.
+            Use <strong>Z / X</strong> for Gamepad Buttons 1/2, <strong>Arrows</strong> to move. 
+            Press <strong>F2 / F3</strong> to instantly save and load your current savestate.
         </div>
 
-        <!-- Hidden placeholders to avoid runtime crashes in legacy main.js -->
+        <!-- Hidden placeholders to avoid runtime crashes in debugger states -->
         <div id="softLoader" class="hidden"></div>
         <canvas width="800" height="400" id="debugCanvas" class="hidden"></canvas>
         <button id="fsbutton" onclick="fullscreen();" class="hidden">Fullscreen</button>
-        <div id="debugButtons" class="hidden"></div>
+        <div id="debugButtons" class="hidden">
+            <input type="text" id="bpaddress" placeholder="Break Address (hex)">
+            <button onclick="gotoAddress()">Jump to PC</button>
+            <br>
+            <button onclick="runCPUTests(0)">Run Unprefixed Tests</button>
+            <button onclick="runCPUTests(0xcb)">Run CB Tests</button>
+            <button onclick="runCPUTests(0xed)">Run ED Tests</button>
+            <button onclick="runCPUTests(0xdd)">Run DD Tests</button>
+            <button onclick="runCPUTests(0xfd)">Run FD Tests</button>
+            <button onclick="runCPUTests(0xddcb)">Run DDCB Tests</button>
+            <button onclick="runCPUTests(0xfdcb)">Run FDCB Tests</button>
+        </div>
     </body>
 </html>

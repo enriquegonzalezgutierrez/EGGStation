@@ -1,7 +1,8 @@
 /* 
+ * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: Z80 CPU Arithmetic Logic Unit (ALU)
+ * Domain Layer: Z80 ALU
  * 
  * This class isolates all mathematical, bitwise, and flag-setting operations
  * of the Z80 CPU. By extracting the ALU, we adhere to the Single Responsibility 
@@ -16,7 +17,7 @@ class Z80Alu {
     }
 
     /**
-     * Initializes the 256-byte parity lookup table.
+     * Pre-computes the 256-byte parity flag lookup table.
      */
     buildParityLookUp() {
         for (let i = 0; i <= 0xff; i++) {
@@ -30,9 +31,9 @@ class Z80Alu {
         }
     }
 
-    // ------------------------------------------------------------------------
-    // ARITHMETIC AND LOGICAL OPERATIONS (8-BIT & 16-BIT)
-    // ------------------------------------------------------------------------
+    // ========================================================================
+    // SHIFT, ROTATE & SPECIAL ALU ALGORITHMS
+    // ========================================================================
 
     sll_8bit(registers, v) {
         registers.f = 0x00;

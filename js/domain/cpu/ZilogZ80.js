@@ -1,24 +1,28 @@
 /* 
+ * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: Z80 CPU Orchestrator
+ * Domain Layer: Zilog Z80 CPU Orchestrator
  * 
  * Coordinates the CPU emulation loop. It encapsulates execution state and 
  * delegates instruction mapping to dedicated functional registries, feeding them
  * with a clean, unified 'opcodeRegistry' object (SOLID: DIP / Clean Code: No Long Parameter Lists).
  */
 
-class z80cpu {
-    constructor(theMMU) {
-        this.clockRate = 3579545;
-        this.theMMU = theMMU;
+class ZilogZ80 {
+    /**
+     * @param {SegaMasterSystemBus} mmu - The virtual address decoding system bus.
+     */
+    constructor(mmu) {
+        this.clockRate = 3579545; // 3.58 MHz standard Master System CPU clock rate
+        this.theMMU = mmu;
 
-        // Domain State delegation (SOLID: SRP)
+        // Core domain state delegations (SOLID: SRP)
         this.registers = new Z80Registers();
         this.shadowRegisters = this.registers.shadow; 
         this.alu = new Z80Alu();
 
-        // Control signals
+        // CPU internal control signals
         this.maskableInterruptsEnabled = false;
         this.maskableInterruptWaiting = false;        
         this.NMIWaiting = false;        
@@ -29,24 +33,24 @@ class z80cpu {
         this.totCycles = 0;
         this.additionalCycles = 0;
 
-        // Initialize empty instruction lookup arrays (256 slots per prefix)
+        // Initialize prefixes and maps (256 instruction registers per prefix array)
         this.unprefixedOpcodes = new Array(256).fill(undefined);
         this.prefixcbOpcodes = new Array(256).fill(undefined);
-        this.prefixedOpcodes = new Array(256).fill(undefined); // ED table
+        this.prefixedOpcodes = new Array(256).fill(undefined); // ED Prefix table
         this.prefixddOpcodes = new Array(256).fill(undefined);
         this.prefixfdOpcodes = new Array(256).fill(undefined);
         this.prefixddcbOpcodes = new Array(256).fill(undefined);
         this.prefixfdcbOpcodes = new Array(256).fill(undefined);
 
-        // Define a clean, semantic Domain Registry to avoid Long Parameter Lists
+        // Map registration slots to functional registries
         const opcodeRegistry = {
-            standard:  this.unprefixedOpcodes,   // Standard 8/16-bit instructions (Unprefixed)
-            bitwise:   this.prefixcbOpcodes,     // Bitwise & shift instructions (CB Prefix)
-            extended:  this.prefixedOpcodes,     // Extended system & block instructions (ED Prefix)
-            indexedIX: this.prefixddOpcodes,     // Index Register IX base instructions (DD Prefix)
-            indexedIY: this.prefixfdOpcodes,     // Index Register IY base instructions (FD Prefix)
-            bitwiseIX: this.prefixddcbOpcodes,   // Indexed IX bitwise instructions (DDCB double prefix)
-            bitwiseIY: this.prefixfdcbOpcodes    // Indexed IY bitwise instructions (FDCB double prefix)
+            standard:  this.unprefixedOpcodes,   // Standard instructions (Unprefixed)
+            bitwise:   this.prefixcbOpcodes,     // Bitwise & shifts (CB Prefix)
+            extended:  this.prefixedOpcodes,     // System & block instructions (ED Prefix)
+            indexedIX: this.prefixddOpcodes,     // Index IX operations (DD Prefix)
+            indexedIY: this.prefixfdOpcodes,     // Index IY operations (FD Prefix)
+            bitwiseIX: this.prefixddcbOpcodes,   // Indexed IX bitwise ops (DDCB Prefix)
+            bitwiseIY: this.prefixfdcbOpcodes    // Indexed IY bitwise ops (FDCB Prefix)
         };
 
         // Populate instruction maps via Functional Domain Registries (OCP / DIP)
@@ -58,7 +62,7 @@ class z80cpu {
         Z80BlockOps.register(this, this.registers, this.alu, opcodeRegistry);
         Z80SystemIO.register(this, this.registers, this.alu, opcodeRegistry);
 
-        // Compute diagnostics
+        // Log diagnostics details
         const unprefOpcodesCount = this.countOpcodes(this.unprefixedOpcodes);
         const edOpcodesCount = this.countOpcodes(this.prefixedOpcodes);
         const cbOpcodesCount = this.countOpcodes(this.prefixcbOpcodes);
@@ -69,17 +73,21 @@ class z80cpu {
         const totalOpcodes = unprefOpcodesCount + edOpcodesCount + cbOpcodesCount + fdOpcodesCount + ddOpcodesCount + ddcbOpcodesCount + fdcbOpcodesCount;
 
         console.log("CPU::Inited (Refactored)");
-        console.log("CPU:: opcodes: Unpref: " + unprefOpcodesCount +
-                    " - ED: " + edOpcodesCount +
-                    " - CB: " + cbOpcodesCount +
-                    " - FD: " + fdOpcodesCount +
-                    " - DD: " + ddOpcodesCount +
-                    " - DDCB: " + ddcbOpcodesCount +
-                    " - FDCB: " + fdcbOpcodesCount +
-                    " - total opcodes: " + totalOpcodes
+        console.log("CPU:: Opcodes Table Mapping Summary:" +
+                    "\n - Standard: " + unprefOpcodesCount +
+                    "\n - Extended (ED): " + edOpcodesCount +
+                    "\n - Bitwise (CB): " + cbOpcodesCount +
+                    "\n - Indexed IY (FD): " + fdOpcodesCount +
+                    "\n - Indexed IX (DD): " + ddOpcodesCount +
+                    "\n - Indexed IX Bitwise (DDCB): " + ddcbOpcodesCount +
+                    "\n - Indexed IY Bitwise (FDCB): " + fdcbOpcodesCount +
+                    "\n - Total Compiled Instructions: " + totalOpcodes
                     );
     }
 
+    /**
+     * Diagnostic helper to count initialized array slots.
+     */
     countOpcodes(arr) {
         let cnt = 0;
         for (let o = 0; o < arr.length; o++) {
@@ -90,6 +98,9 @@ class z80cpu {
         return cnt;
     }
 
+    /**
+     * Converts flag registers to a binary string representation for display.
+     */
     getFlags() {
         let s = "";
         for (let b = 0; b < 8; b++) {
@@ -102,21 +113,33 @@ class z80cpu {
         return s;
     }
 
+    /**
+     * Raises maskable interrupt (INT) line if enabled.
+     */
     raiseMaskableInterrupt() {
         if (this.maskableInterruptsEnabled) {
             this.maskableInterruptWaiting = true;
         }
     }
 
+    /**
+     * Raises non-maskable interrupt (NMI) line (triggers on SMS Pause Button).
+     */
     raiseNMI() {
         this.NMIWaiting = true;
     }
 
+    /**
+     * Increments the Program Counter (PC), wrapping cleanly to 16-bits.
+     */
     incPc(n) { 
         this.registers.pc += n; 
         this.registers.pc &= 0xffff; 
     }
 
+    /**
+     * Performs a relative jump based on an 8-bit signed offset.
+     */
     jumpRel(n) {
         if ((n & 0x80) === 0x80) {
             this.registers.pc += -0x80 + (n & 0x7F);
@@ -126,6 +149,9 @@ class z80cpu {
         this.registers.pc &= 0xffff;
     }
 
+    /**
+     * Pops a 16-bit word from the system stack.
+     */
     popWord() {
         const word = this.theMMU.readAddr16bit(this.registers.sp);
         this.registers.sp += 2;
@@ -133,24 +159,34 @@ class z80cpu {
         return word;
     }
 
+    /**
+     * Pushes a 16-bit word onto the system stack.
+     */
     pushWord(word) {
         this.registers.sp -= 2;
         this.registers.sp &= 0xffff;
         this.theMMU.writeAddr16bit(this.registers.sp, word);
     }
 
-    // ------------------------------------------------------------------------
+    // ========================================================================
     // CORE FETCH-DECODE-EXECUTE LOOP
-    // ------------------------------------------------------------------------
+    // ========================================================================
 
+    /**
+     * Executes a single instruction cycle, resolving prefix states and interrupts.
+     * @returns {number} T-states elapsed.
+     */
     executeOne() {
         let elapsedCycles = 0;
         this.additionalCycles = 0;
 
         if (this.NMIWaiting) {
-            if (this.isHalted) this.pushWord(this.registers.pc + 1);
-            else this.pushWord(this.registers.pc);
-            this.registers.pc = 0x0066;
+            if (this.isHalted) {
+                this.pushWord(this.registers.pc + 1);
+            } else {
+                this.pushWord(this.registers.pc);
+            }
+            this.registers.pc = 0x0066; // NMI vector jump destination
 
             this.registers.iff1 = 0;
             this.isHalted = false;
@@ -159,9 +195,12 @@ class z80cpu {
             elapsedCycles += 11;
         }
         else if ((this.registers.iff1 !== 0) && (this.maskableInterruptWaiting) && (!this.m_bAfterEI)) {
-            if (this.isHalted) this.pushWord(this.registers.pc + 1);
-            else this.pushWord(this.registers.pc);
-            this.registers.pc = 0x0038;
+            if (this.isHalted) {
+                this.pushWord(this.registers.pc + 1);
+            } else {
+                this.pushWord(this.registers.pc);
+            }
+            this.registers.pc = 0x0038; // Maskable Interrupt (IM 1) vector destination
 
             this.registers.iff1 = 0;
             this.registers.iff2 = 0;
@@ -173,7 +212,7 @@ class z80cpu {
             elapsedCycles += 13;
         }
         else if (this.isHalted) {
-            return 4;            
+            return 4; // Constant halted cycle execution consumption           
         }
 
         this.m_bAfterEI = false;
@@ -184,7 +223,7 @@ class z80cpu {
             const b2 = this.theMMU.readAddr(this.registers.pc + 1);
             const instrCode = this.prefixcbOpcodes[b2];
             if (instrCode === undefined) {
-                console.error("z80CPU::unhandled opcode cb " + b2.toString(16));
+                console.error("ZilogZ80::Unhandled CB opcode: 0x" + b2.toString(16));
             } else {
                 instrCode[0]();
                 elapsedCycles = instrCode[2];
@@ -194,7 +233,7 @@ class z80cpu {
             const b2 = this.theMMU.readAddr(this.registers.pc + 1);
             const instrCode = this.prefixedOpcodes[b2];
             if (instrCode === undefined) {
-                alert("z80CPU::unhandled opcode " + b1.toString(16) + b2.toString(16));
+                console.error("ZilogZ80::Unhandled ED opcode: 0x" + b2.toString(16));
             } else {
                 instrCode[0]();
                 elapsedCycles = instrCode[2];
@@ -206,7 +245,7 @@ class z80cpu {
                 const b4 = this.theMMU.readAddr(this.registers.pc + 3);
                 const instrCode = this.prefixddcbOpcodes[b4];
                 if (instrCode === undefined) {
-                    alert("z80CPU::unhandled opcode 0xddcb xx " + b4.toString(16) + " at PC:" + this.registers.pc.toString(16));
+                    console.error("ZilogZ80::Unhandled DDCB opcode: 0x" + b4.toString(16));
                 } else {
                     instrCode[0]();
                     elapsedCycles = instrCode[2];
@@ -214,7 +253,7 @@ class z80cpu {
             } else {
                 const instrCode = this.prefixddOpcodes[b2];
                 if (instrCode === undefined) {
-                    alert("z80CPU::unhandled opcode " + b1.toString(16) + b2.toString(16));
+                    console.error("ZilogZ80::Unhandled DD opcode: 0x" + b2.toString(16));
                 } else {
                     instrCode[0]();
                     elapsedCycles = instrCode[2];
@@ -227,7 +266,7 @@ class z80cpu {
                 const b4 = this.theMMU.readAddr(this.registers.pc + 3);
                 const instrCode = this.prefixfdcbOpcodes[b4];
                 if (instrCode === undefined) {
-                    alert("z80CPU::unhandled opcode 0xfdcb xx " + b4.toString(16) + " at PC:" + this.registers.pc.toString(16));
+                    console.error("ZilogZ80::Unhandled FDCB opcode: 0x" + b4.toString(16));
                 } else {
                     instrCode[0]();
                     elapsedCycles = instrCode[2];
@@ -235,7 +274,7 @@ class z80cpu {
             } else {
                 const instrCode = this.prefixfdOpcodes[b2];
                 if (instrCode === undefined) {
-                    alert("z80CPU::unhandled opcode " + b1.toString(16) + b2.toString(16));
+                    console.error("ZilogZ80::Unhandled FD opcode: 0x" + b2.toString(16));
                 } else {
                     instrCode[0]();
                     elapsedCycles = instrCode[2];
@@ -245,7 +284,7 @@ class z80cpu {
         else {
             const instrCode = this.unprefixedOpcodes[b1];
             if (instrCode === undefined) {
-                console.error("z80CPU::unhandled opcode " + b1.toString(16) + " at PC:" + this.registers.pc.toString(16));
+                console.error("ZilogZ80::Unhandled standard opcode: 0x" + b1.toString(16) + " at PC: 0x" + this.registers.pc.toString(16));
             } else {
                 instrCode[0]();
                 elapsedCycles = instrCode[2];
@@ -257,9 +296,9 @@ class z80cpu {
         return elapsedCycles;
     }
 
-    // ------------------------------------------------------------------------
-    // DEBUGGER AND GRAPHICAL DECODER (Preserves original UI functionality)
-    // ------------------------------------------------------------------------
+    // ========================================================================
+    // DEBUGGER AND GRAPHICAL DECODER INTERFACES
+    // ========================================================================
 
     getFullDecodedString(instr, bts) {
         let retStr = instr[1];
@@ -376,3 +415,6 @@ class z80cpu {
         }
     }
 }
+
+// Global legacy alias to maintain test execution structures
+const z80cpu = ZilogZ80;

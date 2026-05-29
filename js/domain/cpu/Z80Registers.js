@@ -1,7 +1,8 @@
 /* 
+ * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: Z80 CPU Registers Entity
+ * Domain Layer: Z80 Registers Entity
  * 
  * This class encapsulates the complete internal state of the Z80 registers,
  * including primary, alternate (shadow), and special-purpose registers.
@@ -10,14 +11,14 @@
  */
 
 const z80flags = {
-    FLAG_C: 0x01,
-    FLAG_N: 0x02,
-    FLAG_PV: 0x04,
-    FLAG_F3: 0x08,
-    FLAG_H: 0x10,
-    FLAG_F5: 0x20,
-    FLAG_Z: 0x40,
-    FLAG_S: 0x80
+    FLAG_C:  0x01, // Carry Flag
+    FLAG_N:  0x02, // Add/Subtract Flag
+    FLAG_PV: 0x04, // Parity / Overflow Flag
+    FLAG_F3: 0x08, // Undocumented Bit 3 Flag
+    FLAG_H:  0x10, // Half Carry Flag
+    FLAG_F5: 0x20, // Undocumented Bit 5 Flag
+    FLAG_Z:  0x40, // Zero Flag
+    FLAG_S:  0x80  // Sign Flag
 };
 
 class Z80Registers {
@@ -30,21 +31,21 @@ class Z80Registers {
         this.e = 0;
         this.h = 0;
         this.l = 0;
-        this.f = 0x40;
+        this.f = 0x40; // Initialized with Zero Flag set
 
-        // Index registers (split into 8-bit halves for backward compatibility)
+        // 16-bit Index registers (accessible as split 8-bit halves for backward compatibility)
         this.ixh = 0xff;
         this.ixl = 0xff;
         this.iyh = 0xff;
         this.iyl = 0xff;
 
-        // Special purpose registers
-        this.pc = 0;
-        this.sp = 0xdff0;
-        this.r = 0;
-        this.i = 0;
+        // Special-purpose counters
+        this.pc = 0;      // Program Counter
+        this.sp = 0xdff0; // Stack Pointer (typically targets RAM mirror limits at boot)
+        this.r = 0;       // Memory Refresh Register
+        this.i = 0;       // Interrupt Vector Register
         
-        // Interrupt flip-flops
+        // Interrupt Enable Flip-Flops
         this.iff1 = 0;
         this.iff2 = 0;
 
@@ -54,9 +55,9 @@ class Z80Registers {
         };
     }
 
-    // ------------------------------------------------------------------------
-    // 16-BIT VIRTUAL REGISTERS (Getters & Setters)
-    // ------------------------------------------------------------------------
+    // ========================================================================
+    // 16-BIT VIRTUAL REGISTER GETTERS & SETTERS
+    // ========================================================================
 
     get bc() {
         return (this.b << 8) | this.c;
@@ -112,13 +113,13 @@ class Z80Registers {
         this.iyl = val & 0xff;
     }
 
-    // ------------------------------------------------------------------------
-    // DOMAIN BEHAVIOR (EXCHANGE INSTRUCTIONS)
-    // ------------------------------------------------------------------------
+    // ========================================================================
+    // DOMAIN BEHAVIOR (EXCHANGE ALGORITHMS)
+    // ========================================================================
 
     /**
      * EX AF, AF'
-     * Swaps the accumulator and flags with their alternate counterparts.
+     * Swaps the primary accumulator and flags with their alternate counterparts.
      */
     exchangeAF() {
         const tempA = this.a;
@@ -133,7 +134,7 @@ class Z80Registers {
 
     /**
      * EXX
-     * Swaps BC, DE, and HL with their alternate counterparts.
+     * Swaps primary BC, DE, and HL pairings with their alternate counterparts.
      */
     exchangeBC_DE_HL() {
         const tempB = this.b;
@@ -160,7 +161,7 @@ class Z80Registers {
 
     /**
      * EX DE, HL
-     * Directly swaps the contents of DE and HL.
+     * Exchanges the values inside the DE and HL register pairs.
      */
     exchangeDE_HL() {
         const tempD = this.d;
