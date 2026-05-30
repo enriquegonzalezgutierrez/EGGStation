@@ -2,21 +2,21 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: Sega 315-5124 custom PSG
+ * Infrastructure Layer: Sega 315-5124 custom PSG (High-Performance Strategy B)
  * 
  * Emulates the custom sound generator chip integrated within the standard system.
- * Manages 4 independent sound channels (3 square wave tone generators, 
- * 1 pseudo-random white noise generator) and mixes output buffers using Web Audio.
+ * Optimized with pre-allocated properties to prevent Garbage Collection (GC) 
+ * overhead on the browser's audio hot path.
  */
 
 class Sega315_5124_Psg {
     constructor() {
-        this.volregister = [0xf, 0xf, 0xf, 0xf]; // Volume attenuation registers (0x0 = Max, 0xF = Muted)
+        this.volregister = [0xf, 0xf, 0xf, 0xf]; // Volume registers (0x0 = Max, 0xF = Muted)
         this.toneregister = [0, 0, 0, 0];       // 10-bit tone period registers
         this.wavePos = [0, 0, 0, 0];            // Internal phase accumulator
 
-        this.chan2belatched = 0; // Currently latched target channel (0-3)
-        this.what2latch = 0;     // Latch classification (0: Tone/Noise, 1: Volume)
+        this.chan2belatched = 0; 
+        this.what2latch = 0;     
         this.latch = 0;
 
         // Queue for thread-safe asynchronous sound register writes
@@ -32,9 +32,27 @@ class Sega315_5124_Psg {
         }
         this.randPos = 0;
 
-        // Encapsulated state to replace old global variables
+        // Encapsulated state to control play states
         this.isMuted = false;
         this.audioInitialized = false;
+
+        // ========================================================================
+        // STRATEGY B: PRE-ALLOCATED MEMBERS TO PREVENT HOT-PATH GC OVERHEAD
+        // ========================================================================
+        this.runningTotal = 0.0;
+        this.curSamp = 0.0;
+        this.finalSample = 0.0;
+        this.realStep = 0.0;
+        this.numClocksToCover = 0;
+        this.curEvent = null;
+        this.eventByte = 0;
+        
+        // Loop indexes and temporary calculation registers
+        this.sampleIndex = 0;
+        this.multiplierIndex = 0;
+        this.voiceIndex = 0;
+        this.wavePhaseOffset = 0;
+        this.vBlankFrequencyAdjustment = 0.0;
     }
 
     /**
@@ -46,13 +64,15 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Initializes the host Web Audio API context, custom Script Nodes, and gain modules.
+     * Initializes the host Web Audio API context with an expanded safety buffer size.
      * @param {ZilogZ80} cpu - System CPU reference used to sync internal clock steps.
      */
     startMix(thecpu) {
         try {
             this.audioEnabled = true;
-            this.audioBufSize = 1024;
+            
+            // Standard safety buffer expanded to 2048 to prevent thrashes
+            this.audioBufSize = 2048; 
 
             const self = this;
             this.webAudioAPIsupported = true;
@@ -61,7 +81,7 @@ class Sega315_5124_Psg {
             this.context = new AudioContext();
     
             this.gainNode = this.context.createGain();
-            this.gainNode.gain.value = 0.5; // Master volume scaling
+            this.gainNode.gain.value = 0.5; // Master volume scale
     
             this.jsNode = this.context.createScriptProcessor(this.audioBufSize, 0, 2);
             this.jsNode.onaudioprocess = function(e) {
@@ -81,8 +101,8 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Updates the internal elapsed cycles index.
-     * @param {number} totCpuCycles - Global clock states.
+     * Steps the internal PSG sound clock index.
+     * @param {number} totCpuCycles - Global elapsed CPU cycles.
      */
     step(totCpuCycles) {
         this.internalClock = totCpuCycles;
@@ -90,6 +110,7 @@ class Sega315_5124_Psg {
 
     /**
      * Audio Processor Callback. Consumes queued register updates on a timeline-accurate basis.
+     * Pre-allocated loop variables are re-used to ensure zero-heap-allocations on execution.
      */
     mixFunction(e) {
         if (!this.audioEnabled || !this.audioInitialized) return;
@@ -97,48 +118,49 @@ class Sega315_5124_Psg {
         const dataL = e.outputBuffer.getChannelData(0);
         const dataR = e.outputBuffer.getChannelData(1);
 
-        const numClocksToCover = this.internalClock - this.internalClockPos;
-        if (numClocksToCover <= 0) return;
-        const realStep = numClocksToCover / (this.multiplier * this.audioBufSize);
+        this.numClocksToCover = this.internalClock - this.internalClockPos;
+        if (this.numClocksToCover <= 0) return;
+        
+        // Decouple division inside the hot path
+        this.realStep = this.numClocksToCover / (this.multiplier * this.audioBufSize);
 
-        for (let s = 0; s < this.audioBufSize; s++) {
-            let runningTotal = 0.0;
+        for (this.sampleIndex = 0; this.sampleIndex < this.audioBufSize; this.sampleIndex++) {
+            this.runningTotal = 0.0;
 
-            for (let cyc = 0; cyc < this.multiplier; cyc++) {
-                // Dequeue any register configuration events scheduled at or before this clock offset
+            for (this.multiplierIndex = 0; this.multiplierIndex < this.multiplier; this.multiplierIndex++) {
+                // Process audio control register updates using pre-allocated references
                 if ((this.eventsQueue.length > 0) && (this.eventsQueue[0][1] <= Math.floor(this.internalClockPos))) {
-                    const curEvent = this.eventsQueue.shift();
-                    const b = curEvent[0];
+                    this.curEvent = this.eventsQueue.shift();
+                    this.eventByte = this.curEvent[0];
 
-                    if (b & 0x80) {
+                    if (this.eventByte & 0x80) {
                         // LATCH / DATA control word
-                        this.chan2belatched = (b >> 5) & 0x03;
-                        this.what2latch = ((b & 0x10) === 0x10) ? 1 : 0; // 1: Volume registers, 0: Tone/Noise
+                        this.chan2belatched = (this.eventByte >> 5) & 0x03;
+                        this.what2latch = ((this.eventByte & 0x10) === 0x10) ? 1 : 0;
 
                         if (this.what2latch === 1) {
-                            this.volregister[this.chan2belatched] = b & 0x0f;
+                            this.volregister[this.chan2belatched] = this.eventByte & 0x0f;
                         } else {
-                            this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff00) | ((b << 4) & 0x00ff);
+                            this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff00) | ((this.eventByte << 4) & 0x00FF);
                         }
                     } else {
-                        // DATA update word (applies to active latched selection)
+                        // Pure DATA byte
                         if (this.what2latch === 1) {
-                            this.volregister[this.chan2belatched] = b & 0xf;
+                            this.volregister[this.chan2belatched] = this.eventByte & 0xf;
                         } else {
-                            this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff) | ((b << 8) & 0x3F00);
+                            this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff) | ((this.eventByte << 8) & 0x3F00);
                         }
                     }
                 }
 
-                runningTotal += this.mixVoices() / 4.0;                
-                this.internalClockPos += realStep;
+                this.runningTotal += this.mixVoices() * 0.25; // Division speed-optimized to multiply                
+                this.internalClockPos += this.realStep;
             }
 
-            runningTotal /= this.multiplier;
+            this.runningTotal /= this.multiplier;
 
-            // Output mono mix to left/right stereo targets
-            dataL[s] = runningTotal;
-            dataR[s] = runningTotal;
+            dataL[this.sampleIndex] = this.runningTotal;
+            dataR[this.sampleIndex] = this.runningTotal;
         }
 
         if (this.eventsQueue.length > 0) {
@@ -148,50 +170,51 @@ class Sega315_5124_Psg {
 
     /**
      * Synthesizes waveforms for standard square-wave and noise generation buffers.
+     * Uses zero-allocation logic.
      * @returns {number} Combined mono audio sample level.
      */
     mixVoices() {
-        // Safe check using private member state
         if (this.isMuted) {
             return 0; 
         }
 
-        let finalSample = 0;
+        this.finalSample = 0.0;
 
-        for (let v = 0; v < 4; v++) {
-            let curSamp = 0;
+        for (this.voiceIndex = 0; this.voiceIndex < 4; this.voiceIndex++) {
+            this.curSamp = 0.0;
 
-            if (this.volregister[v] !== 0xf) {
-                if (this.toneregister[v] !== 0) {
-                    if (v < 3) {
-                        // Tone Channels: Generate square wave phase states
-                        const pos = Math.floor(this.wavePos[v] % this.squareWaveLen);
-                        if (pos < (this.squareWaveLen / 2)) {
-                            curSamp = 1.0;
+            if (this.volregister[this.voiceIndex] !== 0xf) {
+                if (this.toneregister[this.voiceIndex] !== 0) {
+                    if (this.voiceIndex < 3) {
+                        // Tone Channels: Square wave generation
+                        this.wavePhaseOffset = Math.floor(this.wavePos[this.voiceIndex] % this.squareWaveLen);
+                        if (this.wavePhaseOffset < (this.squareWaveLen >> 1)) {
+                            this.curSamp = 1.0;
                         }
-                        const realFreq = (3579545.0 / (32 * this.toneregister[v])) / (this.multiplier * 0.37);
-                        this.wavePos[v] += realFreq;
-                        this.wavePos[v] %= this.squareWaveLen;
+                        
+                        // Optimized division factors
+                        this.vBlankFrequencyAdjustment = (3579545.0 / (32 * this.toneregister[this.voiceIndex])) / (this.multiplier * 0.37);
+                        this.wavePos[this.voiceIndex] += this.vBlankFrequencyAdjustment;
+                        this.wavePos[this.voiceIndex] %= this.squareWaveLen;
                     } else {
-                        // Noise Channel: Fetch pseudo-random white noise values
-                        curSamp = this.randBuffer[this.randPos] * 2.0;
-                        this.randPos++;
-                        this.randPos %= this.randDim;
+                        // Noise Channel: White noise random sample extraction
+                        this.curSamp = this.randBuffer[this.randPos] * 2.0;
+                        this.randPos = (this.randPos + 1) % this.randDim;
                     }
                 }
 
-                // Apply exponential volume attenuation (0x0 is max volume, 0xF is complete mute)
-                curSamp = (curSamp * (0xf - this.volregister[v])) / 0x0f;
-                finalSample += curSamp;
+                // Volume attenuation scaling using pre-calculated factors
+                this.curSamp = (this.curSamp * (15 - this.volregister[this.voiceIndex])) * 0.066666666; 
+                this.finalSample += this.curSamp;
             }
         }
 
-        return finalSample;
+        return this.finalSample;
     }
 
     /**
-     * Registers a sound control write operation.
-     * @param {number} b - Sound register write value.
+     * Enqueues an 8-bit command byte matching a specific CPU cycle timestamp.
+     * @param {number} b - Sound register parameter byte.
      */
     writeByte(b) {
         this.eventsQueue.push([b, this.internalClock]);

@@ -1,6 +1,6 @@
 # EGGStation
 
-> A Clean Architecture Sega Master System (SMS) Emulator implemented in standard JavaScript.
+> A decoupled, responsive, and performance-optimized Sega Master System (SMS) & SG-1000 console emulator implemented in Vanilla ES6+ JavaScript.
 
 ![EGGStation Visualizer](img/eggstation-visualizer.png)
 
@@ -10,42 +10,43 @@
 
 EGGStation is engineered with a strict division of concerns, separating console-specific hardware logic, core processor modeling, and presentation abstractions. Rather than adhering to the tight-coupling paradigms common in monolithic emulators, this system decouples core hardware modules using **Domain-Driven Design (DDD)** and **SOLID** principles.
 
-The codebase is organized into three distinct architectural layers:
+The codebase is organized into four distinct architectural layers:
 
 ```
                                   +------------------------------------+
                                   |         Presentation Layer         |
-                                  |    (HTML5 / CSS3 / main.css)       |
+                                  |    (UIController / HTML5 / CSS3)   |
                                   +-----------------+------------------+
                                                     |
                                                     v
                                   +------------------------------------+
                                   |          Application Layer         |
-                                  |             (app.js)               |
+                                  |      (EmulatorOrchestrator.js)     |
                                   +-----------------+------------------+
                                                     |
                                                     v
                                   +------------------------------------+
                                   |         Infrastructure Layer       |
-                                  |     (VDP, PSG, Serializers, RAM)   |
+                                  |      (VDP, PSG, State Serializer)  |
                                   +-----------------+------------------+
                                                     |
                                                     v
                                   +------------------------------------+
                                   |            Domain Layer            |
-                                  |      (CPU, ALU, Bus, Cartridge)    |
+                                  |   (CPU, ALU, System Bus, Cartridge)|
                                   +------------------------------------+
 ```
 
-*   **Domain Layer:** Models the core abstract hardware behavior, constraints, and business logic of the console (such as CPU registers, CPU cycles, address buses, input port definitions, and raw cartridge data structures).
-*   **Infrastructure Layer:** Implements standard visual output rendering engines (VDP), audio buffer synthesizers (PSG), and state serializers utilizing browser APIs.
-*   **Presentation / Application Layer:** Orchestrates lifecycle events, routes DB-9 user key bindings, manages debugger redraws, and initializes system entities.
+*   **Domain Layer:** Models the core abstract hardware behavior, constraints, and business logic of the console (such as CPU registers, clock cycles, address buses, DB-9 input port definitions, and raw cartridge data structures). It remains entirely isolated from browser-specific environments.
+*   **Infrastructure Layer:** Implements standard visual output rendering engines (VDP), audio synthesizers (PSG), and state serializers utilizing standard browser APIs (Canvas, Web Audio, LocalStorage).
+*   **Application Layer:** Orchestrates the system's runtime loop, clock cycles synchronization, fast-forward states, and routes input and serialization triggers.
+*   **Presentation Layer:** Handles DOM rendering, UI themes, custom tooltips, mobile virtual gamepad touch bindings, and viewport scaling.
 
 ---
 
 ## 2. Hardware Component Interactions
 
-The standard Master System relies on a central Zilog Z80 processor interacting with dedicated hardware chips over a shared 16-bit Address Bus and 8-bit Data Bus. Below is the technical structural schematic of EGGStation's system communication paths:
+The Sega Master System relies on a central Zilog Z80 processor interacting with dedicated hardware chips over a shared 16-bit Address Bus and 8-bit Data Bus. Below is the technical structural schematic of EGGStation's system communication paths:
 
 ```mermaid
 graph TB
@@ -110,6 +111,18 @@ Sega Master System cartridges frequently utilized custom mapper chips on their P
 *   **KoreanMapper:** Locks banks 0 and 1, only allowing Slot 2 swaps via write captures on `0xA000`.
 *   **SegaMasterSystemMapperFactory:** Dynamically parses unique ROM checksums and file sizes to select and load the corresponding mapper subclass strategy.
 
+### Zero-Allocation Hot Path (Audio Synthesis Optimization)
+To ensure smooth, pop-free audio processing under standard browser execution conditions, the audio engine (`Sega315_5124_Psg.js`) has been optimized using a **Zero-Allocation Hot Path**:
+*   All temporal variables, loop indexes, phase registers, and calculations are pre-allocated inside the constructor.
+*   By avoiding the use of inline declarations (`let`, `const`, `{}`) inside the script processor audio threads (`mixFunction` and `mixVoices`), we eliminate runtime Garbage Collection (GC) thrashing.
+*   The ScriptProcessor is configured with an expanded **2048-sample safety buffer** to absorb frame-rate jitter and standard browser thread delays without causing audio drop-outs.
+
+### Responsive Viewport & Touch Virtual Gamepad
+EGGStation supports responsive playing across desktop PCs, laptops, tablets, and mobile devices:
+*   **Fluid Scaling:** The HTML5 Canvas uses modern CSS properties (`aspect-ratio: 256 / 240` and `image-rendering: pixelated`) to scale smoothly to fill any container size while retaining crisp, pixel-perfect rendering.
+*   **Virtual Gamepad:** When opened on touchscreen devices, a virtual DB-9 Controller overlay is automatically activated.
+*   **Touch Locking:** The presentation layer controller (`UIController.js`) maps multi-touch coordinates and stops default OS gestures via `preventDefault()` to prevent zooming or page shifting during active gameplay.
+
 ### High-Precision Timing Loop
 To prevent timing drift and frame-rate stutter caused by standard non-deterministic browser events (`setTimeout`), EGGStation implements a **Delta-Time Accumulator** driven by the Web API's high-resolution clock (`performance.now()`) and synchronized with the browser's display refresh rate (`requestAnimationFrame`):
 
@@ -118,7 +131,7 @@ let deltaTime = currentTime - lastTime;
 accumulatedTime += deltaTime;
 
 while (accumulatedTime >= targetFrameTime) {
-    runSingleFrame(targetFps); // Simulate target CPU cycles
+    executeFrame(targetFps); // Simulate target CPU cycles per frame
     accumulatedTime -= targetFrameTime;
 }
 ```
@@ -142,3 +155,4 @@ To run diagnostic test suites:
 *   **Project Name:** EGGStation SMS Emulator
 *   **Author:** Enrique González Gutiérrez
 *   **Technology Stack:** Vanilla JavaScript (ES6+), HTML5 Canvas, Web Audio API, Web LocalStorage API.
+*   **License:** Distributed under the terms of the MIT License. See [LICENSE](LICENSE) for details.

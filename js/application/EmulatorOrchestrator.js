@@ -168,7 +168,7 @@ class EmulatorOrchestrator {
             deltaTime = targetFrameTime;
         }
 
-        // Fast-Forward Mode: Ignore accurate timing and mute audio to prevent pop noise
+        // Fast-Forward Mode: Ignore accurate timing and mute audio to prevent buffer pop noise
         if (this.fastForward) {
             if (this.psg) this.psg.setMuted(true);
             for (let i = 0; i < 4; i++) {
