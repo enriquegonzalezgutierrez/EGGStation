@@ -2,14 +2,14 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Emulator Orchestrator (With WebGL2 & DRC Integrations)
+ * Application Layer: Emulator Orchestrator (With WebGL2, DRC & Rewinding)
  * 
  * Coordinates system execution loops, schedules frame sync rates (NTSC/PAL),
  * and links the isolated Domain entities with Infrastructure services.
  * Decoupled from DOM rendering and browser event APIs (SRP).
  * 
- * OPTIMIZED FOR PHASE 1 (DRC): Dynamically regulates executed CPU clock cycles per frame 
- * using a Proportional Feedback Loop linked to the sound card's actual buffer latency.
+ * OPTIMIZED FOR PHASE 2: Added a high-speed, in-memory state caching ring buffer 
+ * to support real-time fluid gameplay rewinding (Time Travel).
  */
 
 class EmulatorOrchestrator {
@@ -28,6 +28,7 @@ class EmulatorOrchestrator {
         this.isRunning = false;
         this.isPaused = false;
         this.fastForward = false;
+        this.isRewinding = false; // State flag for active time-travel rewinding
         
         // Visual post-processing filter configuration index (0: Sharp, 1: Bilinear, etc.)
         this.postProcessMode = 0;
@@ -45,6 +46,11 @@ class EmulatorOrchestrator {
         this.lastTime = 0;
         this.accumulatedTime = 0;
         this.framesRendered = 0;
+
+        // In-Memory Rewind Ring Buffer configurations
+        this.rewindHistory = [];
+        this.maxRewindStates = 100; // Store last ~10 seconds of gameplay (approx. 2.5 MB in RAM)
+        this.rewindFrameCount = 0;
 
         // Hardware Domain & Infrastructure Pointers
         this.cpu = null;
@@ -90,7 +96,6 @@ class EmulatorOrchestrator {
 
     /**
      * Bootstraps the emulator hardware, injects dependencies, and begins execution.
-     * Made async to allow the AudioWorklet Blob compiler to finish before execution starts.
      * @param {string} filename - The name of the loaded ROM file.
      * @param {ArrayBuffer} arrayBuffer - The raw binary buffer of the ROM.
      */
@@ -118,9 +123,12 @@ class EmulatorOrchestrator {
         // Apply pre-configured audio filters immediately upon hardware boot
         this.psg.setAudioFilter(this.audioFilterMode);
 
-        // 5. Reset Timing and State
+        // 5. Reset Timing, History, and State
         this.isRunning = true;
         this.isPaused = false;
+        this.isRewinding = false;
+        this.rewindHistory = [];
+        this.rewindFrameCount = 0;
         this.lastTime = performance.now();
         this.accumulatedTime = 0;
         this.framesRendered = 0;
@@ -178,14 +186,135 @@ class EmulatorOrchestrator {
         if (this.isRunning && this.cartridge) {
             try {
                 const status = await this.serializer.deserialize(this.cartridge.cartridgeName, this.cpu, this.vdp, this.mmu, this.psg);
-                // If loaded successfully, command the AudioWorklet to sync its arrays
                 if (status === 0 && this.psg) {
                     this.psg.syncWorkletState();
+                    this.rewindHistory = []; // Clear rewind buffers on hard state loads to prevent timeline conflicts
                 }
             } catch (err) {
                 console.error("EmulatorOrchestrator::Load State failed:", err);
             }
         }
+    }
+
+    /**
+     * Captures a lightweight, synchronous in-memory snap of the complete emulator state.
+     * Pushes it into our dynamic circular ring buffer.
+     */
+    captureRewindState() {
+        if (!this.isRunning || this.isPaused || this.isRewinding) return;
+
+        const stateSnap = {
+            cpu: {
+                registers: { ...this.cpu.registers },
+                shadowRegisters: { ...this.cpu.shadowRegisters },
+                maskableInterruptsEnabled: this.cpu.maskableInterruptsEnabled,
+                maskableInterruptWaiting: this.cpu.maskableInterruptWaiting,
+                interruptMode: this.cpu.interruptMode,
+                totCycles: this.cpu.totCycles,
+                NMIWaiting: this.cpu.NMIWaiting,
+                m_bAfterEI: this.cpu.m_bAfterEI
+            },
+            vdp: {
+                vRam: new Uint8Array(this.vdp.vRam), // Force deep array copy
+                colorRam: new Uint8Array(this.vdp.colorRam),
+                currentScanlineIndex: this.vdp.currentScanlineIndex,
+                lineCounter: this.vdp.lineCounter,
+                controlWordFlag: this.vdp.controlWordFlag,
+                controlWord: this.vdp.controlWord,
+                dataPortReadWriteAddress: this.vdp.dataPortReadWriteAddress,
+                dataPortWriteMode: this.vdp.dataPortWriteMode,
+                readBufferByte: this.vdp.readBufferByte,
+                statusFlags: this.vdp.statusFlags,
+                nameTableBaseAddress: this.vdp.nameTableBaseAddress,
+                spriteAttributeTableBaseAddress: this.vdp.spriteAttributeTableBaseAddress,
+                spritePatternGeneratorBaseAddress: this.vdp.spritePatternGeneratorBaseAddress,
+                vcounter: this.vdp.vcounter,
+                hcounter: this.vdp.hcounter,
+                register00: this.vdp.register00, register01: this.vdp.register01,
+                register02: this.vdp.register02, register03: this.vdp.register03,
+                register04: this.vdp.register04, register05: this.vdp.register05,
+                register06: this.vdp.register06, register07: this.vdp.register07,
+                register08: this.vdp.register08, register09: this.vdp.register09,
+                register0a: this.vdp.register0a
+            },
+            mmu: {
+                systemWorkRam: new Uint8Array(this.mmu.systemWorkRam),
+                mapperSlot2IsCartridgeRam: this.mmu.mapper.mapperSlot2IsCartridgeRam,
+                cartridgeRam: new Uint8Array(this.mmu.mapper.cartridgeRam),
+                slot0Idx: this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[0]),
+                slot1Idx: this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[1]),
+                slot2Idx: this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[2])
+            },
+            psg: {
+                volregister: [...this.psg.volregister],
+                toneregister: [...this.psg.toneregister],
+                wavePos: [...this.psg.wavePos],
+                chan2belatched: this.psg.chan2belatched,
+                what2latch: this.psg.what2latch,
+                internalClock: this.psg.internalClock,
+                internalClockPos: this.psg.internalClockPos
+            }
+        };
+
+        this.rewindHistory.push(stateSnap);
+        if (this.rewindHistory.length > this.maxRewindStates) {
+            this.rewindHistory.shift(); // Evicts oldest state to enforce circular buffer boundaries
+        }
+    }
+
+    /**
+     * Restores an in-memory lightweight state snap, synchronizing all reference pointers.
+     * @param {Object} state - The state snap package to restore.
+     */
+    restoreRewindState(state) {
+        Object.assign(this.cpu.registers, state.cpu.registers);
+        Object.assign(this.cpu.shadowRegisters, state.cpu.shadowRegisters);
+        this.cpu.maskableInterruptsEnabled = state.cpu.maskableInterruptsEnabled;
+        this.cpu.maskableInterruptWaiting = state.cpu.maskableInterruptWaiting;
+        this.cpu.interruptMode = state.cpu.interruptMode;
+        this.cpu.totCycles = state.cpu.totCycles;
+        this.cpu.NMIWaiting = state.cpu.NMIWaiting;
+        this.cpu.m_bAfterEI = state.cpu.m_bAfterEI;
+
+        this.vdp.colorRam.set(state.vdp.colorRam);
+        this.vdp.vRam.set(state.vdp.vRam);
+        this.vdp.currentScanlineIndex = state.vdp.currentScanlineIndex;
+        this.vdp.lineCounter = state.vdp.lineCounter;
+        this.vdp.controlWordFlag = state.vdp.controlWordFlag;
+        this.vdp.controlWord = state.vdp.controlWord;
+        this.vdp.dataPortReadWriteAddress = state.vdp.dataPortReadWriteAddress;
+        this.vdp.dataPortWriteMode = state.vdp.dataPortWriteMode;
+        this.vdp.readBufferByte = state.vdp.readBufferByte;
+        this.vdp.statusFlags = state.vdp.statusFlags;
+        this.vdp.nameTableBaseAddress = state.vdp.nameTableBaseAddress;
+        this.vdp.spriteAttributeTableBaseAddress = state.vdp.spriteAttributeTableBaseAddress;
+        this.vdp.spritePatternGeneratorBaseAddress = state.vdp.spritePatternGeneratorBaseAddress;
+        this.vdp.vcounter = state.vdp.vcounter;
+        this.vdp.hcounter = state.vdp.hcounter;
+        this.vdp.register00 = state.vdp.register00; this.vdp.register01 = state.vdp.register01;
+        this.vdp.register02 = state.vdp.register02; this.vdp.register03 = state.vdp.register03;
+        this.vdp.register04 = state.vdp.register04; this.vdp.register05 = state.vdp.register05;
+        this.vdp.register06 = state.vdp.register06; this.vdp.register07 = state.vdp.register07;
+        this.vdp.register08 = state.vdp.register08; this.vdp.register09 = state.vdp.register09;
+        this.vdp.register0a = state.vdp.register0a;
+
+        this.mmu.systemWorkRam.set(state.mmu.systemWorkRam);
+        this.mmu.mapper.cartridgeRam.set(state.mmu.cartridgeRam);
+        this.mmu.mapper.mapperSlot2IsCartridgeRam = state.mmu.mapperSlot2IsCartridgeRam;
+
+        if (state.mmu.slot0Idx !== -1) this.mmu.mapper.mapperSlots[0] = this.mmu.mapper.romBanks[state.mmu.slot0Idx];
+        if (state.mmu.slot1Idx !== -1) this.mmu.mapper.mapperSlots[1] = this.mmu.mapper.romBanks[state.mmu.slot1Idx];
+        if (state.mmu.slot2Idx !== -1) this.mmu.mapper.mapperSlots[2] = this.mmu.mapper.romBanks[state.mmu.slot2Idx];
+
+        this.psg.volregister = [...state.psg.volregister];
+        this.psg.toneregister = [...state.psg.toneregister];
+        this.psg.wavePos = [...state.psg.wavePos];
+        this.psg.chan2belatched = state.psg.chan2belatched;
+        this.psg.what2latch = state.psg.what2latch;
+        this.psg.internalClock = state.psg.internalClock;
+        this.psg.internalClockPos = state.psg.internalClockPos;
+
+        this.psg.syncWorkletState();
     }
 
     /**
@@ -200,6 +329,30 @@ class EmulatorOrchestrator {
             if (this.psg) {
                 this.psg.setMuted(true);
             }
+            return;
+        }
+
+        // ========================================================================
+        // TEMPORAL REWIND EXECUTION BRANCH
+        // ========================================================================
+        if (this.isRewinding) {
+            if (this.psg) this.psg.setMuted(true); // Enforce total mute during timeline shifts
+            
+            if (this.rewindHistory.length > 0) {
+                // Pop and restore multiple states per frame to make rewinding feel rapid and satisfying
+                let stateToRestore = null;
+                for (let i = 0; i < 2; i++) {
+                    if (this.rewindHistory.length > 0) {
+                        stateToRestore = this.rewindHistory.pop();
+                    }
+                }
+                if (stateToRestore) {
+                    this.restoreRewindState(stateToRestore);
+                }
+                this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
+            }
+            this.lastTime = currentTime; // Prevent time delta accumulations during rewind cycles
+            this.animationFrameId = requestAnimationFrame(this.loop);
             return;
         }
 
@@ -227,11 +380,23 @@ class EmulatorOrchestrator {
             if (this.psg) this.psg.setMuted(false);
             this.accumulatedTime += deltaTime;
             
+            let frameExecuted = false;
             while (this.accumulatedTime >= targetFrameTime) {
                 this.executeFrame(targetFps);
                 this.accumulatedTime -= targetFrameTime;
+                frameExecuted = true;
             }
-            this.vdp.hyperBlit(this.videoContext, this.postProcessMode); // Render visualizer frame with active post-processing
+            
+            if (frameExecuted) {
+                this.vdp.hyperBlit(this.videoContext, this.postProcessMode); // Render visualizer frame with active post-processing
+                
+                // Track and save synchronous state checkpoints every 6 normal frames (approx. 100ms)
+                this.rewindFrameCount++;
+                if (this.rewindFrameCount >= 6) {
+                    this.captureRewindState();
+                    this.rewindFrameCount = 0;
+                }
+            }
         }
 
         // Frame rendering statistics update

@@ -2,11 +2,13 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: UI Controller (With Cache-Proof Layout Controls & Gamepad API)
+ * Presentation Layer: UI Controller (With Cache-Proof Layout Controls, Gamepad & Rewinding)
  * 
  * Maps DOM interactions (buttons, file inputs, selects), keyboard/touch events, 
  * and Physical USB/Bluetooth Gamepads to the Emulator Orchestrator. 
  * Swaps viewports via clean display rules to prevent flexbox offset anomalies (SRP).
+ * 
+ * OPTIMIZED FOR PHASE 2: Added input handlers for Real-Time Gameplay Rewinding (Backspace / L2).
  */
 
 class UIController {
@@ -20,7 +22,8 @@ class UIController {
         // State tracker for physical gamepads to process edge-detection (press/release only)
         this.gamepadState = {
             up: false, down: false, left: false, right: false,
-            btn1: false, btn2: false, pause: false
+            btn1: false, btn2: false, pause: false,
+            rewind: false // Tracks active gamepad rewinding state
         };
 
         this.bindEvents();
@@ -116,6 +119,9 @@ class UIController {
             // Pause: 9 (Start button)
             const pause = gp.buttons[9]?.pressed;
 
+            // Rewind: 6 (Left Trigger / L2) or 4 (Left Bumper / L1)
+            const rewind = gp.buttons[6]?.pressed || gp.buttons[4]?.pressed;
+
             // Helper to trigger hardware pins only on state change (edge detection)
             const triggerInput = (key, isPressed, onPress, onRelease) => {
                 if (isPressed && !this.gamepadState[key]) {
@@ -141,6 +147,15 @@ class UIController {
                 this.gamepadState.pause = true;
             } else if (!pause) {
                 this.gamepadState.pause = false;
+            }
+
+            // Real-Time Rewind mapping handler
+            if (rewind && !this.gamepadState.rewind) {
+                this.orchestrator.isRewinding = true;
+                this.gamepadState.rewind = true;
+            } else if (!rewind && this.gamepadState.rewind) {
+                this.orchestrator.isRewinding = false;
+                this.gamepadState.rewind = false;
             }
         }
 
@@ -272,6 +287,12 @@ class UIController {
             case "ArrowLeft": io.pressLeft(); e.preventDefault(); break;
             case "ArrowRight": io.pressRight(); e.preventDefault(); break;
             
+            // Real-Time Gameplay Rewind (Hold key down)
+            case "Backspace":
+                this.orchestrator.isRewinding = true;
+                e.preventDefault();
+                break;
+
             // Emulator Control Shortcuts
             case "\\": 
                 this.orchestrator.fastForward = true; 
@@ -297,7 +318,7 @@ class UIController {
     }
 
     /**
-     * Handles keyup events to release DB-9 Controller pins or stop fast-forwarding.
+     * Handles keyup events to release DB-9 Controller pins or stop fast-forwarding/rewinding.
      * @param {KeyboardEvent} e - The keyboard event.
      */
     handleKeyUp(e) {
@@ -313,6 +334,11 @@ class UIController {
             case "ArrowLeft": io.depressLeft(); break;
             case "ArrowRight": io.depressRight(); break;
             
+            // Real-Time Gameplay Rewind release (Resume normal play)
+            case "Backspace":
+                this.orchestrator.isRewinding = false;
+                break;
+
             // Emulator Control Shortcuts release
             case "\\": 
                 this.orchestrator.fastForward = false; 
