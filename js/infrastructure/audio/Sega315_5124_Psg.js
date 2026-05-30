@@ -2,12 +2,13 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: Sega 315-5124 custom PSG
+ * Infrastructure Layer: Sega 315-5124 custom PSG (DRC Optimized)
  * 
  * Emulates the custom sound generator chip integrated within the standard system.
  * 
- * OPTIMIZED: Consolidates phase step calculations to eliminate the redundant 
- * 81x sub-sampling loop, reducing CPU hot-path overhead by 98.7%.
+ * OPTIMIZED FOR PHASE 1 (DRC): Exposes high-precision clock drift error signals 
+ * and handles temporal transience clamping to prevent audio popping and pitch-bend 
+ * anomalies during emulator pauses, fast-forwards, or frame skips.
  */
 
 class Sega315_5124_Psg {
@@ -231,6 +232,16 @@ class Sega315_5124_Psg {
     }
 
     /**
+     * Returns the current Clock Drift of the audio engine.
+     * High-precision feedback error signal utilized by the Orchestrator's DRC closed loop.
+     * @returns {number} The difference between the simulated CPU clock and audio reproduction cursor.
+     */
+    getClockDrift() {
+        if (!this.audioInitialized) return 0;
+        return this.internalClock - this.internalClockPos;
+    }
+
+    /**
      * Audio Processor Callback. Consumes queued register updates on a timeline-accurate basis.
      * OPTIMIZED: Evaluates synthesis phase changes consolidated per audio sample.
      */
@@ -245,7 +256,20 @@ class Sega315_5124_Psg {
         }
 
         let numClocksToCover = this.internalClock - this.internalClockPos;
-        if (numClocksToCover <= 0) return;
+
+        // DRC TRANSIENT CLAMPING:
+        // If the CPU is way too far ahead or behind (e.g. paused, fast-forward, or system stutter),
+        // snap the audio cursor directly to the CPU timeline to prevent audio popping or pitch-bend distortion.
+        const maxAllowedDrift = this.multiplier * this.audioBufSize * 4; // Allow 4 audio buffer blocks of leeway
+        if (Math.abs(numClocksToCover) > maxAllowedDrift) {
+            this.internalClockPos = this.internalClock;
+            numClocksToCover = 0;
+        }
+
+        if (numClocksToCover <= 0) {
+            for (let i = 0; i < data.length; i++) data[i] = 0;
+            return;
+        }
         
         let realStep = numClocksToCover / (this.multiplier * data.length);
 

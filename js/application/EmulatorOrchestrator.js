@@ -2,14 +2,14 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Emulator Orchestrator (With WebGL2 & Async Integrations)
+ * Application Layer: Emulator Orchestrator (With WebGL2 & DRC Integrations)
  * 
  * Coordinates system execution loops, schedules frame sync rates (NTSC/PAL),
  * and links the isolated Domain entities with Infrastructure services.
  * Decoupled from DOM rendering and browser event APIs (SRP).
  * 
- * OPTIMIZED: Fully updated to support modern Asynchronous APIs (AudioWorklet 
- * initialization and IndexedDB state serialization).
+ * OPTIMIZED FOR PHASE 1 (DRC): Dynamically regulates executed CPU clock cycles per frame 
+ * using a Proportional Feedback Loop linked to the sound card's actual buffer latency.
  */
 
 class EmulatorOrchestrator {
@@ -55,7 +55,7 @@ class EmulatorOrchestrator {
         
         // Instantiate persistent auxiliary hardware/services
         this.ioController = new Sega315_5297();
-        this.serializer = new WebIndexedDBSerializer(); // Updated to IndexedDB Strategy
+        this.serializer = new WebIndexedDBSerializer(); 
 
         // Hard bind the execution loop to preserve 'this' context in requestAnimationFrame
         this.loop = this.loop.bind(this);
@@ -247,11 +247,31 @@ class EmulatorOrchestrator {
 
     /**
      * Simulates exactly one frame's worth of CPU cycles and hardware updates.
+     * Incorporates Proportional Dynamic Rate Control (DRC) to synchronize 
+     * CPU cycles execution directly with sound card playback latency.
      * @param {number} targetFps - The signal FPS target used to calculate cycles per frame.
      */
     executeFrame(targetFps) {
         let emulatedCycles = 0;
-        const targetCycles = Math.floor(this.cpu.clockRate / targetFps);
+        let targetCycles = Math.floor(this.cpu.clockRate / targetFps);
+
+        // ========================================================================
+        // DYNAMIC RATE CONTROL (DRC) PROPORTIONAL CONTROLLER
+        // ========================================================================
+        if (this.psg && this.psg.audioInitialized && !this.fastForward) {
+            const drift = this.psg.getClockDrift();
+            const targetDrift = this.psg.multiplier * this.psg.audioBufSize * 1.5; // Ideal buffer target
+            const error = targetDrift - drift;
+
+            // Proportional feedback factor (Kp = 0.003)
+            let adjustment = error * 0.003;
+            const maxAdjustment = targetCycles * 0.08; // Clamp drift adjustment bounds to ±8%
+            
+            if (adjustment > maxAdjustment) adjustment = maxAdjustment;
+            if (adjustment < -maxAdjustment) adjustment = -maxAdjustment;
+
+            targetCycles += Math.floor(adjustment);
+        }
 
         while (emulatedCycles < targetCycles) {
             const cyclesElapsed = this.cpu.executeOne();
