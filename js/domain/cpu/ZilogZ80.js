@@ -2,7 +2,7 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: Zilog Z80 CPU Orchestrator
+ * Domain Layer: Zilog Z80 CPU Core Orchestrator
  * 
  * Coordinates the CPU emulation loop, processes interrupts (INT/NMI), and executes 
  * instructions. Opcode strategy mapping is decoupled into functional registries 
@@ -274,126 +274,6 @@ class ZilogZ80 {
 
         elapsedCycles += this.additionalCycles;
         this.totCycles += elapsedCycles;
-        
         return elapsedCycles;
-    }
-
-    // ========================================================================
-    // DEBUGGER AND GRAPHICAL DECODER INTERFACES
-    // ========================================================================
-
-    getFullDecodedString(instr, bts) {
-        let retStr = instr[1];
-        if (instr[1].includes("%d")) {
-            if (instr[3] === 1) {
-                retStr = retStr.replace("%d", "0x" + bts[bts.length - 1].toString(16).padStart(2, '0'));
-            } else if (instr[3] === 2) {
-                retStr = retStr.replace("%d", "0x" + bts[bts.length - 1].toString(16).padStart(2, '0') + bts[bts.length - 2].toString(16).padStart(2, '0'));
-            }
-        }
-        return retStr;
-    }
-
-    debugInstructions(numInstr) {
-        const retStruct = [];
-        let pc = this.registers.pc;
-
-        for (let i = 0; i < numInstr; i++) {
-            const curInstr = {};
-            this.debugDecodeOpcode(pc, curInstr);
-            retStruct.push(curInstr);
-            pc += curInstr.bytes.length;
-        }
-
-        return retStruct;
-    }
-
-    debugDecodeOpcode(thePC, retStruct) {
-        retStruct.bytes = [];
-        retStruct.decodedString = "UNK";
-        retStruct.address = thePC;
-
-        const b1 = this.theMMU.readAddr(thePC);
-        if (b1 === 0xcb) {
-            retStruct.bytes.push(0xcb);
-            const b2 = this.theMMU.readAddr(thePC + 1);
-            retStruct.bytes.push(b2);
-
-            const instrCode = this.prefixcbOpcodes[b2];
-            if (instrCode !== undefined) {
-                retStruct.decodedString = instrCode[1];
-            }
-        }
-        else if (b1 === 0xed) {
-            retStruct.bytes.push(0xed);
-            const b2 = this.theMMU.readAddr(thePC + 1);
-            retStruct.bytes.push(b2);
-
-            const instrCode = this.prefixedOpcodes[b2];
-            if (instrCode !== undefined) {
-                retStruct.decodedString = instrCode[1];
-            }
-        }
-        else if (b1 === 0xdd) {
-            const b2 = this.theMMU.readAddr(thePC + 1);
-            if (b2 === 0xcb) {
-                retStruct.bytes.push(0xdd);
-                retStruct.bytes.push(0xcb);
-                const b3 = this.theMMU.readAddr(thePC + 2);
-                retStruct.bytes.push(b3);
-                const b4 = this.theMMU.readAddr(thePC + 3);
-                retStruct.bytes.push(b4);
-    
-                const instrCode = this.prefixddcbOpcodes[b4];
-                if (instrCode !== undefined) {
-                    retStruct.decodedString = instrCode[1];
-                }
-            } else {
-                retStruct.bytes.push(0xdd);
-                retStruct.bytes.push(b2);
-
-                const instrCode = this.prefixddOpcodes[b2];
-                if (instrCode !== undefined) {
-                    for (let ab = 0; ab < instrCode[3]; ab++) {
-                        retStruct.bytes.push(this.theMMU.readAddr(thePC + 2 + ab));
-                    }
-                    retStruct.decodedString = this.getFullDecodedString(instrCode, retStruct.bytes);
-                }                  
-            }
-        }
-        else if (b1 === 0xfd) {
-            const b2 = this.theMMU.readAddr(thePC + 1);
-            if (b2 === 0xcb) {
-                retStruct.bytes.push(0xfd);
-                retStruct.bytes.push(0xcb);
-                const b3 = this.theMMU.readAddr(thePC + 2);
-                retStruct.bytes.push(b3);
-                const b4 = this.theMMU.readAddr(thePC + 3);
-                retStruct.bytes.push(b4);
-
-                const instrCode = this.prefixfdcbOpcodes[b4];
-                if (instrCode !== undefined) {
-                    retStruct.decodedString = instrCode[1];
-                }
-            } else {
-                retStruct.bytes.push(0xfd);
-                retStruct.bytes.push(b2);
-
-                const instrCode = this.prefixfdOpcodes[b2];
-                if (instrCode !== undefined) {
-                    retStruct.decodedString = instrCode[1];
-                }
-            }
-        }
-        else {
-            const instrCode = this.unprefixedOpcodes[b1];
-            retStruct.bytes.push(b1);
-            if (instrCode !== undefined) {
-                for (let ab = 0; ab < instrCode[3]; ab++) {
-                    retStruct.bytes.push(this.theMMU.readAddr(thePC + 1 + ab));
-                }
-                retStruct.decodedString = this.getFullDecodedString(instrCode, retStruct.bytes);
-            }
-        }
     }
 }

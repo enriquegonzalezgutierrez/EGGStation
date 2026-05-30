@@ -2,18 +2,19 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: Sega 315-5124 custom PSG (With Web Audio DSP Effects)
+ * Infrastructure Layer: Sega 315-5124 custom PSG
  * 
  * Emulates the custom sound generator chip integrated within the standard system.
- * Optimized with pre-allocated properties to prevent Garbage Collection (GC) 
- * overhead, and integrated with dynamic Web Audio DSP filter routing.
+ * Optimized under Strategy B (Zero-Allocation) and integrated with dynamic
+ * real-time software DSP filters (Low-Pass & Haas 3D Stereo) in a unified class.
  */
 
 class Sega315_5124_Psg {
     constructor() {
-        this.volregister = [0xf, 0xf, 0xf, 0xf]; // Volume registers (0x0 = Max, 0xF = Muted)
-        this.toneregister = [0, 0, 0, 0];       // 10-bit tone period registers
-        this.wavePos = [0, 0, 0, 0];            // Internal phase accumulator
+        // Hardware Registers (0x0 = Max, 0xF = Muted)
+        this.volregister = [0xf, 0xf, 0xf, 0xf]; 
+        this.toneregister = [0, 0, 0, 0];       
+        this.wavePos = [0, 0, 0, 0];            
 
         this.chan2belatched = 0; 
         this.what2latch = 0;     
@@ -24,6 +25,7 @@ class Sega315_5124_Psg {
         this.internalClock = 0;
         this.internalClockPos = 0;
 
+        // White noise generator variables
         this.squareWaveLen = 8192;
         this.randDim = 65536;
         this.randBuffer = [];
@@ -32,17 +34,32 @@ class Sega315_5124_Psg {
         }
         this.randPos = 0;
 
-        // Encapsulated state to control play states
+        // Play states
         this.isMuted = false;
         this.audioInitialized = false;
 
-        // Web Audio DSP Native Nodes
-        this.filterNode = null;
-        this.delayNode = null;
-        this.splitterNode = null;
-        this.mergerNode = null;
+        // Web Audio API standard context
+        this.context = null;
+        this.gainNode = null;
+        this.jsNode = null;
 
-        // Pre-allocated members to prevent Garbage Collection (GC) overhead
+        this.audioBufSize = 2048; // Expanded buffer for Strategy B stability
+        this.multiplier = 0;
+        this.audioEnabled = false;
+
+        // ========================================================================
+        // HIGH-PERFORMANCE DSP PRE-ALLOCATED BUFFER ARRAYS (Strategy B)
+        // ========================================================================
+        this.audioFilterMode = 0; // 0: Mono, 1: Low-Pass, 2: Haas Stereo
+        this.delayBuffer = new Float32Array(2048).fill(0.0); // Circular delay line
+        this.delayBufferWritePos = 0;
+        this.delayBufferReadPos = 0;
+        this.delaySamplesLength = 882; // 20ms delay at 44.1kHz
+        
+        this.smoothedValue = 0.0; // Filter accumulator
+        this.sampleOut = 0.0;
+
+        // Pre-allocated loop variables to guarantee zero-heap-allocations on execution
         this.runningTotal = 0.0;
         this.curSamp = 0.0;
         this.finalSample = 0.0;
@@ -67,90 +84,44 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Dynamic routing changer. Adjusts parameters of native Web Audio nodes 
-     * on the fly, avoiding structural re-connections and pop noises.
+     * Updates the active audio DSP filter configuration index.
      * @param {number} mode - Selected filter (0: Dry Mono, 1: Low-pass Cabinet, 2: Haas Stereo)
      */
     setAudioFilter(mode) {
-        if (!this.audioInitialized) return;
-
-        switch (mode) {
-            case 1: // Arcade Warmth (Low-pass)
-                this.filterNode.frequency.value = 3500; // Cut off frequencies above 3.5kHz
-                this.delayNode.delayTime.value = 0.0;   // Collapse to mono
-                break;
-                
-            case 2: // Lush 3D Stereo (Haas spatializer)
-                this.filterNode.frequency.value = 6000; // Smooth out high-end slightly
-                this.delayNode.delayTime.value = 0.02;  // 20ms delay on the right channel
-                break;
-
-            case 0: // Original Mono (Sharp & Dry)
-            default:
-                this.filterNode.frequency.value = 20000; // Fully open (bypassed)
-                this.delayNode.delayTime.value = 0.0;    // Collapse to mono
-                break;
+        this.audioFilterMode = mode;
+        if (this.audioInitialized) {
+            // Recalculate delay line boundaries based on active soundcard sample rate
+            this.delaySamplesLength = Math.floor(0.02 * this.context.sampleRate);
         }
     }
 
     /**
-     * Initializes the host Web Audio API context and builds the DSP node graph.
+     * Initializes the host Web Audio API context and node connections.
      * @param {ZilogZ80} cpu - System CPU reference used to sync internal clock steps.
      */
-    startMix(thecpu) {
+    startMix(cpu) {
         try {
             this.audioEnabled = true;
-            this.audioBufSize = 2048; 
-
-            const self = this;
-            this.webAudioAPIsupported = true;
-    
             window.AudioContext = window.AudioContext || window.webkitAudioContext;
             this.context = new AudioContext();
     
             this.gainNode = this.context.createGain();
             this.gainNode.gain.value = 0.5; // Master volume scale
     
+            // Create standard script processor
             this.jsNode = this.context.createScriptProcessor(this.audioBufSize, 0, 2);
-            this.jsNode.onaudioprocess = function(e) {
-                self.mixFunction(e);
-            };
+            this.jsNode.onaudioprocess = (e) => this.mixFunction(e);
     
-            // ========================================================================
-            // NATIVE WEB AUDIO DSP NODE GRAPH BUILD
-            // ========================================================================
-            this.filterNode = this.context.createBiquadFilter();
-            this.filterNode.type = 'lowpass';
-            this.filterNode.frequency.value = 20000; // Default: fully open (bypassed)
-
-            this.delayNode = this.context.createDelay(1.0);
-            this.delayNode.delayTime.value = 0.0; // Default: no delay (mono)
-
-            this.splitterNode = this.context.createChannelSplitter(2);
-            this.mergerNode = this.context.createChannelMerger(2);
-
-            // Connect mono generator to the filter
-            this.jsNode.connect(this.filterNode);
-            
-            // Connect filtered path to splitter (left and right extraction)
-            this.filterNode.connect(this.splitterNode);
-
-            // Left path: Connect splitter output 0 directly to merger input 0 (Left)
-            this.splitterNode.connect(this.mergerNode, 0, 0);
-
-            // Right path (Delayed): Route splitter output 0 through delayNode, then to merger input 1 (Right)
-            this.splitterNode.connect(this.delayNode, 0);
-            this.delayNode.connect(this.mergerNode, 0, 1);
-
-            // Connect merged stereo output to master gain and destination speaker
-            this.mergerNode.connect(this.gainNode);
+            // Directly connect to destination for maximum processing speed
+            this.jsNode.connect(this.gainNode);
             this.gainNode.connect(this.context.destination);
 
-            this.multiplier = Math.floor(thecpu.clockRate / this.jsNode.context.sampleRate);
+            this.multiplier = Math.floor(cpu.clockRate / this.context.sampleRate);
+            this.delaySamplesLength = Math.floor(0.02 * this.context.sampleRate);
             this.audioInitialized = true;
         }
         catch(e) {
-            console.error("PSG::Failed to bootstrap Web Audio context.", e);
+            console.error("PSG::Failed to bootstrap Web Audio.", e);
             this.webAudioAPIsupported = false;
         }        
     }
@@ -161,6 +132,14 @@ class Sega315_5124_Psg {
      */
     step(totCpuCycles) {
         this.internalClock = totCpuCycles;
+    }
+
+    /**
+     * Enqueues an 8-bit command byte matching a specific CPU cycle timestamp.
+     * @param {number} b - Sound register parameter byte.
+     */
+    writeByte(b) {
+        this.eventsQueue.push([b, this.internalClock]);
     }
 
     /**
@@ -182,6 +161,7 @@ class Sega315_5124_Psg {
             this.runningTotal = 0.0;
 
             for (this.multiplierIndex = 0; this.multiplierIndex < this.multiplier; this.multiplierIndex++) {
+                // Process snychronous sound register writes from queue
                 if ((this.eventsQueue.length > 0) && (this.eventsQueue[0][1] <= Math.floor(this.internalClockPos))) {
                     this.curEvent = this.eventsQueue.shift();
                     this.eventByte = this.curEvent[0];
@@ -210,9 +190,34 @@ class Sega315_5124_Psg {
 
             this.runningTotal /= this.multiplier;
 
-            // Output generated mono sample stream to left/right arrays
-            dataL[this.sampleIndex] = this.runningTotal;
-            dataR[this.sampleIndex] = this.runningTotal;
+            // ========================================================================
+            // REAL-TIME SYNCHRONOUS DSP FILTER EVALUATION
+            // ========================================================================
+            this.sampleOut = this.runningTotal;
+
+            // 1. Apply Arcade Low-Pass filter (cures square wave harshness)
+            if (this.audioFilterMode === 1) {
+                this.smoothedValue += (this.runningTotal - this.smoothedValue) * 0.15; // IIR Filter equation
+                this.sampleOut = this.smoothedValue;
+            }
+
+            // 2. Apply dynamic 3D Stereo spatializer (Haas delay line)
+            if (this.audioFilterMode === 2) {
+                // Write active sample into circular delay buffer
+                this.delayBuffer[this.delayBufferWritePos] = this.sampleOut;
+
+                // Read sample delayed 20ms behind write head
+                this.delayBufferReadPos = (this.delayBufferWritePos - this.delaySamplesLength + 2048) % 2048;
+
+                dataL[this.sampleIndex] = this.sampleOut; // Left channel direct
+                dataR[this.sampleIndex] = this.delayBuffer[this.delayBufferReadPos]; // Right channel delayed
+                
+                this.delayBufferWritePos = (this.delayBufferWritePos + 1) % 2048;
+            } else {
+                // Default dry mono output mapped to both channels
+                dataL[this.sampleIndex] = this.sampleOut;
+                dataR[this.sampleIndex] = this.sampleOut;
+            }
         }
 
         if (this.eventsQueue.length > 0) {
@@ -258,13 +263,5 @@ class Sega315_5124_Psg {
         }
 
         return this.finalSample;
-    }
-
-    /**
-     * Enqueues an 8-bit command byte matching a specific CPU cycle timestamp.
-     * @param {number} b - Sound register parameter byte.
-     */
-    writeByte(b) {
-        this.eventsQueue.push([b, this.internalClock]);
     }
 }

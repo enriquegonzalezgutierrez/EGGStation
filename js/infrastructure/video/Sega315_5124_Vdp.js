@@ -2,24 +2,31 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: Sega 315-5124 Video Display Processor
+ * Infrastructure Layer: Sega 315-5124 Video Display Processor Controller
  * 
- * Emulates the visual co-processor responsible for scanline rendering, sprite 
- * collisions, scrolling registers, and frame synchronization (NTSC/PAL).
- * Upgraded with Scale2X, Scale4X, Sony Trinitron scanlines, and NTSC Signal Bleed.
+ * Emulates the central control bus, ports, registers, and timing synchronizations.
+ * Render passes, sprites, and post-processors are delegated to specialized subservices.
+ * Enums are encapsulated inside class static namespaces to prevent scope hoisting errors.
  */
 
-const VdpDataPortWriteMode = {
-    toVRAM: 0,
-    toCRAM: 1
-};
-
-const VdpStandard = {
-    vdpNTSC: 0,
-    vdpPAL: 1
-};
-
 class Sega315_5124_Vdp {
+    // ========================================================================
+    // ENCAPSULATED STATIC PROPERTIES (OOP ENUMS)
+    // ========================================================================
+    static get DataPortWriteMode() {
+        return {
+            toVRAM: 0,
+            toCRAM: 1
+        };
+    }
+
+    static get Standard() {
+        return {
+            vdpNTSC: 0,
+            vdpPAL: 1
+        };
+    }
+
     constructor(vdpMode) {
         // 16KB of Video RAM (VRAM)
         this.vRam = new Array(0x4000).fill(0);
@@ -27,10 +34,10 @@ class Sega315_5124_Vdp {
         // 32 Bytes of write-only Color RAM (CRAM)
         this.colorRam = new Array(0x20).fill(0);
 
-        // Standard timing configurations
-        this.vdpStd = (vdpMode === 0) ? VdpStandard.vdpNTSC : VdpStandard.vdpPAL;
+        // Standard timing configurations resolved via static class namespace
+        this.vdpStd = (vdpMode === 0) ? Sega315_5124_Vdp.Standard.vdpNTSC : Sega315_5124_Vdp.Standard.vdpPAL;
 
-        if (this.vdpStd === VdpStandard.vdpNTSC) {
+        if (this.vdpStd === Sega315_5124_Vdp.Standard.vdpNTSC) {
             this.numberOfScanlines = 262;
             this.clockCyclesPerScanline = 228;
             console.log("VDP::NTSC Standard");
@@ -46,7 +53,7 @@ class Sega315_5124_Vdp {
         this.controlWordFlag = false;
         this.controlWord = 0;
         this.dataPortReadWriteAddress = 0;
-        this.dataPortWriteMode = VdpDataPortWriteMode.toVRAM;
+        this.dataPortWriteMode = Sega315_5124_Vdp.DataPortWriteMode.toVRAM;
         this.readBufferByte = 0;
         this.statusFlags = 0;
 
@@ -77,7 +84,7 @@ class Sega315_5124_Vdp {
         this.glbResolutionY = 240;
         this.yScreenLines = 192;
 
-        // Image canvas buffers
+        // Core Image buffers
         this.glbFrameBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY * 4);
         this.priBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY);
         this.spriteBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY);
@@ -107,9 +114,8 @@ class Sega315_5124_Vdp {
         this.glbImgData = undefined;
         this.glbCanvasRenderer = undefined;
 
-        // Pre-allocated upscaling buffers to guarantee zero GC thrashing
-        this.upscaledBuffer = new Uint8ClampedArray(512 * 480 * 4);
-        this.scale4xBuffer = new Uint8ClampedArray(1024 * 960 * 4); // ~3.9 MB pre-allocated
+        // SRP: Image upscaling and filters are delegated to the post-processor service
+        this.postProcessor = new VdpPostProcessor(this);
     }
 
     cleanSpriteBuffer() {
@@ -190,13 +196,13 @@ class Sega315_5124_Vdp {
             this.dataPortReadWriteAddress = (this.controlWord & 0x3fff);        
 
             if (controlCode === 0) {
-                this.dataPortWriteMode = VdpDataPortWriteMode.toVRAM;
+                this.dataPortWriteMode = Sega315_5124_Vdp.DataPortWriteMode.toVRAM;
                 this.readBufferByte = this.vRam[this.dataPortReadWriteAddress & 0x3fff];
                 this.dataPortReadWriteAddress++;
                 this.dataPortReadWriteAddress &= 0x3fff;                
             }
             else if (controlCode === 1) {
-                this.dataPortWriteMode = VdpDataPortWriteMode.toVRAM;
+                this.dataPortWriteMode = Sega315_5124_Vdp.DataPortWriteMode.toVRAM;
             }
             else if (controlCode === 2) {
                 const registerIndex = (this.controlWord & 0x0f00) >> 8;
@@ -204,7 +210,7 @@ class Sega315_5124_Vdp {
                 this.writeByteToRegister(registerIndex, dataByte);                
             }
             else if (controlCode === 3) {
-                this.dataPortWriteMode = VdpDataPortWriteMode.toCRAM;
+                this.dataPortWriteMode = Sega315_5124_Vdp.DataPortWriteMode.toCRAM;
             }
         }
     }
@@ -212,14 +218,14 @@ class Sega315_5124_Vdp {
     writeByteToDataPort(b) {
         this.controlWordFlag = false;
 
-        if (this.dataPortWriteMode === VdpDataPortWriteMode.toVRAM) {
+        if (this.dataPortWriteMode === Sega315_5124_Vdp.DataPortWriteMode.toVRAM) {
             if (this.dataPortReadWriteAddress < 0x4000) {
                 this.vRam[this.dataPortReadWriteAddress] = b;
             } else {
                 console.error("VDP::Attempted out-of-bounds write inside VRAM address: 0x" + this.dataPortReadWriteAddress.toString(16));
             }
         }
-        else if (this.dataPortWriteMode === VdpDataPortWriteMode.toCRAM) {
+        else if (this.dataPortWriteMode === Sega315_5124_Vdp.DataPortWriteMode.toCRAM) {
             const cramAddress = this.dataPortReadWriteAddress & 0x1f;
             this.colorRam[cramAddress] = b;
         }
@@ -405,205 +411,21 @@ class Sega315_5124_Vdp {
         }
     }
 
-    // ========================================================================
-    // POST-PROCESSING RENDERING ROUTINES (ZERO-ALLOCATION SCALERS)
-    // ========================================================================
-
     /**
-     * Sharp Scale2X upscaler. Interpolates pixel boundaries dynamically 
-     * to smooth out jagged lines.
-     * @param {Uint8ClampedArray} src - Source buffer (usually glbFrameBuffer, 256xY).
-     * @param {Uint8ClampedArray} dst - Destination buffer (usually upscaledBuffer, 512xY*2).
-     * @param {number} width - Base source width (256).
-     * @param {number} height - Base source height (yScreenLines).
-     */
-    scale2X(src, dst, width, height) {
-        const outWidth = width * 2;
-
-        const same = (offsetA, offsetB) => {
-            return src[offsetA] === src[offsetB] && 
-                   src[offsetA + 1] === src[offsetB + 1] && 
-                   src[offsetA + 2] === src[offsetB + 2];
-        };
-
-        for (let y = 0; y < height; y++) {
-            const prevY = y > 0 ? y - 1 : 0;
-            const nextY = y < height - 1 ? y + 1 : height - 1;
-
-            for (let x = 0; x < width; x++) {
-                const prevX = x > 0 ? x - 1 : 0;
-                const nextX = x < width - 1 ? x + 1 : width - 1;
-
-                const pIdx = (x + y * width) * 4;
-                const aIdx = (x + prevY * width) * 4;
-                const cIdx = (prevX + y * width) * 4;
-                const bIdx = (nextX + y * width) * 4;
-                const dIdx = (x + nextY * width) * 4;
-
-                const pr = src[pIdx], pg = src[pIdx+1], pb = src[pIdx+2];
-
-                let e0r = pr, e0g = pg, e0b = pb;
-                let e1r = pr, e1g = pg, e1b = pb;
-                let e2r = pr, e2g = pg, e2b = pb;
-                let e3r = pr, e3g = pg, e3b = pb;
-
-                if (same(cIdx, aIdx) && !same(cIdx, dIdx) && !same(aIdx, bIdx)) {
-                    e0r = src[aIdx]; e0g = src[aIdx+1]; e0b = src[aIdx+2];
-                }
-                if (same(aIdx, bIdx) && !same(aIdx, cIdx) && !same(bIdx, dIdx)) {
-                    e1r = src[bIdx]; e1g = src[bIdx+1]; e1b = src[bIdx+2];
-                }
-                if (same(dIdx, cIdx) && !same(dIdx, bIdx) && !same(cIdx, aIdx)) {
-                    e2r = src[cIdx]; e2g = src[cIdx+1]; e2b = src[cIdx+2];
-                }
-                if (same(bIdx, dIdx) && !same(bIdx, aIdx) && !same(dIdx, cIdx)) {
-                    e3r = src[dIdx]; e3g = src[dIdx+1]; e3b = src[dIdx+2];
-                }
-
-                const outY = y * 2;
-                const outX = x * 2;
-                const row0 = (outX + outY * outWidth) * 4;
-                const row1 = (outX + (outY + 1) * outWidth) * 4;
-
-                dst[row0] = e0r; dst[row0+1] = e0g; dst[row0+2] = e0b; dst[row0+3] = 255;
-                dst[row0+4] = e1r; dst[row0+5] = e1g; dst[row0+6] = e1b; dst[row0+7] = 255;
-                dst[row1] = e2r; dst[row1+1] = e2g; dst[row1+2] = e2b; dst[row1+3] = 255;
-                dst[row1+4] = e3r; dst[row1+5] = e3g; dst[row1+6] = e3b; dst[row1+7] = 255;
-            }
-        }
-    }
-
-    /**
-     * Scale4X upscaling pipeline (smart 4x depixelation filter).
-     * Runs our optimized Scale2X algorithm sequentially twice over 
-     * pre-allocated buffers to smoothly transform pixel-art into HD lines.
-     */
-    scale4X() {
-        // Pass 1: Scale 256xY (FrameBuffer) -> 512xY*2 (upscaledBuffer)
-        this.scale2X(this.glbFrameBuffer, this.upscaledBuffer, 256, this.yScreenLines);
-
-        // Pass 2: Scale 512xY*2 (upscaledBuffer) -> 1024xY*4 (scale4xBuffer)
-        this.scale2X(this.upscaledBuffer, this.scale4xBuffer, 512, this.yScreenLines * 2);
-    }
-
-    /**
-     * Renders thin, high-resolution scanlines. It scales the image to 
-     * $512 \times 480$ internally and darkens every alternate line.
-     */
-    applyScanlines() {
-        const src = this.glbFrameBuffer;
-        const dst = this.upscaledBuffer;
-        const width = 256;
-        const height = this.yScreenLines;
-        const outWidth = 512;
-
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const pIdx = (x + y * width) * 4;
-                const r = src[pIdx];
-                const g = src[pIdx + 1];
-                const b = src[pIdx + 2];
-
-                const outY = y * 2;
-                const outX = x * 2;
-                const row0 = (outX + outY * outWidth) * 4;
-                const row1 = (outX + (outY + 1) * outWidth) * 4;
-
-                dst[row0] = r; dst[row0+1] = g; dst[row0+2] = b; dst[row0+3] = 255;
-                dst[row0+4] = r; dst[row0+5] = g; dst[row0+6] = b; dst[row0+7] = 255;
-
-                dst[row1] = Math.floor(r * 0.4); 
-                dst[row1+1] = Math.floor(g * 0.4); 
-                dst[row1+2] = Math.floor(b * 0.4); 
-                dst[row1+3] = 255;
-                
-                dst[row1+4] = Math.floor(r * 0.4); 
-                dst[row1+5] = Math.floor(g * 0.4); 
-                dst[row1+6] = Math.floor(b * 0.4); 
-                dst[row1+7] = 255;
-            }
-        }
-    }
-
-    /**
-     * Implements an optimized 3-tap horizontal color blending filter 
-     * to simulate standard analog RF/Composite TV signal leakage.
-     */
-    applyNtsdBleed() {
-        const src = this.glbFrameBuffer;
-        const dst = this.upscaledBuffer; // Re-use 512 buffer as a temporary 256 target
-        const width = 256;
-        const height = this.yScreenLines;
-
-        for (let y = 0; y < height; y++) {
-            const rowOffset = y * width * 4;
-
-            for (let x = 0; x < width; x++) {
-                const prevX = x > 0 ? x - 1 : 0;
-                const nextX = x < width - 1 ? x + 1 : width - 1;
-
-                const pIdx = rowOffset + (x * 4);
-                const prevIdx = rowOffset + (prevX * 4);
-                const nextIdx = rowOffset + (nextX * 4);
-
-                // Blend colors: 50% current pixel, 25% left neighbor, 25% right neighbor
-                dst[pIdx] = Math.floor((src[prevIdx] * 0.25) + (src[pIdx] * 0.50) + (src[nextIdx] * 0.25));
-                dst[pIdx + 1] = Math.floor((src[prevIdx + 1] * 0.25) + (src[pIdx + 1] * 0.50) + (src[nextIdx + 1] * 0.25));
-                dst[pIdx + 2] = Math.floor((src[prevIdx + 2] * 0.25) + (src[pIdx + 2] * 0.50) + (src[nextIdx + 2] * 0.25));
-                dst[pIdx + 3] = 255;
-            }
-        }
-    }
-
-    /**
-     * Blits the frame buffer to the host canvas context, dynamically upscaling the output.
+     * Delegates frame buffer blitting and upscaling to our Post-Processor service.
      * @param {CanvasRenderingContext2D} ctx - Target Canvas context.
-     * @param {number} postProcessMode - Selected filter (0: Sharp, 1: Bilinear, 2: Scale2X, 3: Scanlines, 4: Scale4X, 5: NTSC Bleed)
+     * @param {number} postProcessMode - Selected filter.
      */
     hyperBlit(ctx, postProcessMode) {
-        // Evaluate active scaling parameters
-        let scaleFactor = 1;
-        if (postProcessMode === 2 || postProcessMode === 3) scaleFactor = 2; // Scale2X and Scanlines scale to 2x (512x)
-        if (postProcessMode === 4) scaleFactor = 4; // Scale4X Cartoon HD scales to 4x (1024x)
-
-        const targetWidth = 256 * scaleFactor;
-        const targetHeight = this.yScreenLines * scaleFactor;
-
-        // Dynamically adjust the host canvas width and height properties to match
-        if (ctx.canvas.width !== targetWidth || ctx.canvas.height !== targetHeight) {
-            ctx.canvas.width = targetWidth;
-            ctx.canvas.height = targetHeight;
-            this.glbImgData = undefined; // Force image data reconstitution
-        }
-
-        if (this.glbImgData === undefined) {
-            this.glbImgData = ctx.createImageData(targetWidth, targetHeight);
-        }
-
-        // Active scale limits calculated to support safe array copy
-        const activeLength = targetWidth * targetHeight * 4;
-
-        // Apply visual upscaling or do standard blit
-        if (postProcessMode === 2) {
-            this.scale2X(this.glbFrameBuffer, this.upscaledBuffer, 256, this.yScreenLines);
-            this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
-        } else if (postProcessMode === 3) {
-            this.applyScanlines();
-            this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
-        } else if (postProcessMode === 4) {
-            this.scale4X();
-            this.glbImgData.data.set(this.scale4xBuffer.subarray(0, activeLength));
-        } else if (postProcessMode === 5) {
-            this.applyNtsdBleed();
-            this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
-        } else {
-            // Sharp 1x or Bilinear (Bilinear is handled directly by browser CSS)
-            this.glbImgData.data.set(this.glbFrameBuffer.subarray(0, activeLength));
-        }
-
-        ctx.putImageData(this.glbImgData, 0, 0);
+        this.postProcessor.blit(ctx, this.glbFrameBuffer, this.yScreenLines, postProcessMode);
     }
 
+    /**
+     * Executes the VDP frame synchronization timeline and triggers horizontal drawing passes.
+     * @param {ZilogZ80} theCPU - The central processor reference.
+     * @param {number} cycles - Clock cycles elapsed during last instruction.
+     * @returns {boolean} True if a full frame has been rendered and requires blitting.
+     */
     update(theCPU, cycles) {
         this.hcounter += cycles;
         if (this.hcounter >= this.clockCyclesPerScanline) {
@@ -613,7 +435,7 @@ class Sega315_5124_Vdp {
             let vCounterJumpOnScanlineIndex = 219;
             let vCounterJumpToIndex = 213;   
 
-            if (this.vdpStd !== VdpStandard.vdpNTSC) {
+            if (this.vdpStd !== Sega315_5124_Vdp.Standard.vdpNTSC) {
                 vCounterJumpOnScanlineIndex = 243;
                 vCounterJumpToIndex = 186;    
             }
@@ -621,7 +443,7 @@ class Sega315_5124_Vdp {
             let interruptAfterScanlineIndex = 192;
 
             if (this.yScreenLines === 224) {
-                if (this.vdpStd === VdpStandard.vdpNTSC) {
+                if (this.vdpStd === Sega315_5124_Vdp.Standard.vdpNTSC) {
                     vCounterJumpOnScanlineIndex = 235;
                     vCounterJumpToIndex = 229;   
                 } else {
@@ -632,7 +454,7 @@ class Sega315_5124_Vdp {
                 interruptAfterScanlineIndex = 224; 
             }
             else if (this.yScreenLines === 240) {
-                if (this.vdpStd === VdpStandard.vdpNTSC) {
+                if (this.vdpStd === Sega315_5124_Vdp.Standard.vdpNTSC) {
                     vCounterJumpOnScanlineIndex = 256;
                     vCounterJumpToIndex = 0;    
                 } else {
@@ -729,80 +551,11 @@ class Sega315_5124_Vdp {
         }
     }    
 
-    drawSpritesM2Scanline(scanlineNum) {
-        const sprite_attribute_addr = (this.register05 & 0x7F) << 7;
-        const sprite_size = ((this.register01 & 0x02) !== 0) ? 16 : 8;
-        const sprite_pattern_addr = (this.register06 & 0x07) << 11;
-        const sprite_zoom = false;
-
-        let max_sprite = 31;
-
-        for (let sprite = 0; sprite <= max_sprite; sprite++) {
-            if (this.vRam[sprite_attribute_addr + (sprite << 2)] === 0xD0) {
-                max_sprite = sprite - 1;
-                break;
-            }
-        }
-
-        for (let sprite = 0; sprite <= max_sprite; sprite++) {
-            const sprite_attribute_offset = sprite_attribute_addr + (sprite << 2);
-            let sprite_y = (this.vRam[sprite_attribute_offset] + 1) & 0xFF;
-
-            if (sprite_y >= 0xE0) {
-                sprite_y = -(0x100 - sprite_y);
-            }
-
-            if ((sprite_y > scanlineNum) || ((sprite_y + sprite_size) <= scanlineNum)) {
-                continue;
-            }
-
-            const sprite_color = this.vRam[sprite_attribute_offset + 3] & 0x0F;
-
-            if (sprite_color === 0) {
-                continue;
-            }
-
-            const sprite_shift = (this.vRam[sprite_attribute_offset + 3] & 0x80) ? 32 : 0;
-            const sprite_x = this.vRam[sprite_attribute_offset + 1] - sprite_shift;
-
-            if (sprite_x >= this.glbResolutionX) {
-                continue;
-            }
-
-            let sprite_tile = this.vRam[sprite_attribute_offset + 2];
-            sprite_tile &= ((this.register01 & 0x02) !== 0) ? 0xFC : 0xFF;
-
-            const sprite_line_addr = sprite_pattern_addr + (sprite_tile << 3) + ((scanlineNum - sprite_y) >> (sprite_zoom ? 1 : 0));
-
-            for (let tile_x = 0; tile_x < sprite_size; tile_x++) {
-                const sprite_pixel_x = sprite_x + tile_x;
-                if (sprite_pixel_x >= this.glbResolutionX) {
-                    break;
-                }
-                if (sprite_pixel_x < 0) {
-                    continue;
-                }
-
-                let sprite_pixel = false;
-                const tile_x_adjusted = tile_x >> (sprite_zoom ? 1 : 0);
-
-                if (tile_x_adjusted < 8) {
-                    sprite_pixel = ((this.vRam[sprite_line_addr] & (1 << (7 - tile_x_adjusted))) === 0) ? false : true;
-                } else {
-                    sprite_pixel = ((this.vRam[sprite_line_addr + 16] & (1 << (15 - tile_x_adjusted))) === 0) ? false : true;
-                }
-
-                if (sprite_pixel) {
-                    const fbY = (scanlineNum * this.glbResolutionX * 4) + (sprite_pixel_x * 4);
-                    this.glbFrameBuffer[fbY + 0] = this.sg1000palette[sprite_color * 3];
-                    this.glbFrameBuffer[fbY + 1] = this.sg1000palette[sprite_color * 3 + 1];
-                    this.glbFrameBuffer[fbY + 2] = this.sg1000palette[sprite_color * 3 + 2];
-                    this.glbFrameBuffer[fbY + 3] = 255;
-                }
-            }
-        }
-    }
-
+    /**
+     * Standard horizontal draw scanline loop. Delegates background 
+     * and sprite rendering layers to specialized subservices.
+     * @param {number} scanlineNum - Active scanline index.
+     */
     drawScanline(scanlineNum) {
         if (scanlineNum < 0) return;
         if (scanlineNum >= this.yScreenLines) return;
@@ -821,171 +574,21 @@ class Sega315_5124_Vdp {
             return;
         }
 
-        // Mode 4 Render
+        // 1. Background rendering (Mode 4 vs Mode 2)
         if ((this.register00 & 0x04) !== 0) {
-            let nameTableBaseAddressMask = 0x0e;
-            let nameTableBaseAddressOffset = 0;
-            if ((this.yScreenLines === 224) || (this.yScreenLines === 240)) {
-                nameTableBaseAddressMask = 0x0c;
-                nameTableBaseAddressOffset = 0x700;
-            }
-            
-            let nameTableBaseAddress = ((this.nameTableBaseAddress & nameTableBaseAddressMask) << 10) | nameTableBaseAddressOffset;
-
-            const initialTile = 32 - (((this.register08) >> 3) & 0x1f);
-            let finescrollx = this.register08 & 0x7;
-            const initialRow = Math.floor((this.register09) / 8);
-            let finescrolly = (this.register09 % 8);
-
-            let smLen = 28;
-            if ((this.yScreenLines === 224) || (this.yScreenLines === 240)) {
-                smLen = 32;
-            }
-
-            const yScreenMap = Math.floor(scanlineNum / 8);
-            let adder = 0;
-            if ((finescrolly + (scanlineNum % 8)) >= 8) {
-                adder = 1;
-            }
-
-            const screenMap = [];
-            nameTableBaseAddress += (((yScreenMap + initialRow + adder) % smLen) * 32) * 2;
-            for (let x = 0; x < 32; x++) {
-                let word = this.vRam[nameTableBaseAddress];
-                word |= this.vRam[nameTableBaseAddress + 1] << 8;
-                screenMap.push(word);
-                nameTableBaseAddress += 2;             
-            }
-
-            const screenMapNoscroll = [];
-            if (this.register00 & 0x80) { // Disable vertical scrolling for columns 24-31
-                let nameTableBaseAddressNoScroll = ((this.nameTableBaseAddress >> 1) & 0x07) << 11;
-                nameTableBaseAddressNoScroll += (((yScreenMap) % smLen) * 32) * 2;
-                for (let x = 0; x < 32; x++) {
-                    let word = this.vRam[nameTableBaseAddressNoScroll];
-                    word |= this.vRam[nameTableBaseAddressNoScroll + 1] << 8;
-                    screenMapNoscroll.push(word);
-                    nameTableBaseAddressNoScroll += 2;             
-                }
-            }
-
-            for (let x = 0; x < 32; x++) {
-                let word;
-
-                if ((x >= 24) && (this.register00 & 0x80)) {
-                    word = screenMapNoscroll[((x + initialTile) % 32)];
-                    finescrolly = 0;
-                }
-                else if ((this.register00 & 0x40) && (scanlineNum < 16)) { // Disable horizontal scrolling for rows 0-1
-                    word = screenMap[x];
-                    finescrollx = 0;
-                }
-                else {
-                    word = screenMap[((x + initialTile) % 32)];
-                }
-
-                const flipH = (word >> 9) & 0x01;
-                const flipV = (word >> 10) & 0x01;
-                const pal = (word >> 11) & 0x01;
-                const priFlag = (word >> 12) & 0x01;
-
-                this.drawLineTile((word & 0x1ff) * 32, (x * 8) + finescrollx, scanlineNum, pal, flipH, flipV, finescrolly, priFlag);   
-            }
-        }
-        // Mode 2 Render
-        else if ((this.register00 & 0x02) !== 0) {
-            let nameTableBaseAddress = (this.nameTableBaseAddress & 0x0f) << 10;
-
-            const screenMap = [];
-            for (let y = 0; y < 24; y++) {
-                for (let x = 0; x < 32; x++) {
-                    let byte = this.vRam[nameTableBaseAddress];
-
-                    if ((y >= 8) && (y < 16)) byte += 0x100;
-                    else if (y >= 16) byte += 0x200;
-
-                    screenMap.push(byte);
-                    nameTableBaseAddress += 1;             
-                }
-            }
-
-            const yScreenMap = Math.floor(scanlineNum / 8);
-
-            for (let x = 0; x < 32; x++) {
-                const char = screenMap[x + (((yScreenMap) % 24) * 32)];
-                this.drawScanlineM2Tile(char, (x * 8), scanlineNum);   
-            }
+            VdpMode4Renderer.renderScanline(this, scanlineNum);
+        } else if ((this.register00 & 0x02) !== 0) {
+            VdpMode2Renderer.renderScanline(this, scanlineNum);
         }
 
-        // Render Sprites (Mode 4)
+        // 2. Sprite rendering (Mode 4 vs Mode 2)
         if ((this.register00 & 0x04) !== 0) {
-            const sat = this.spriteAttributeTableBaseAddress;
-
-            let stopDrawingSpritesWhenLine208IsFound = true;
-            if ((this.yScreenLines === 224) || (this.yScreenLines === 240)) {
-                stopDrawingSpritesWhenLine208IsFound = false;
-            }
-
-            let maxSprite = 64;
-            for (let s = 0; s < 64; s++) {
-                const spriteY = this.vRam[sat + s];
-                if ((spriteY === 0xd0) && stopDrawingSpritesWhenLine208IsFound) {
-                    maxSprite = s;
-                    break;
-                }
-            }
-
-            if (maxSprite > 0) {
-                maxSprite -= 1;
-            }
-
-            let numSpritesDrawnOnThisScanline = 0;
-            for (let s = maxSprite; s >= 0; s--) {
-                let spriteY = this.vRam[sat + s];
-                spriteY++;
-
-                if ((spriteY > 0xd0) && stopDrawingSpritesWhenLine208IsFound) {
-                    spriteY -= 0x100;
-                }
-
-                let spriteX = this.vRam[sat + (s * 2) + (0x10 * 0x8)];
-
-                if (this.register00 & 0x08) {
-                    spriteX -= 8;
-                }
-
-                let spriteIdx = this.vRam[sat + (s * 2) + (0x10 * 0x8) + 1];
-
-                let spritesAre8x16 = false;
-                if ((this.register00 & 0x04) && (this.register01 & 0x02)) {
-                    spritesAre8x16 = true;
-                    spriteIdx &= 0xfe;
-                }
-
-                if ((scanlineNum >= spriteY) && (scanlineNum < (spriteY + 8))) {
-                    this.drawSpriteSlice(spriteIdx * 32, spriteX, scanlineNum, scanlineNum - spriteY);
-                    numSpritesDrawnOnThisScanline++;
-                }
-
-                if (spritesAre8x16) {
-                    spriteIdx++;
-                    if ((scanlineNum >= (spriteY + 8)) && (scanlineNum < (spriteY + 16))) {
-                        this.drawSpriteSlice(spriteIdx * 32, spriteX, scanlineNum, scanlineNum - spriteY - 8);
-                    }
-                }
-            }
-
-            if (numSpritesDrawnOnThisScanline >= 8) {
-                // Set sprite overflow flag
-                this.statusFlags |= 0x40;
-            }
-        }
-        // Render Sprites (Mode 2)
-        else if ((this.register00 & 0x02) !== 0) {
-            this.drawSpritesM2Scanline(scanlineNum);
+            VdpSpriteManager.drawMode4(this, scanlineNum);
+        } else if ((this.register00 & 0x02) !== 0) {
+            VdpSpriteManager.drawMode2(this, scanlineNum);
         }
 
-        // Mask Column 0 with overscan backdrop color (D5 of register 0)
+        // 3. Mask Column 0 with overscan backdrop color (D5 of register 0)
         if (this.register00 & 0x20) {
             const oscol = this.colorRam[(this.register07 & 0x0f) + 16];
             const red = (oscol & 0x03) * 85;

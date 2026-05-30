@@ -3,10 +3,10 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: HTML Entry Point
+ * Presentation Layer: HTML Entry Point (With complete scripts dependency loading queue)
  * 
- * Sets up the DOM structure, visual elements, and imports the architectural 
- * layers. Includes Responsive Design, Mobile Gamepad, and Soundstage selectors.
+ * Sets up the DOM structure, visual elements, and imports the modular architectural 
+ * layers in strict dependency order (Sub-services -> Primary Controllers).
 -->
 <html lang="en">
     <head>
@@ -22,24 +22,43 @@
         <!-- Presentation Layer: CSS Stylesheet -->
         <link rel="stylesheet" href="css/main.css"/>
         
-        <!-- ========================================== -->
-        <!-- INFRASTRUCTURE LAYER                       -->
-        <!-- ========================================== -->
+        <!-- ========================================================== -->
+        <!-- INFRASTRUCTURE LAYER: HARDWARE BINDINGS & SUB-SERVICES     -->
+        <!-- ========================================================== -->
+        
+        <!-- Audio Synthesizer & Controller -->
         <script src="js/infrastructure/audio/Sega315_5124_Psg.js"></script>
+        
+        <!-- Video Renderers, Post-processors, and VDP Controller -->
+        <script src="js/infrastructure/video/VdpMode4Renderer.js"></script>
+        <script src="js/infrastructure/video/VdpMode2Renderer.js"></script>
+        <script src="js/infrastructure/video/VdpSpriteManager.js"></script>
+        <script src="js/infrastructure/video/VdpPostProcessor.js"></script>
         <script src="js/infrastructure/video/Sega315_5124_Vdp.js"></script>
+        
+        <!-- Storage Serializer -->
         <script src="js/infrastructure/storage/WebLocalStorageSerializer.js"></script>
 
-        <!-- ========================================== -->
-        <!-- DOMAIN LAYER                               -->
-        <!-- ========================================== -->
+        <!-- ========================================================== -->
+        <!-- DOMAIN LAYER                                               -->
+        <!-- ========================================================== -->
+        
+        <!-- Cartridge Entity & Paging Strategies -->
         <script src="js/domain/cartridge/SegaMasterSystemCartridge.js"></script>
         <script src="js/domain/cartridge/mappers/BaseMapper.js"></script>
         <script src="js/domain/cartridge/mappers/SegaMapper.js"></script>
         <script src="js/domain/cartridge/mappers/CodemastersMapper.js"></script>
         <script src="js/domain/cartridge/mappers/KoreanMapper.js"></script>
         <script src="js/domain/cartridge/mappers/SegaMasterSystemMapperFactory.js"></script>
+        
+        <!-- Controller I/O Chip -->
         <script src="js/domain/controller/Sega315_5297.js"></script>
+        
+        <!-- System Memory & I/O Bus -->
         <script src="js/domain/bus/SegaMasterSystemBus.js"></script>
+        
+        <!-- Z80 CPU Disassembler, Registers, ALU, and Core Orchestrator -->
+        <script src="js/domain/cpu/Z80Disassembler.js"></script>
         <script src="js/domain/cpu/Z80Registers.js"></script>
         <script src="js/domain/cpu/Z80Alu.js"></script>
         <script src="js/domain/cpu/instructions/Z80DataTransfer.js"></script>
@@ -51,9 +70,9 @@
         <script src="js/domain/cpu/instructions/Z80SystemIO.js"></script>
         <script src="js/domain/cpu/ZilogZ80.js"></script>
 
-        <!-- ========================================== -->
-        <!-- APPLICATION & PRESENTATION LAYERS          -->
-        <!-- ========================================== -->
+        <!-- ========================================================== -->
+        <!-- APPLICATION & PRESENTATION LAYERS                          -->
+        <!-- ========================================================== -->
         <script src="js/application/EmulatorOrchestrator.js"></script>
         <script src="js/presentation/UIController.js"></script>
         <script src="js/app.js"></script>
