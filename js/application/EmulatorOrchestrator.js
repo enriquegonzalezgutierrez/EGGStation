@@ -2,11 +2,14 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Emulator Orchestrator (With WebGL2 dependency injection)
+ * Application Layer: Emulator Orchestrator (With WebGL2 & Async Integrations)
  * 
  * Coordinates system execution loops, schedules frame sync rates (NTSC/PAL),
  * and links the isolated Domain entities with Infrastructure services.
  * Decoupled from DOM rendering and browser event APIs (SRP).
+ * 
+ * OPTIMIZED: Fully updated to support modern Asynchronous APIs (AudioWorklet 
+ * initialization and IndexedDB state serialization).
  */
 
 class EmulatorOrchestrator {
@@ -52,7 +55,7 @@ class EmulatorOrchestrator {
         
         // Instantiate persistent auxiliary hardware/services
         this.ioController = new Sega315_5297();
-        this.serializer = new WebLocalStorageSerializer();
+        this.serializer = new WebIndexedDBSerializer(); // Updated to IndexedDB Strategy
 
         // Hard bind the execution loop to preserve 'this' context in requestAnimationFrame
         this.loop = this.loop.bind(this);
@@ -87,10 +90,11 @@ class EmulatorOrchestrator {
 
     /**
      * Bootstraps the emulator hardware, injects dependencies, and begins execution.
+     * Made async to allow the AudioWorklet Blob compiler to finish before execution starts.
      * @param {string} filename - The name of the loaded ROM file.
      * @param {ArrayBuffer} arrayBuffer - The raw binary buffer of the ROM.
      */
-    loadRom(filename, arrayBuffer) {
+    async loadRom(filename, arrayBuffer) {
         // Prevent multiple loop collisions if a game is already running
         if (this.animationFrameId) {
             cancelAnimationFrame(this.animationFrameId);
@@ -108,8 +112,8 @@ class EmulatorOrchestrator {
         this.mmu = new SegaMasterSystemBus(this.cartridge, this.vdp, this.psg, this.ioController);
         this.cpu = new ZilogZ80(this.mmu);
         
-        // 4. Boot Web Audio API Context tied to CPU clock
-        this.psg.startMix(this.cpu);
+        // 4. Boot Web Audio API Context and Await Worklet Compilation
+        await this.psg.startMix(this.cpu);
         
         // Apply pre-configured audio filters immediately upon hardware boot
         this.psg.setAudioFilter(this.audioFilterMode);
@@ -155,20 +159,32 @@ class EmulatorOrchestrator {
     }
 
     /**
-     * Serializes current hardware states to the browser's local storage.
+     * Serializes current hardware states to the browser's IndexedDB.
      */
-    saveState() {
+    async saveState() {
         if (this.isRunning && this.cartridge) {
-            this.serializer.serialize(this.cartridge.cartridgeName, this.cpu, this.vdp, this.mmu, this.psg);
+            try {
+                await this.serializer.serialize(this.cartridge.cartridgeName, this.cpu, this.vdp, this.mmu, this.psg);
+            } catch (err) {
+                console.error("EmulatorOrchestrator::Save State failed:", err);
+            }
         }
     }
 
     /**
-     * Restores hardware states from the browser's local storage.
+     * Restores hardware states from the browser's IndexedDB.
      */
-    loadState() {
+    async loadState() {
         if (this.isRunning && this.cartridge) {
-            this.serializer.deserialize(this.cartridge.cartridgeName, this.cpu, this.vdp, this.mmu, this.psg);
+            try {
+                const status = await this.serializer.deserialize(this.cartridge.cartridgeName, this.cpu, this.vdp, this.mmu, this.psg);
+                // If loaded successfully, command the AudioWorklet to sync its arrays
+                if (status === 0 && this.psg) {
+                    this.psg.syncWorkletState();
+                }
+            } catch (err) {
+                console.error("EmulatorOrchestrator::Load State failed:", err);
+            }
         }
     }
 
@@ -240,7 +256,7 @@ class EmulatorOrchestrator {
         while (emulatedCycles < targetCycles) {
             const cyclesElapsed = this.cpu.executeOne();
             
-            // Do not process audio during fast-forward to prevent buffer clipping noise
+            // Do not step audio clock during fast-forward to prevent buffer clipping noise
             if (!this.fastForward) {
                 this.psg.step(this.cpu.totCycles);
             }

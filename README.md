@@ -1,16 +1,14 @@
 # EGGStation
 
-> A decoupled, responsive, and performance-optimized Sega Master System (SMS) & SG-1000 console emulator implemented in Vanilla ES6+ JavaScript.
+> A highly decoupled, offline-first, performance-optimized Sega Master System (SMS) & SG-1000 console emulator implemented in Vanilla ES6+ JavaScript.
 
-![EGGStation Visualizer](img/eggstation-visualizer.png)
+EGGStation is engineered with a strict separation of concerns, isolating hardware-specific logic, processor modeling, and representation. Designed to run completely local (`file://` protocol) without the need for a web server, it showcases how advanced emulator architecture, WebGL2 shaders, and Web Audio DSP pipelines can be implemented with zero external dependencies.
 
 ---
 
-## 1. Architectural Overview
+## 1. Architectural Architecture & SOLID Principles
 
-EGGStation is engineered with a strict division of concerns, separating console-specific hardware logic, core processor modeling, and presentation abstractions. Rather than adhering to the tight-coupling paradigms common in monolithic emulators, this system decouples core hardware modules using **Domain-Driven Design (DDD)** and **SOLID** principles.
-
-The codebase is organized into four distinct architectural layers:
+EGGStation rejects monolithic tightly-coupled structures. Instead, it partitions the hardware ecosystem into distinct layers according to **Domain-Driven Design (DDD)** and **SOLID** principles:
 
 ```
                                   +------------------------------------+
@@ -37,16 +35,65 @@ The codebase is organized into four distinct architectural layers:
                                   +------------------------------------+
 ```
 
-*   **Domain Layer:** Models the core abstract hardware behavior, constraints, and business logic of the console (such as CPU registers, clock cycles, address buses, DB-9 input port definitions, and raw cartridge data structures). It remains entirely isolated from browser-specific environments.
-*   **Infrastructure Layer:** Implements standard visual output rendering engines (VDP), audio synthesizers (PSG), and state serializers utilizing standard browser APIs (Canvas, Web Audio, LocalStorage).
-*   **Application Layer:** Orchestrates the system's runtime loop, clock cycles synchronization, fast-forward states, and routes input and serialization triggers.
-*   **Presentation Layer:** Handles DOM rendering, UI themes, custom tooltips, mobile virtual gamepad touch bindings, and viewport scaling.
+*   **Domain Layer:** Encapsulates the core physical behavior of the console hardware (Z80 execution, registers, physical memory mapping, DB-9 pinout emulation). It is entirely decoupled from the browser runtime.
+*   **Infrastructure Layer:** Implements standard visual engines (VDP renderers), audio engines (PSG), and state serializers utilizing browser APIs (Canvas, Web Audio, IndexedDB).
+*   **Application Layer:** Orchestrates the runtime loop, clock cycles synchronization, frame pacing, and manages the execution flow between Domain and Infrastructure.
+*   **Presentation Layer:** Handles CSS responsivity, mobile touch gamepad HUD layout, settings drawer, and WebGL context display bounds.
 
 ---
 
-## 2. Hardware Component Interactions
+## 2. Core Engineering Highlights
 
-The Sega Master System relies on a central Zilog Z80 processor interacting with dedicated hardware chips over a shared 16-bit Address Bus and 8-bit Data Bus. Below is the technical structural schematic of EGGStation's system communication paths:
+### Contiguous Typed Array Memory Allocation
+To ensure temporal locality and maximize execution speeds inside the browser's engine (such as V8), EGGStation bypasses standard JavaScript arrays for performance-critical regions.
+*   The **8KB System Work RAM**, the **16KB VRAM**, and the **32-byte CRAM** are allocated as contiguous byte-buffers using `Uint8Array`.
+*   This approach prevents dynamic array resizing and memory fragmentation, lowering garbage collection overhead during hot-path render loops.
+
+### Decoupled Zilog Z80 Processor
+The Z80 CPU implementation separates execution control, state representation, and mathematical computations:
+*   **Z80Registers (`Z80Registers.js`):** Encapsulates primary, alternate (shadow), index, and special registers. Handles 16-bit virtual packing/unpacking natively.
+*   **Z80ALU (`Z80Alu.js`):** Contains pure, deterministic mathematical functions (ADC, SBC, shifts, rotations) and maintains pre-computed parity lookup tables.
+*   **Opcodes Division:** Opcodes are divided into distinct functional registries (`Z80Arithmetic`, `Z80Bitwise`, `Z80DataTransfer`, etc.), mapped dynamically to prevent large nested switch/case statements.
+
+### Zero-Allocation Hot Path & Hardware-Accelerated Audio
+The custom SN76489-compatible audio generator (`Sega315_5124_Psg.js`) has been optimized to play cleanly offline under local contexts:
+*   **Offline-Safe Audio Synthesizer:** Implemented via standard `ScriptProcessorNode` to guarantee full functionality under `file://` protocols, avoiding CORS restrictions associated with external worker files.
+*   **Web Audio DSP Graph:** Offloads heavy mathematical post-processing to the browser's native C++ backend:
+    *   **Arcade Warmth:** Hardware-accelerated Biquad Filter (Low-pass) cutting off frequencies above 3.5kHz.
+    *   **Haas Stereo:** Native `DelayNode` routing delayed audio (20-25ms) to a dedicated `StereoPannerNode` to generate a spacious stereophonic soundstage.
+    *   **Acoustic Atmos:** Synthesizes an impulse response (IR) modeling an analog wood arcade cabinet on the fly, feeding it into a native `ConvolverNode` for real-time room reflections.
+
+### GPU Shaders & Advanced Video Rendering
+Visual processing is split between CPU upscalers and GPU hardware acceleration:
+*   **CPU Scalers:** Custom zero-allocation software upscalers (`Scale2X`, `Scale4X`, `NTSC Bleed`, and half-toning scanlines) are processed cleanly into visual frames.
+*   **WebGL2 Shader Pipeline:** Compiles a native vertex/fragment shader layout mimicking a high-contrast CRT-Royale monitor:
+    *   Analog sub-pixel emulation (aperture grille phosphor triads).
+    *   CRT curvature barrel distortion.
+    *   Organic vignette edge clipping.
+    *   Horizontal color bleeding.
+
+### IndexedDB Binary State Serializer
+Standard emulators stringify memory states into JSON to save them inside `localStorage`, which crashes under the 5MB browser quota limit.
+*   EGGStation uses **IndexedDB** (`WebIndexedDBSerializer.js`) to handle state storage.
+*   By leveraging the native **Structured Clone Algorithm**, binary typed arrays (`vRam`, `colorRam`, `systemWorkRam`, and `cartridgeRam`) are saved as contiguous byte blobs directly, ensuring fast and robust state saving with practically unlimited capacity.
+
+---
+
+## 3. Responsive UX Architecture
+
+The presentation layer (`css/main.css`) implements a responsive layout optimized for varied screen form factors and input types:
+
+| Layout State | Trigger Conditions | Video Presentation | Input Mapping | Menu Accessibility |
+| :--- | :--- | :--- | :--- | :--- |
+| **Desktop** | Viewport width > 900px | Centered CRT Canvas with glowing border | Keyboard / Physical USB Gamepad | Floating Glassmorphism settings panel |
+| **Mobile Portrait** | Width <= 900px, Portrait | Top-aligned pixel-scaled Canvas | Virtual on-screen D-Pad and Action Buttons (designed for thumbs) | Collapsible Settings Drawer via overlay button |
+| **Mobile Landscape** | Max height <= 500px, Landscape | Immersive 100% full-screen Canvas | Translucent overlaid D-Pad and Buttons in corners | Auto-hidden settings panel for distraction-free play |
+
+---
+
+## 4. Hardware Component Communication
+
+The system mirrors the physical Sega Master System bus layout, orchestrating read/write signals (/MREQ and /IORQ) between subsystems:
 
 ```mermaid
 graph TB
@@ -66,93 +113,75 @@ graph TB
         BUS <-->|/IORQ: 0xC0 - 0xFF| IO[Sega 315-5297 Controller Chip]
     end
 
-    style CPU fill:#29292e,stroke:#3e3e46,stroke-width:2px,color:#fff
+    style CPU fill:#2d2d30,stroke:#3e3e42,stroke-width:2px,color:#fff
     style BUS fill:#7f00ff,stroke:#5a00b3,stroke-width:2px,color:#fff
-    style VDP fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
-    style PSG fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
-    style IO fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
-    style MAPPER fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style VDP fill:#1f1f23,stroke:#2d2d30,stroke-width:2px,color:#fff
+    style PSG fill:#1f1f23,stroke:#2d2d30,stroke-width:2px,color:#fff
+    style IO fill:#1f1f23,stroke:#2d2d30,stroke-width:2px,color:#fff
+    style MAPPER fill:#1f1f23,stroke:#2d2d30,stroke-width:2px,color:#fff
 ```
 
 ---
 
-## 3. Zilog Z80 Processor Decoupling
+## 5. Input Configuration & Controls
 
-Following the **Single Responsibility Principle (SRP)**, the emulation of the Zilog Z80 processor has been completely decoupled. The processor logic does not mutate memory directly, nor does it embed flag-setting mathematical routines inside instruction cycles.
+EGGStation supports three simultaneous input methods. Keyboard mappings and standard physical USB controllers map directly onto Player 1.
 
-```mermaid
-graph LR
-    subgraph Zilog Z80 CPU Execution Unit
-        Z80[Z80 CPU Core Orchestrator] <-->|1. Fetch Instruction| BUS[Sega Master System Bus]
-        Z80 <-->|2. Mutate States| REG[Z80 Registers State Entity]
-        Z80 <-->|3. Compute Math & Flags| ALU[Z80 Arithmetic Logic Unit]
-        Z80 --->|4. Execute Functional Opcode| INST[Instruction Registries]
-    end
+### Primary Input Mappings
+*   **Arrow Keys** / **D-Pad / Left Analog Stick:** D-PAD Directions
+*   **Key Z** / **Controller Button 0 (A/Cross):** Gamepad Button 1 (TL Line)
+*   **Key X** / **Controller Button 1 (B/Circle):** Gamepad Button 2 (TR Line)
+*   **Key P:** Pause Emulator Loop (Toggle)
+*   **Key O** / **Controller Button 9 (Start):** Physical Console Pause Button (NMI)
+*   **Key `\` (Hold):** Fast-Forward Mode
+*   **F2:** Save State (IndexedDB)
+*   **F3:** Load State (IndexedDB)
 
-    style Z80 fill:#29292e,stroke:#3e3e46,stroke-width:2px,color:#fff
-    style REG fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
-    style ALU fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
-    style INST fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+---
+
+## 6. Directory Structure
+
+```
+EGGStation/
+├── index.html                       # Entry-point file (Open directly in browser)
+├── css/
+│   └── main.css                     # Responsive Layout & Presentation CSS
+├── js/
+│   ├── app.js                       # Composition Root (Bootstrap)
+│   ├── application/
+│   │   └── EmulatorOrchestrator.js  # Main Execution & Sync Loop
+│   ├── domain/
+│   │   ├── bus/
+│   │   │   └── SegaMasterSystemBus.js
+│   │   ├── cartridge/
+│   │   │   ├── SegaMasterSystemCartridge.js
+│   │   │   └── mappers/             # Sega, Codemasters, Korean Strategies
+│   │   ├── controller/
+│   │   │   └── Sega315_5297.js
+│   │   └── cpu/
+│   │       ├── Z80Registers.js
+│   │       ├── Z80Alu.js
+│   │       ├── ZilogZ80.js          # Core CPU Orchestration
+│   │       ├── Z80Disassembler.js
+│   │       └── instructions/        # Decoupled Z80 instruction files
+│   └── infrastructure/
+│       ├── audio/
+│       │   └── Sega315_5124_Psg.js  # Web Audio Engine & DSP Graph
+│       ├── video/
+│       │   ├── Sega315_5124_Vdp.js  # Main VDP Engine
+│       │   ├── VdpPostProcessor.js  # CPU Scalers & WebGL2 CRT Shader
+│       │   ├── VdpMode2Renderer.js
+│       │   ├── VdpMode4Renderer.js
+│       │   └── VdpSpriteManager.js
+│       └── storage/
+│           └── WebLocalStorageSerializer.js # IndexedDB States Serializer
 ```
 
-*   **Z80 Registers Entity (`Z80Registers.js`):** Encapsulates primary, alternate (shadow), index registers, program counters, and interrupt enable flip-flops (IFF1/IFF2). Exposes clean 16-bit virtual pairs (BC, DE, HL, AF, IX, IY) using getters and setters.
-*   **Z80 ALU (`Z80Alu.js`):** Contains pure mathematical functions (ADC, SBC, ADD, SUB, shifts, rotations, and BCD decimal adjustments). Resolves and calculates CPU flags deterministically, including pre-computing parity lookup tables.
-*   **Instruction Registries:** Decoupled functional arrays mapping standard, extended (ED), bitwise (CB), and indexed (DD, FD, DDCB, FDCB) execution routines into specific static registries to avoid bloated conditional blocks.
-
 ---
 
-## 4. Key Design Patterns and Implementations
-
-### Strategy and Factory Patterns (Cartridge Paging)
-Sega Master System cartridges frequently utilized custom mapper chips on their PCBs to expand memory configurations beyond the standard 64KB addressing space of the Z80. EGGStation handles this via a dynamic **Strategy Pattern** decided by a **Factory Pattern** at startup:
-
-*   **SegaMapper:** Standard SEGA paging, protecting the first 1KB of address space (to preserve Z80 vector jump tables) and routing Cartridge battery-backed Save RAM inside slot 2.
-*   **CodemastersMapper:** Intercepts write cycles on offsets `0x0000`, `0x4000`, and `0x8000` to page banks, without protecting vector memory.
-*   **KoreanMapper:** Locks banks 0 and 1, only allowing Slot 2 swaps via write captures on `0xA000`.
-*   **SegaMasterSystemMapperFactory:** Dynamically parses unique ROM checksums and file sizes to select and load the corresponding mapper subclass strategy.
-
-### Zero-Allocation Hot Path (Audio Synthesis Optimization)
-To ensure smooth, pop-free audio processing under standard browser execution conditions, the audio engine (`Sega315_5124_Psg.js`) has been optimized using a **Zero-Allocation Hot Path**:
-*   All temporal variables, loop indexes, phase registers, and calculations are pre-allocated inside the constructor.
-*   By avoiding the use of inline declarations (`let`, `const`, `{}`) inside the script processor audio threads (`mixFunction` and `mixVoices`), we eliminate runtime Garbage Collection (GC) thrashing.
-*   The ScriptProcessor is configured with an expanded **2048-sample safety buffer** to absorb frame-rate jitter and standard browser thread delays without causing audio drop-outs.
-
-### Responsive Viewport & Touch Virtual Gamepad
-EGGStation supports responsive playing across desktop PCs, laptops, tablets, and mobile devices:
-*   **Fluid Scaling:** The HTML5 Canvas uses modern CSS properties (`aspect-ratio: 256 / 240` and `image-rendering: pixelated`) to scale smoothly to fill any container size while retaining crisp, pixel-perfect rendering.
-*   **Virtual Gamepad:** When opened on touchscreen devices, a virtual DB-9 Controller overlay is automatically activated.
-*   **Touch Locking:** The presentation layer controller (`UIController.js`) maps multi-touch coordinates and stops default OS gestures via `preventDefault()` to prevent zooming or page shifting during active gameplay.
-
-### High-Precision Timing Loop
-To prevent timing drift and frame-rate stutter caused by standard non-deterministic browser events (`setTimeout`), EGGStation implements a **Delta-Time Accumulator** driven by the Web API's high-resolution clock (`performance.now()`) and synchronized with the browser's display refresh rate (`requestAnimationFrame`):
-
-```javascript
-let deltaTime = currentTime - lastTime;
-accumulatedTime += deltaTime;
-
-while (accumulatedTime >= targetFrameTime) {
-    executeFrame(targetFps); // Simulate target CPU cycles per frame
-    accumulatedTime -= targetFrameTime;
-}
-```
-This isolates the speed of the emulator from the browser's actual display refresh rate (Hz), meaning the software runs at a stable, uniform speed whether rendered on a standard 60Hz, 120Hz, or 144Hz monitor.
-
----
-
-## 5. Development and Diagnostics
-
-EGGStation includes a standardized diagnostics suite to run cycle-accurate verification tests. It feeds mock execution data, initial registers, and memories from JSON test files into the specialized `Z80DiagnosticMemory` layer and matches resulting register states post-execution.
-
-To run diagnostic test suites:
-1. Open the application in development mode with the diagnostic panel visible.
-2. Select any prefix test suite button (Standard, CB, ED, DD, FD, etc.) at the bottom of the interface.
-3. Inspect results inside the browser's web inspector console.
-
----
-
-## 6. License and Authorship
+## 7. License and Authorship
 
 *   **Project Name:** EGGStation SMS Emulator
 *   **Author:** Enrique González Gutiérrez
-*   **Technology Stack:** Vanilla JavaScript (ES6+), HTML5 Canvas, Web Audio API, Web LocalStorage API.
+*   **Technology Stack:** Vanilla JavaScript (ES6+), WebGL2, Web Audio API, IndexedDB.
 *   **License:** Distributed under the terms of the MIT License. See [LICENSE](LICENSE) for details.

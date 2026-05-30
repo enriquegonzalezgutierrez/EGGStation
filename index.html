@@ -1,178 +1,189 @@
-<!doctype html>
-<!-- 
- * Project: EGGStation - Sega Master System Emulator
- * Author: Enrique González Gutiérrez
- * 
- * Presentation Layer: HTML Entry Point (With corrected layout classes)
- * 
- * Sets up the DOM structure, visual elements, and imports the architectural 
- * layers. Dual canvases (2D/WebGL) use unified layout visibility selectors.
--->
+<!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <!-- Prevent zooming on mobile devices to ensure Virtual Gamepad works perfectly -->
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-        <meta name="description" content="EGGStation - Clean Architecture Sega Master System Emulator">
-        <meta name="keywords" content="Sega Master System emulator, EGGStation, emulation, SEGA, retro games, clean code, DDD">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EGGStation | Sega Master System Emulator</title>
+    
+    <!-- Meta tags for native App feel -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#09090e">
+    
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
 
-        <link rel="icon" type="image/png" href="img/favicon.ico"/>
-        <title>EGGStation - Sega Master System Emulator</title>
-
-        <!-- Presentation Layer: CSS Stylesheet -->
-        <link rel="stylesheet" href="css/main.css"/>
+    <!-- Main App Container -->
+    <div id="app-container">
         
-        <!-- ========================================================== -->
-        <!-- INFRASTRUCTURE LAYER: HARDWARE BINDINGS & SUB-SERVICES     -->
-        <!-- ========================================================== -->
-        
-        <!-- Audio Controller (Consolidated for Strategy B) -->
-        <script src="js/infrastructure/audio/Sega315_5124_Psg.js"></script>
-        
-        <!-- Video Renderers, Post-processors, and VDP Controller -->
-        <script src="js/infrastructure/video/VdpMode4Renderer.js"></script>
-        <script src="js/infrastructure/video/VdpMode2Renderer.js"></script>
-        <script src="js/infrastructure/video/VdpSpriteManager.js"></script>
-        <script src="js/infrastructure/video/VdpPostProcessor.js"></script>
-        <script src="js/infrastructure/video/Sega315_5124_Vdp.js"></script>
-        
-        <!-- Storage Serializer -->
-        <script src="js/infrastructure/storage/WebLocalStorageSerializer.js"></script>
-
-        <!-- ========================================================== -->
-        <!-- DOMAIN LAYER                                               -->
-        <!-- ========================================================== -->
-        
-        <!-- Cartridge Entity & Paging Strategies -->
-        <script src="js/domain/cartridge/SegaMasterSystemCartridge.js"></script>
-        <script src="js/domain/cartridge/mappers/BaseMapper.js"></script>
-        <script src="js/domain/cartridge/mappers/SegaMapper.js"></script>
-        <script src="js/domain/cartridge/mappers/CodemastersMapper.js"></script>
-        <script src="js/domain/cartridge/mappers/KoreanMapper.js"></script>
-        <script src="js/domain/cartridge/mappers/SegaMasterSystemMapperFactory.js"></script>
-        
-        <!-- Controller I/O Chip -->
-        <script src="js/domain/controller/Sega315_5297.js"></script>
-        
-        <!-- System Memory & I/O Bus -->
-        <script src="js/domain/bus/SegaMasterSystemBus.js"></script>
-        
-        <!-- Z80 CPU Disassembler, Registers, ALU, and Core Orchestrator -->
-        <script src="js/domain/cpu/Z80Disassembler.js"></script>
-        <script src="js/domain/cpu/Z80Registers.js"></script>
-        <script src="js/domain/cpu/Z80Alu.js"></script>
-        <script src="js/domain/cpu/instructions/Z80DataTransfer.js"></script>
-        <script src="js/domain/cpu/instructions/Z80Arithmetic.js"></script>
-        <script src="js/domain/cpu/instructions/Z80Bitwise.js"></script>
-        <script src="js/domain/cpu/instructions/Z80ShiftRotate.js"></script>
-        <script src="js/domain/cpu/instructions/Z80ProgramFlow.js"></script>
-        <script src="js/domain/cpu/instructions/Z80BlockOps.js"></script>
-        <script src="js/domain/cpu/instructions/Z80SystemIO.js"></script>
-        <script src="js/domain/cpu/ZilogZ80.js"></script>
-
-        <!-- ========================================================== -->
-        <!-- APPLICATION & PRESENTATION LAYERS                          -->
-        <!-- ========================================================== -->
-        <script src="js/application/EmulatorOrchestrator.js"></script>
-        <script src="js/presentation/UIController.js"></script>
-        <script src="js/app.js"></script>
-    </head>
-
-    <body>
-        <!-- Header & Info Area -->
-        <header id="titleDiv" class="glass-panel">
+        <!-- Header -->
+        <header id="top-bar">
             <div class="brand">
-                <span class="logo-text">EGGStation</span>
-                <span class="fps-counter"><span id="fpsSpan">-- FPS</span></span>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="url(#grad1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <defs>
+                        <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" style="stop-color:#ff007f;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#7f00ff;stop-opacity:1" />
+                        </linearGradient>
+                    </defs>
+                    <rect x="2" y="6" width="20" height="12" rx="2" ry="2"></rect>
+                    <path d="M6 12h4m-2-2v4m8-4a1 1 0 100 2 1 1 0 000-2zm-2 2a1 1 0 100 2 1 1 0 000-2z"></path>
+                </svg>
+                <h1>EGG<span>Station</span></h1>
             </div>
             
-            <div class="header-controls">
-                <a class="tooltip icon-btn" href="#" onclick="return false;">
-                    📷
-                    <span><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" id="savestateImg" alt="Snapshot slot preview" /></span>
-                </a>
-                <a class="tooltip icon-btn" href="#" onclick="return false;">
-                    ℹ️
-                    <span class="help-tooltip">
-                        <strong>Keyboard Controls:</strong><br>
-                        - Z / X : Button 1 / Button 2<br>
-                        - Arrow Keys : D-Pad<br>
-                        - \ : Fast Forward<br>
-                        - P : Pause Emulator<br>
-                        - O : Physical SMS PAUSE<br>
-                        - F2 / F3 : Save / Load State
-                    </span>
-                </a>
+            <div class="system-stats">
+                <span id="fpsSpan">60.0 FPS</span>
+                <!-- Mobile Menu Toggle -->
+                <button id="mobile-menu-btn" class="icon-btn mobile-only">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
             </div>
         </header>
 
-        <main>
-            <!-- Visualizer CRT Frame (Dual Canvas: BOTH start with clean layout classes for seamless transitions) -->
-            <div id="emulator-container">
-                <canvas width="256" height="240" id="smsdisplay"></canvas>
-                <canvas width="512" height="480" id="webgldisplay"></canvas> <!-- FIXED: Started with invisible-layout class -->
+        <!-- Core Emulation Stage -->
+        <main id="stage">
+            
+            <!-- Video Output Wrapper -->
+            <div id="crt-wrapper">
+                <canvas id="smsdisplay"></canvas>
+                <canvas id="webgldisplay" class="hidden"></canvas>
+                <div class="crt-scanline-overlay"></div>
             </div>
 
-            <!-- Virtual Gamepad (Visible ONLY on Mobile/Touch devices) -->
-            <div id="virtual-gamepad" class="mobile-only">
+            <!-- Virtual Gamepad (Hidden on Desktop) -->
+            <div id="virtual-gamepad">
                 <div class="d-pad">
-                    <div class="d-row"><button id="v-up" class="v-btn">▲</button></div>
-                    <div class="d-row center">
-                        <button id="v-left" class="v-btn">◀</button>
-                        <div class="d-center"></div>
-                        <button id="v-right" class="v-btn">▶</button>
-                    </div>
-                    <div class="d-row"><button id="v-down" class="v-btn">▼</button></div>
+                    <button class="v-dir" id="v-up"></button>
+                    <button class="v-dir" id="v-left"></button>
+                    <div class="v-center"></div>
+                    <button class="v-dir" id="v-right"></button>
+                    <button class="v-dir" id="v-down"></button>
                 </div>
+                
+                <div class="center-controls">
+                    <button id="v-pause" class="v-system-btn">START</button>
+                </div>
+
                 <div class="action-buttons">
-                    <button id="v-pause" class="v-btn small-btn">PAUSE</button>
-                    <button id="v-btn1" class="v-btn round-btn">1</button>
-                    <button id="v-btn2" class="v-btn round-btn">2</button>
+                    <button class="v-action" id="v-btn1">1</button>
+                    <button class="v-action" id="v-btn2">2</button>
                 </div>
             </div>
 
-            <!-- Interactive Control Panel -->
-            <div class="control-panel glass-panel" id="settings-panel">
-                <div class="control-group" id="fileselector">
-                    <label for="romLoaderBtn">Console Slot</label>
-                    <button id="romLoaderBtn" class="primary-btn">Load ROM Cartridge</button>
-                    <input type="file" id="cartridgeSelector" class="hidden" accept=".sms,.sg">
-                </div>
-
-                <div class="control-group">
-                    <label for="vdpModeSelector">TV Standard</label>
-                    <select id="vdpModeSelector">
-                        <option value="NTSC">NTSC (60Hz)</option>
-                        <option value="PAL">PAL (50Hz)</option>
-                    </select>
-                </div>
-
-                <!-- Post-Processing Visual Filters Selection -->
-                <div class="control-group">
-                    <label for="postProcessSelector">Visual Filter</label>
-                    <select id="postProcessSelector">
-                        <option value="0">Retro Sharp (Nearest)</option>
-                        <option value="1">Analog Soft (Bilinear)</option>
-                        <option value="2">Scale2X HD (Smart Smoothing)</option>
-                        <option value="3">CRT Scanlines (Sony Trinitron)</option>
-                        <option value="4">Scale4X Cartoon HD (Vector Smooth)</option>
-                        <option value="5">NTSC Signal Bleed (Composite TV)</option>
-                        <option value="6">2026 CRT-Royale (GPU Shaders)</option>
-                        <option value="6">2026 Modern HD (Vector Smooth)</option>
-                    </select>
-                </div>
-
-                <!-- Audio DSP Soundstage Selection -->
-                <div class="control-group">
-                    <label for="audioFilterSelector">Audio Soundstage</label>
-                    <select id="audioFilterSelector">
-                        <option value="0">Original Mono (Chippy Dry)</option>
-                        <option value="1">Arcade Warmth (Low-Pass Filter)</option>
-                        <option value="2">Lush 3D Stereo (Haas Spatial Delay)</option>
-                        <option value="3">2026 Spatial Atmos (Cinema Surround)</option>
-                    </select>
-                </div>
-            </div>
         </main>
-    </body>
+
+        <!-- Sidebar / Settings Drawer -->
+        <aside id="settings-panel" class="glass-panel">
+            <div class="panel-section">
+                <h3>System Bridge</h3>
+                <input type="file" id="cartridgeSelector" accept=".sms,.sg" style="display:none;">
+                <button id="romLoaderBtn" class="btn primary-btn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    Insert Cartridge
+                </button>
+            </div>
+
+            <div class="panel-section">
+                <h3>Hardware Config</h3>
+                
+                <div class="control-group">
+                    <label>Signal Standard</label>
+                    <select id="vdpModeSelector">
+                        <option value="NTSC">NTSC (60 Hz)</option>
+                        <option value="PAL">PAL (50 Hz)</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>Video Synthesizer</label>
+                    <select id="postProcessSelector">
+                        <option value="0">Raw Pixel (Sharp)</option>
+                        <option value="1">Bilinear (Soft)</option>
+                        <option value="2">Scale2X CPU</option>
+                        <option value="3">Scanlines 50% CPU</option>
+                        <option value="4">Scale4X HD CPU</option>
+                        <option value="5">NTSC Bleed CPU</option>
+                        <option value="6">CRT-Royale Extreme GPU</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>Audio DSP</label>
+                    <select id="audioFilterSelector">
+                        <option value="0">Line-Out (Dry Mono)</option>
+                        <option value="1">Arcade Cabinet (Warm LP)</option>
+                        <option value="2">Lush 3D (Haas Stereo)</option>
+                        <option value="3">Spatial Atmos (Convolution)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>Save State</h3>
+                <div class="savestate-preview">
+                    <img id="savestateImg" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Empty Slot">
+                </div>
+                <div class="savestate-actions">
+                    <button id="btnSaveState" class="btn outline-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown', {'key': 'F2'}))">SAVE (F2)</button>
+                    <button id="btnLoadState" class="btn outline-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown', {'key': 'F3'}))">LOAD (F3)</button>
+                </div>
+            </div>
+            
+            <div class="panel-footer">
+                <p>EGGStation Virtual Console <br>MIT License 2026</p>
+            </div>
+        </aside>
+
+        <!-- Overlay for Mobile Menu -->
+        <div id="mobile-overlay" class="hidden"></div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/domain/cpu/Z80Registers.js"></script>
+    <script src="js/domain/cpu/Z80Alu.js"></script>
+    <script src="js/domain/cpu/instructions/Z80Arithmetic.js"></script>
+    <script src="js/domain/cpu/instructions/Z80Bitwise.js"></script>
+    <script src="js/domain/cpu/instructions/Z80BlockOps.js"></script>
+    <script src="js/domain/cpu/instructions/Z80DataTransfer.js"></script>
+    <script src="js/domain/cpu/instructions/Z80ProgramFlow.js"></script>
+    <script src="js/domain/cpu/instructions/Z80ShiftRotate.js"></script>
+    <script src="js/domain/cpu/instructions/Z80SystemIO.js"></script>
+    <script src="js/domain/cpu/ZilogZ80.js"></script>
+    
+    <script src="js/domain/cartridge/mappers/BaseMapper.js"></script>
+    <script src="js/domain/cartridge/mappers/SegaMapper.js"></script>
+    <script src="js/domain/cartridge/mappers/CodemastersMapper.js"></script>
+    <script src="js/domain/cartridge/mappers/KoreanMapper.js"></script>
+    <script src="js/domain/cartridge/mappers/SegaMasterSystemMapperFactory.js"></script>
+    <script src="js/domain/cartridge/SegaMasterSystemCartridge.js"></script>
+    
+    <script src="js/domain/controller/Sega315_5297.js"></script>
+    <script src="js/domain/bus/SegaMasterSystemBus.js"></script>
+    
+    <script src="js/infrastructure/video/VdpMode2Renderer.js"></script>
+    <script src="js/infrastructure/video/VdpMode4Renderer.js"></script>
+    <script src="js/infrastructure/video/VdpSpriteManager.js"></script>
+    <script src="js/infrastructure/video/VdpPostProcessor.js"></script>
+    <script src="js/infrastructure/video/Sega315_5124_Vdp.js"></script>
+    <script src="js/infrastructure/audio/Sega315_5124_Psg.js"></script>
+    <script src="js/infrastructure/storage/WebLocalStorageSerializer.js"></script>
+    
+    <script src="js/application/EmulatorOrchestrator.js"></script>
+    <script src="js/presentation/UIController.js"></script>
+    <script src="js/app.js"></script>
+
+    <!-- UI Interaction Logic for Mobile Drawer -->
+    <script>
+        document.getElementById('mobile-menu-btn').addEventListener('click', () => {
+            document.getElementById('settings-panel').classList.toggle('active');
+            document.getElementById('mobile-overlay').classList.toggle('hidden');
+        });
+        document.getElementById('mobile-overlay').addEventListener('click', () => {
+            document.getElementById('settings-panel').classList.remove('active');
+            document.getElementById('mobile-overlay').classList.add('hidden');
+        });
+    </script>
+</body>
 </html>

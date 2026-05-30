@@ -7,6 +7,8 @@
  * Emulates the central control bus, ports, registers, and timing synchronizations.
  * Render passes, sprites, and post-processors are delegated to specialized subservices.
  * Injects the WebGL2 Rendering Context and applies native analog DAC resistor palettes (SRP).
+ * 
+ * OPTIMIZED: Utilizes Typed Arrays (Uint8Array) for deterministic memory allocation.
  */
 
 class Sega315_5124_Vdp {
@@ -32,11 +34,11 @@ class Sega315_5124_Vdp {
      * @param {WebGL2RenderingContext} glContext - Injected GPU context.
      */
     constructor(vdpMode, glContext) {
-        // 16KB of Video RAM (VRAM)
-        this.vRam = new Array(0x4000).fill(0);
+        // OPTIMIZATION: 16KB of Video RAM (VRAM) allocated as a contiguous binary buffer
+        this.vRam = new Uint8Array(0x4000);
 
-        // 32 Bytes of write-only Color RAM (CRAM)
-        this.colorRam = new Array(0x20).fill(0);
+        // OPTIMIZATION: 32 Bytes of write-only Color RAM (CRAM)
+        this.colorRam = new Uint8Array(0x20);
 
         // Standard timing configurations resolved via static class namespace
         this.vdpStd = (vdpMode === 0) ? Sega315_5124_Vdp.Standard.vdpNTSC : Sega315_5124_Vdp.Standard.vdpPAL;
@@ -92,7 +94,7 @@ class Sega315_5124_Vdp {
         // SEGA NATIVE HARDWARE RESISTOR DAC PALETTE (6-Bit Color Scale)
         // Replaces flat linear scaling with official analog voltage measurements.
         // ========================================================================
-        this.analogColorScale = [0, 80, 175, 255];
+        this.analogColorScale = new Uint8Array([0, 80, 175, 255]);
 
         // Core Image buffers
         this.glbFrameBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY * 4);
@@ -102,7 +104,7 @@ class Sega315_5124_Vdp {
         this.cleanSpriteBuffer();
 
         // Standard SG-1000 Fallback Palette
-        this.sg1000palette = [
+        this.sg1000palette = new Uint8Array([
             0,0,0, 
             0,0,0, 
             33,200,66, 
@@ -119,18 +121,14 @@ class Sega315_5124_Vdp {
             201,91,186, 
             204,204,204, 
             255,255,255
-        ];
+        ]);
 
         // SRP: Image upscaling and filters are delegated to the post-processor service
         this.postProcessor = new VdpPostProcessor(this, glContext);
     }
 
     cleanSpriteBuffer() {
-        for (let y = 0; y < this.glbResolutionY; y++) {
-            for (let x = 0; x < this.glbResolutionX; x++) {
-                this.spriteBuffer[x + (y * this.glbResolutionX)] = 0;
-            }
-        }
+        this.spriteBuffer.fill(0);
     }
 
     writeByteToRegister(registerIndex, dataByte) {
@@ -289,7 +287,7 @@ class Sega315_5124_Vdp {
                 const cramIdx = byte0 | (byte1 << 1) | (byte2 << 2) | (byte3 << 3);
                 const curbyte = this.colorRam[cramIdx + (pal * 16)];
 
-                // Decodificado usando la red de resistencias analógicas reales
+                // Decoded using the real analog resistor network
                 const red = this.analogColorScale[curbyte & 0x03];
                 const green = this.analogColorScale[(curbyte & 0x0c) >> 2];
                 const blue = this.analogColorScale[(curbyte & 0x30) >> 4];
@@ -329,7 +327,7 @@ class Sega315_5124_Vdp {
             const cramIdx = (byte0 | (byte1 << 1) | (byte2 << 2) | (byte3 << 3)) & 0x0f;
             const curbyte = this.colorRam[cramIdx + (pal * 16)];
             
-            // Decodificado usando la red de resistencias analógicas reales
+            // Decoded using the real analog resistor network
             const red = this.analogColorScale[curbyte & 0x03];
             const green = this.analogColorScale[(curbyte & 0x0c) >> 2];
             const blue = this.analogColorScale[(curbyte & 0x30) >> 4];
@@ -338,10 +336,11 @@ class Sega315_5124_Vdp {
             const ytile = y;
 
             if ((xtile >= 0) && (xtile < 256) && (ytile >= 0) && (ytile < this.yScreenLines)) {
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 0] = red;
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 1] = green;
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 2] = blue;
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 3] = 255;
+                const bufferIndex = (x + xt + (y * this.glbResolutionX)) * 4;
+                this.glbFrameBuffer[bufferIndex + 0] = red;
+                this.glbFrameBuffer[bufferIndex + 1] = green;
+                this.glbFrameBuffer[bufferIndex + 2] = blue;
+                this.glbFrameBuffer[bufferIndex + 3] = 255;
 
                 if (cramIdx !== 0) {
                     this.priBuffer[(x + xt + (y * this.glbResolutionX))] = priFlag;
@@ -371,7 +370,7 @@ class Sega315_5124_Vdp {
             const curbyte = this.colorRam[cramIdx + 16];
 
             if (cramIdx !== 0) {
-                // Decodificado usando la red de resistencias analógicas reales
+                // Decoded using the real analog resistor network
                 const red = this.analogColorScale[curbyte & 0x03];
                 const green = this.analogColorScale[(curbyte & 0x0c) >> 2];
                 const blue = this.analogColorScale[(curbyte & 0x30) >> 4];
@@ -380,18 +379,21 @@ class Sega315_5124_Vdp {
                 const cy = scanlineNum;
 
                 if ((cx >= 0) && (cx < this.glbResolutionX) && (cy >= 0) && (cy < this.yScreenLines)) {
-                    if (this.spriteBuffer[(spriteX + xt + (cy * this.glbResolutionX))] === 0) {
-                        this.spriteBuffer[(spriteX + xt + (cy * this.glbResolutionX))] = 1;
+                    const linearIndex = spriteX + xt + (cy * this.glbResolutionX);
+                    
+                    if (this.spriteBuffer[linearIndex] === 0) {
+                        this.spriteBuffer[linearIndex] = 1;
                     } else {
                         // Flag collision state (bit 5 of status register)
                         this.statusFlags |= 0x20;
                     }
 
-                    if (this.priBuffer[(spriteX + xt + (cy * this.glbResolutionX))] === 0) {
-                        this.glbFrameBuffer[(spriteX + xt + (cy * this.glbResolutionX)) * 4 + 0] = red;
-                        this.glbFrameBuffer[(spriteX + xt + (cy * this.glbResolutionX)) * 4 + 1] = green;
-                        this.glbFrameBuffer[(spriteX + xt + (cy * this.glbResolutionX)) * 4 + 2] = blue;
-                        this.glbFrameBuffer[(spriteX + xt + (cy * this.glbResolutionX)) * 4 + 3] = 255;
+                    if (this.priBuffer[linearIndex] === 0) {
+                        const bufferIndex = linearIndex * 4;
+                        this.glbFrameBuffer[bufferIndex + 0] = red;
+                        this.glbFrameBuffer[bufferIndex + 1] = green;
+                        this.glbFrameBuffer[bufferIndex + 2] = blue;
+                        this.glbFrameBuffer[bufferIndex + 3] = 255;
                     }
                 }
             }
@@ -546,17 +548,18 @@ class Sega315_5124_Vdp {
 
         for (let xt = 0; xt < 8; xt++) {
             const b = ((curbyte >> (7 - xt)) & 0x01);
+            const bufferIndex = (x + xt + (y * this.glbResolutionX)) * 4;
 
             if (b !== 0) {
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 0] = this.sg1000palette[fg_color * 3];
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 1] = this.sg1000palette[fg_color * 3 + 1];
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 2] = this.sg1000palette[fg_color * 3 + 2];
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 3] = 255;
+                this.glbFrameBuffer[bufferIndex + 0] = this.sg1000palette[fg_color * 3];
+                this.glbFrameBuffer[bufferIndex + 1] = this.sg1000palette[fg_color * 3 + 1];
+                this.glbFrameBuffer[bufferIndex + 2] = this.sg1000palette[fg_color * 3 + 2];
+                this.glbFrameBuffer[bufferIndex + 3] = 255;
             } else {
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 0] = this.sg1000palette[bg_color * 3];
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 1] = this.sg1000palette[bg_color * 3 + 1];
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 2] = this.sg1000palette[bg_color * 3 + 2];
-                this.glbFrameBuffer[(x + xt + (y * this.glbResolutionX)) * 4 + 3] = 255;
+                this.glbFrameBuffer[bufferIndex + 0] = this.sg1000palette[bg_color * 3];
+                this.glbFrameBuffer[bufferIndex + 1] = this.sg1000palette[bg_color * 3 + 1];
+                this.glbFrameBuffer[bufferIndex + 2] = this.sg1000palette[bg_color * 3 + 2];
+                this.glbFrameBuffer[bufferIndex + 3] = 255;
             }
         }
     }    

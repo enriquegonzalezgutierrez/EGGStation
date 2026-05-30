@@ -2,373 +2,495 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: EGGStation Style Sheet (Optimized Fluid Responsive Layout)
+ * Presentation Layer: EGGStation Style Sheet (Responsive & Fluid UI)
  * 
- * Provides responsive presentation styling, fluid visualizer CRT framing, 
- * control board layouts, tooltip notifications, and cache-proof UI states.
+ * Defines a dark-mode Synthwave aesthetic. Features 3 responsive states:
+ * 1. Desktop (Canvas center, glass sidebar)
+ * 2. Mobile Portrait (Canvas top, D-PAD bottom, sidebar hidden in drawer)
+ * 3. Mobile Landscape (Canvas 100%, overlaid translucent D-PAD)
  */
 
 /* ==========================================================================
-   Design System Variables (Theme)
+   Design System Variables
    ========================================================================== */
 :root {
-    --bg-color: #0d0d12;
-    --panel-bg: rgba(29, 29, 34, 0.85);
-    --border-color: #3e3e46;
-    --text-color: #e1e1e6;
-    --text-muted: #a8a8b3;
-    --accent-pink: #ff007f;
-    --accent-purple: #7f00ff;
+    --bg-dark: #09090e;
+    --bg-surface: #15151e;
+    --glass-bg: rgba(21, 21, 30, 0.7);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --text-main: #f1f1f4;
+    --text-muted: #8e8e9f;
+    --neon-pink: #ff007f;
+    --neon-purple: #7f00ff;
     --success: #04d361;
 }
 
 /* ==========================================================================
-   General Reset & Base Styles
+   Base Reset
    ========================================================================== */
 * {
-    box-sizing: border-box;
     margin: 0;
     padding: 0;
-    -webkit-tap-highlight-color: transparent; /* Remove blue tap highlight on mobile */
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none; /* Prevent text selection during gameplay */
 }
 
 body {
-    background-color: var(--bg-color);
-    background-image: radial-gradient(circle at top, #1a1a24 0%, var(--bg-color) 80%);
-    color: var(--text-color);
+    background-color: var(--bg-dark);
+    color: var(--text-main);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    min-height: 100vh;
-    padding: 20px 10px;
-    overflow-x: hidden;
-}
-
-main {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 100%;
-    max-width: 800px;
-}
-
-/* Glassmorphism Panel Reusable Class */
-.glass-panel {
-    background: var(--panel-bg);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    overflow: hidden; /* App feels native, no scrolling */
+    width: 100vw;
+    height: 100vh;
 }
 
 /* ==========================================================================
-   Header & Info Area
+   App Layout (Desktop First)
    ========================================================================== */
-#titleDiv {
+#app-container {
+    display: grid;
+    grid-template-areas: 
+        "header header"
+        "stage sidebar";
+    grid-template-columns: 1fr 340px;
+    grid-template-rows: 60px 1fr;
+    height: 100%;
+    width: 100%;
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+/* ==========================================================================
+   Header
+   ========================================================================== */
+#top-bar {
+    grid-area: header;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 20px;
-    margin-bottom: 20px;
-    width: 100%;
-    max-width: 800px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--glass-border);
+    background: var(--bg-surface);
     z-index: 10;
 }
 
 .brand {
     display: flex;
-    align-items: baseline;
-    gap: 15px;
+    align-items: center;
+    gap: 12px;
 }
 
-.logo-text {
-    font-size: 1.6rem;
-    font-weight: 900;
-    letter-spacing: 1px;
-    background: linear-gradient(90deg, var(--accent-pink), var(--accent-purple));
+.brand h1 {
+    font-size: 1.4rem;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+}
+
+.brand span {
+    background: linear-gradient(90deg, var(--neon-pink), var(--neon-purple));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
-.fps-counter {
-    color: var(--text-muted);
-    font-size: 0.85rem;
-    font-weight: 600;
+.system-stats {
+    display: flex;
+    align-items: center;
+    gap: 20px;
 }
 
 #fpsSpan {
+    font-family: monospace;
     color: var(--success);
+    font-size: 0.9rem;
+    font-weight: 600;
+    background: rgba(4, 211, 97, 0.1);
+    padding: 4px 10px;
+    border-radius: 4px;
 }
 
-.header-controls {
+.icon-btn {
+    background: none;
+    border: none;
+    color: var(--text-main);
+    cursor: pointer;
     display: flex;
-    gap: 15px;
+    align-items: center;
+    justify-content: center;
 }
 
-/* Tooltips */
-a.tooltip {
+.mobile-only {
+    display: none;
+}
+
+/* ==========================================================================
+   Core Emulation Stage (Video Output)
+   ========================================================================== */
+#stage {
+    grid-area: stage;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 24px; /* Increased vertical breathing room */
     position: relative;
-    display: inline-flex;
-    text-decoration: none;
-    transition: opacity 0.2s;
-    font-size: 1.4rem;
+    height: 100%;
 }
 
-a.tooltip:hover { opacity: 0.8; }
-
-a.tooltip span {
-    visibility: hidden;
-    position: absolute;
-    top: 40px;
-    right: 0;
-    z-index: 100;
-    opacity: 0;
-    transition: opacity 0.2s, visibility 0.2s;
-}
-
-a.tooltip:hover span {
-    visibility: visible;
-    opacity: 1;
-}
-
-#savestateImg {
-    border: 3px solid var(--accent-purple);
-    border-radius: 8px;
-    width: 140px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.8);
-    background-color: #000;
-}
-
-.help-tooltip {
-    background: var(--panel-bg);
-    border: 1px solid var(--border-color);
-    padding: 15px;
-    border-radius: 8px;
-    width: max-content;
-    font-size: 0.85rem;
-    line-height: 1.6;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.8);
-    color: var(--text-color);
-}
-
-.help-tooltip strong { color: var(--accent-pink); }
-
-/* ==========================================================================
-   Visualizer Frame & CRT Canvas (Flawless Block Alignment)
-   ========================================================================== */
-#emulator-container {
+#crt-wrapper {
+    position: relative;
     width: 100%;
-    max-width: 768px; /* Standard 3x integer scale limit for desktop */
+    max-width: 960px; /* Highly optimized scaling anchor */
+    /* Prevents the viewport from overflowing the page height on smaller screens */
+    max-height: calc(100vh - 160px); 
+    aspect-ratio: 256 / 240; /* Absolute hardware ratio */
     background: #000;
-    border-radius: 12px;
-    padding: 10px;
-    /* Synthwave neon glow border */
-    border: 3px solid #1a1a24;
-    box-shadow: 0 0 15px rgba(127, 0, 255, 0.3), inset 0 0 20px rgba(0,0,0,1);
+    border-radius: 8px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--glass-border);
     overflow: hidden;
-    margin-bottom: 20px;
-    margin-left: auto;
-    margin-right: auto;
 }
 
-/* Enforce fluid scale alignment by width and let browser calculate aspect height */
-#smsdisplay, #webgldisplay {
-    display: block;
+canvas {
     width: 100%;
-    height: auto; /* Enforces native aspect scaling automatically */
+    height: 100%;
+    display: block;
+    object-fit: contain;
+}
+
+/* Hardware standard pixel rendering */
+#smsdisplay {
+    image-rendering: -moz-crisp-edges;
+    image-rendering: -webkit-crisp-edges;
     image-rendering: pixelated;
-    image-rendering: crisp-edges; 
-    margin: 0 auto;
+    image-rendering: crisp-edges;
+}
+
+.hidden {
+    display: none !important;
 }
 
 /* ==========================================================================
-   Interactive Control Board
+   Sidebar / Settings Panel (Glassmorphism)
    ========================================================================== */
-.control-panel {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    width: 100%;
-    padding: 20px;
+.glass-panel {
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-left: 1px solid var(--glass-border);
+}
+
+#settings-panel {
+    grid-area: sidebar;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    padding: 24px;
+    overflow-y: auto;
+    z-index: 50;
+}
+
+.panel-section h3 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
 }
 
 .control-group {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
+    margin-bottom: 16px;
 }
 
 .control-group label {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-muted);
+    font-size: 0.85rem;
+    color: var(--text-main);
 }
 
-button, select {
-    background-color: rgba(255, 255, 255, 0.05);
-    color: var(--text-color);
-    border: 1px solid var(--border-color);
-    padding: 12px 16px;
-    border-radius: 8px;
-    font-size: 0.95rem;
-    font-weight: 600;
+/* Inputs & Buttons */
+select, .btn {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: var(--text-main);
+    padding: 12px 14px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    outline: none;
     cursor: pointer;
     transition: all 0.2s ease;
-    outline: none;
-    appearance: none;
 }
 
-button:hover, select:hover {
-    background-color: rgba(255, 255, 255, 0.1);
-    border-color: var(--accent-purple);
+/* Fixes the "white text on white background" issue in system drop-down menus */
+select option {
+    background-color: var(--bg-surface) !important;
+    color: var(--text-main) !important;
 }
 
-button:active {
-    transform: scale(0.98);
+select:hover, .btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-weight: 600;
 }
 
 .primary-btn {
     background: linear-gradient(90deg, rgba(255,0,127,0.2), rgba(127,0,255,0.2));
-    border-color: var(--accent-purple);
+    border-color: var(--neon-purple);
 }
 
 .primary-btn:hover {
-    background: linear-gradient(90deg, rgba(255,0,127,0.4), rgba(127,0,255,0.4));
-    box-shadow: 0 0 15px rgba(127, 0, 255, 0.4);
+    background: linear-gradient(90deg, rgba(255,0,127,0.3), rgba(127,0,255,0.3));
+    box-shadow: 0 0 15px rgba(127, 0, 255, 0.2);
 }
 
-/* ==========================================================================
-   Virtual Gamepad (Mobile Only)
-   ========================================================================== */
-.mobile-only {
-    display: none; /* Hidden on Desktop */
-}
-
-#virtual-gamepad {
-    width: 100%;
-    justify-content: space-between;
-    align-items: flex-end;
-    padding: 10px;
-    margin-top: 10px;
-    margin-bottom: 20px;
-    user-select: none; /* Prevents text selection while tapping */
-}
-
-/* D-Pad Layout */
-.d-pad {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 5px;
-}
-
-.d-row {
-    display: flex;
-    gap: 5px;
-}
-
-.d-center {
-    width: 50px;
-    height: 50px;
-    background: rgba(255, 255, 255, 0.05);
-}
-
-/* Action Buttons Layout */
-.action-buttons {
-    display: flex;
-    align-items: flex-end;
-    gap: 15px;
-    position: relative;
-}
-
-/* Virtual Buttons Style */
-.v-btn {
-    background: rgba(255, 255, 255, 0.1);
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    color: rgba(255, 255, 255, 0.6);
-    backdrop-filter: blur(5px);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-size: 1.5rem;
-    padding: 0;
-    width: 50px;
-    height: 50px;
-    border-radius: 12px;
-}
-
-.v-btn:active {
-    background: rgba(127, 0, 255, 0.5);
-    border-color: var(--accent-pink);
-    color: #fff;
-    transform: scale(0.9);
-}
-
-.round-btn {
-    width: 65px;
-    height: 65px;
-    border-radius: 50%;
-    font-size: 1.8rem;
-    font-weight: bold;
-}
-
-.small-btn {
-    width: 70px;
-    height: 40px;
-    border-radius: 20px;
+.outline-btn {
     font-size: 0.8rem;
-    position: absolute;
-    top: -50px;
-    right: 30px;
+    padding: 10px;
+}
+
+/* Savestate Thumbnail */
+.savestate-preview {
+    width: 100%;
+    aspect-ratio: 256 / 240;
+    background: #000;
+    border-radius: 6px;
+    border: 1px solid var(--glass-border);
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.savestate-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    image-rendering: pixelated;
+}
+
+.savestate-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.panel-footer {
+    margin-top: auto;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1.5;
 }
 
 /* ==========================================================================
-   Responsive Media Queries
+   Virtual Gamepad (Hidden on Desktop)
    ========================================================================== */
+#virtual-gamepad {
+    display: none;
+    touch-action: none; /* CRITICAL: Prevents OS zoom/scroll when playing */
+}
 
-/* Mobile Phones (Portrait) */
-@media (max-width: 768px) {
-    body {
-        padding: 10px;
+/* ==========================================================================
+   MEDIA QUERIES - MOBILE PORTRAIT (Vertical)
+   ========================================================================== */
+@media (max-width: 900px) and (orientation: portrait) {
+    #app-container {
+        grid-template-areas: 
+            "header"
+            "stage";
+        grid-template-columns: 1fr;
+        grid-template-rows: 50px 1fr;
     }
 
-    #titleDiv {
-        flex-direction: column;
-        gap: 10px;
-        padding: 15px;
-    }
-
-    .brand {
-        flex-direction: column;
-        align-items: center;
-        gap: 5px;
-    }
-
-    #emulator-container {
-        border-width: 2px;
-        border-radius: 8px;
-    }
-
-    .control-panel {
-        grid-template-columns: 1fr; /* Stack settings vertically */
-        padding: 15px;
-    }
-
-    /* Show Virtual Gamepad on screens smaller than 768px */
     .mobile-only {
         display: flex;
     }
+
+    #stage {
+        padding: 10px;
+        justify-content: flex-start;
+    }
+
+    /* Screen at the top */
+    #crt-wrapper {
+        border-radius: 4px;
+        box-shadow: none;
+        max-width: 100%;
+        max-height: none;
+    }
+
+    /* Virtual Gamepad underneath */
+    #virtual-gamepad {
+        display: flex;
+        width: 100%;
+        flex: 1;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px;
+    }
+
+    /* D-PAD CSS Construction */
+    .d-pad {
+        position: relative;
+        width: 120px;
+        height: 120px;
+    }
+
+    .v-dir {
+        position: absolute;
+        width: 40px;
+        height: 40px;
+        background: rgba(255, 255, 255, 0.15);
+        border: none;
+        border-radius: 4px;
+    }
+
+    .v-dir:active { background: var(--neon-pink); }
+    #v-up { top: 0; left: 40px; border-top-left-radius: 10px; border-top-right-radius: 10px; }
+    #v-down { bottom: 0; left: 40px; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px;}
+    #v-left { left: 0; top: 40px; border-top-left-radius: 10px; border-bottom-left-radius: 10px;}
+    #v-right { right: 0; top: 40px; border-top-right-radius: 10px; border-bottom-right-radius: 10px;}
+    
+    .v-center {
+        position: absolute;
+        top: 40px; left: 40px;
+        width: 40px; height: 40px;
+        background: rgba(255, 255, 255, 0.15);
+    }
+
+    /* Action Buttons */
+    .action-buttons {
+        display: flex;
+        gap: 15px;
+        transform: rotate(-15deg); /* Classic retro angle */
+    }
+
+    .v-action {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.15);
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        color: #fff;
+        font-size: 1.2rem;
+        font-weight: bold;
+    }
+
+    .v-action:active { background: var(--neon-purple); border-color: var(--neon-pink); }
+
+    .center-controls {
+        position: absolute;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
+    }
+
+    .v-system-btn {
+        background: rgba(255, 255, 255, 0.1);
+        border: none;
+        color: #fff;
+        padding: 8px 20px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        letter-spacing: 2px;
+    }
+    .v-system-btn:active { background: var(--success); }
+
+    /* Hide Sidebar, convert to Mobile Drawer */
+    #settings-panel {
+        position: fixed;
+        top: 0;
+        right: -300px;
+        width: 280px;
+        height: 100vh;
+        border-left: 1px solid var(--glass-border);
+        transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: -10px 0 30px rgba(0,0,0,0.8);
+    }
+
+    #settings-panel.active {
+        right: 0;
+    }
+
+    #mobile-overlay {
+        position: fixed;
+        top: 0; left: 0; width: 100vw; height: 100vh;
+        background: rgba(0,0,0,0.6);
+        backdrop-filter: blur(2px);
+        z-index: 40;
+    }
 }
 
-/* Utility */
-.hidden { display: none !important; }
+/* ==========================================================================
+   MEDIA QUERIES - MOBILE LANDSCAPE (Horizontal Immersive)
+   ========================================================================== */
+@media (max-height: 500px) and (orientation: landscape) {
+    #top-bar { display: none; } /* Hide header for maximum screen space */
+    
+    #app-container {
+        grid-template-areas: "stage";
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
+    }
 
-/* Safe visibility toggle for WebGL2 contexts to prevent GPU suspension */
-.invisible-layout {
-    visibility: hidden !important;
-    position: absolute !important;
-    pointer-events: none !important;
+    #stage { padding: 0; }
+
+    #crt-wrapper {
+        border-radius: 0;
+        max-width: 100%;
+        height: 100vh;
+        max-height: none;
+        aspect-ratio: auto;
+    }
+
+    /* Overlay Virtual Gamepad on top of Canvas */
+    #virtual-gamepad {
+        display: block;
+        position: absolute;
+        top: 0; left: 0; width: 100%; height: 100%;
+        pointer-events: none; /* Let touches pass through where there are no buttons */
+        z-index: 20;
+    }
+
+    .d-pad, .action-buttons, .center-controls {
+        pointer-events: auto; /* Re-enable touch for actual buttons */
+        position: absolute;
+    }
+
+    /* Position D-Pad bottom left */
+    .d-pad {
+        bottom: 20px;
+        left: 30px;
+        width: 130px; height: 130px;
+        opacity: 0.6; /* More transparent for landscape */
+    }
+    .v-dir, .v-center { width: 45px; height: 45px; }
+    #v-up { left: 45px; }
+    #v-down { left: 45px; }
+    #v-left { top: 45px; }
+    #v-right { top: 45px; }
+    .v-center { top: 45px; left: 45px; }
+
+    /* Position Action Buttons bottom right */
+    .action-buttons {
+        bottom: 30px;
+        right: 40px;
+        opacity: 0.6;
+    }
+
+    .center-controls {
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        opacity: 0.5;
+    }
+
+    /* Hide Sidebar completely in landscape gameplay */
+    #settings-panel { display: none; }
 }

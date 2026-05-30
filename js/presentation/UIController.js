@@ -2,21 +2,31 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: UI Controller (With Cache-Proof Layout Controls)
+ * Presentation Layer: UI Controller (With Cache-Proof Layout Controls & Gamepad API)
  * 
- * Maps DOM interactions (buttons, file inputs, selects) and keyboard/touch events 
- * to the Emulator Orchestrator. Swaps viewports via clean display rules to prevent
- * flexbox offset anomalies during active play (SRP).
+ * Maps DOM interactions (buttons, file inputs, selects), keyboard/touch events, 
+ * and Physical USB/Bluetooth Gamepads to the Emulator Orchestrator. 
+ * Swaps viewports via clean display rules to prevent flexbox offset anomalies (SRP).
  */
 
 class UIController {
     /**
-     * Initializes the UI Controller and binds all browser and touch events.
+     * Initializes the UI Controller and binds all browser, touch, and gamepad events.
      * @param {EmulatorOrchestrator} orchestrator - The application layer service managing the emulator.
      */
     constructor(orchestrator) {
         this.orchestrator = orchestrator;
+        
+        // State tracker for physical gamepads to process edge-detection (press/release only)
+        this.gamepadState = {
+            up: false, down: false, left: false, right: false,
+            btn1: false, btn2: false, pause: false
+        };
+
         this.bindEvents();
+
+        // Initiate the hardware gamepad polling loop
+        this.pollGamepads();
     }
 
     /**
@@ -72,6 +82,70 @@ class UIController {
 
         // 7. Mobile Virtual Gamepad Touch Mappings
         this.bindVirtualGamepadEvents();
+
+        // 8. Physical Gamepad Connection Listener (Diagnostic)
+        window.addEventListener("gamepadconnected", (e) => {
+            console.log(`UIController::Gamepad connected: [${e.gamepad.id}]`);
+        });
+    }
+
+    /**
+     * Continuous polling loop for the HTML5 Gamepad API.
+     * Detects button and axis changes to trigger the emulator I/O chip.
+     */
+    pollGamepads() {
+        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+        const gp = gamepads[0]; // Capture the first connected controller
+
+        if (gp && this.orchestrator.ioController) {
+            const io = this.orchestrator.ioController;
+            const DEADZONE = 0.5; // Threshold for analog stick drift
+
+            // Standard Gamepad Mapping
+            // D-Pad: 12 (Up), 13 (Down), 14 (Left), 15 (Right)
+            // Axes: 0 (Horizontal Left Stick), 1 (Vertical Left Stick)
+            const up = gp.buttons[12]?.pressed || gp.axes[1] < -DEADZONE;
+            const down = gp.buttons[13]?.pressed || gp.axes[1] > DEADZONE;
+            const left = gp.buttons[14]?.pressed || gp.axes[0] < -DEADZONE;
+            const right = gp.buttons[15]?.pressed || gp.axes[0] > DEADZONE;
+
+            // Face Buttons: 0 (A/Cross), 1 (B/Circle), 2 (X/Square), 3 (Y/Triangle)
+            const btn1 = gp.buttons[0]?.pressed || gp.buttons[2]?.pressed; // Primary Fire
+            const btn2 = gp.buttons[1]?.pressed || gp.buttons[3]?.pressed; // Secondary Fire / Jump
+
+            // Pause: 9 (Start button)
+            const pause = gp.buttons[9]?.pressed;
+
+            // Helper to trigger hardware pins only on state change (edge detection)
+            const triggerInput = (key, isPressed, onPress, onRelease) => {
+                if (isPressed && !this.gamepadState[key]) {
+                    onPress.call(io);
+                    this.gamepadState[key] = true;
+                } else if (!isPressed && this.gamepadState[key]) {
+                    onRelease.call(io);
+                    this.gamepadState[key] = false;
+                }
+            };
+
+            // Execute input mapping evaluations
+            triggerInput('up', up, io.pressUp, io.depressUp);
+            triggerInput('down', down, io.pressDown, io.depressDown);
+            triggerInput('left', left, io.pressLeft, io.depressLeft);
+            triggerInput('right', right, io.pressRight, io.depressRight);
+            triggerInput('btn1', btn1, io.pressButton1, io.depressButton1);
+            triggerInput('btn2', btn2, io.pressButton2, io.depressButton2);
+
+            // Special handling for Pause (trigger NMI only on initial press to avoid rapid toggling)
+            if (pause && !this.gamepadState.pause) {
+                this.orchestrator.triggerPauseButton();
+                this.gamepadState.pause = true;
+            } else if (!pause) {
+                this.gamepadState.pause = false;
+            }
+        }
+
+        // Loop execution synced to the browser's refresh rate
+        requestAnimationFrame(() => this.pollGamepads());
     }
 
     /**
@@ -211,7 +285,8 @@ class UIController {
                 break;
             case "F2": 
                 this.orchestrator.saveState(); 
-                this.updateSaveStatePreview(); 
+                // Delay UI update slightly to allow IndexedDB async save to finish
+                setTimeout(() => this.updateSaveStatePreview(), 100); 
                 e.preventDefault(); 
                 break;
             case "F3": 
@@ -280,7 +355,9 @@ class UIController {
     }
 
     /**
-     * Reconstitutes the saved screenshot from LocalStorage and renders it to the tooltip thumbnail.
+     * Retrieves the saved screenshot from standard localStorage and renders it to the tooltip thumbnail.
+     * Note: Screenshot metadata remains in localStorage due to its small size and synchronous nature,
+     * while heavy binary state data is moved to IndexedDB.
      */
     updateSaveStatePreview() {
         const rawImgData = localStorage.getItem('savestateScreenshot');

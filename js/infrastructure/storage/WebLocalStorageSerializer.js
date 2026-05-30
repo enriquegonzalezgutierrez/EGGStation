@@ -2,170 +2,233 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: WebLocalStorageSerializer
+ * Infrastructure Layer: WebIndexedDBSerializer (Replaces WebLocalStorageSerializer)
  * 
  * Manages standard Emulator Savestates (Save/Load) by serializing the complete,
- * microsecond-accurate operational state of the CPU, VDP, MMU, and PSG 
- * directly into the browser's localStorage.
+ * microsecond-accurate operational state of the CPU, VDP, MMU, and PSG.
+ * 
+ * OPTIMIZED: Migrated from localStorage to IndexedDB. IndexedDB allows us to safely 
+ * store heavy, raw binary arrays (Uint8Array) without JSON stringification overhead, 
+ * bypassing the 5MB browser quota limits and preventing memory crashes.
  */
 
-class WebLocalStorageSerializer {
-    constructor() {}
+class WebIndexedDBSerializer {
+    constructor() {
+        this.dbName = "EGGStationDB";
+        this.storeName = "savestates";
+        this.db = null;
+        
+        // Initialize the database asynchronously
+        this.initDB().catch(err => console.error("IndexedDB::Initialization failed", err));
+    }
 
     /**
-     * Serializes the active emulator configuration state to localStorage.
+     * Opens the IndexedDB connection and creates the schema if it doesn't exist.
+     * @returns {Promise} Resolves when the database is ready.
+     */
+    initDB() {
+        return new Promise((resolve, reject) => {
+            const request = window.indexedDB.open(this.dbName, 1);
+
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains(this.storeName)) {
+                    // Create an object store using the cartridge name as the unique primary key
+                    db.createObjectStore(this.storeName, { keyPath: "cartName" });
+                }
+            };
+
+            request.onsuccess = (event) => {
+                this.db = event.target.result;
+                resolve();
+            };
+
+            request.onerror = (event) => {
+                reject(event.target.error);
+            };
+        });
+    }
+
+    /**
+     * Serializes the active emulator configuration state to IndexedDB.
      * @param {string} cname - Unique catalog name of the active Cartridge ROM.
      * @param {ZilogZ80} cpu - The system CPU.
      * @param {Sega315_5124_Vdp} vdp - The visual co-processor VDP.
      * @param {SegaMasterSystemBus} mmu - The unified system memory bus.
      * @param {Sega315_5124_Psg} psg - The integrated sound generator PSG.
      */
-    serialize(cname, cpu, vdp, mmu, psg) {
-        // Save matching Cartridge identifier
-        localStorage.setItem('cartName', cname);
-
-        // --- CPU Registers and State Flags ---
-        localStorage.setItem('cpuRegisters', JSON.stringify(cpu.registers));
-        localStorage.setItem('cpuShadowRegisters', JSON.stringify(cpu.shadowRegisters));
-        localStorage.setItem('cpuMaskableIntEnabled', JSON.stringify(cpu.maskableInterruptsEnabled));
-        localStorage.setItem('cpuMaskableIntWaiting', JSON.stringify(cpu.maskableInterruptWaiting));
-        localStorage.setItem('cpuinterruptMode', JSON.stringify(cpu.interruptMode));
-        localStorage.setItem('cputotCycles', JSON.stringify(cpu.totCycles));
-        localStorage.setItem('cpuNMIWaiting', JSON.stringify(cpu.NMIWaiting));
-        localStorage.setItem('cpum_bAfterEI', JSON.stringify(cpu.m_bAfterEI));
-
-        // --- VDP State Parameters ---
-        localStorage.setItem('vdpColorRAM', JSON.stringify(vdp.colorRam));
-        localStorage.setItem('vdpvRam', JSON.stringify(vdp.vRam));
-        localStorage.setItem('vdpcurrentScanlineIndex', JSON.stringify(vdp.currentScanlineIndex));
-        localStorage.setItem('vdplineCounter', JSON.stringify(vdp.lineCounter));
-        localStorage.setItem('vdpcontrolWordFlag', JSON.stringify(vdp.controlWordFlag));
-        localStorage.setItem('vdpcontrolWord', JSON.stringify(vdp.controlWord));
-        localStorage.setItem('vdpdataPortReadWriteAddress', JSON.stringify(vdp.dataPortReadWriteAddress));
-        localStorage.setItem('vdpdataPortWriteMode', JSON.stringify(vdp.dataPortWriteMode));
-        localStorage.setItem('vdpreadBufferByte', JSON.stringify(vdp.readBufferByte));
-        localStorage.setItem('vdpstatusFlags', JSON.stringify(vdp.statusFlags));
-        localStorage.setItem('vdpnameTableBaseAddress', JSON.stringify(vdp.nameTableBaseAddress));
-        localStorage.setItem('vdpspriteAttributeTableBaseAddress', JSON.stringify(vdp.spriteAttributeTableBaseAddress));
-        localStorage.setItem('vdpspritePatternGeneratorBaseAddress', JSON.stringify(vdp.spritePatternGeneratorBaseAddress));
-        localStorage.setItem('vdpvcounter', JSON.stringify(vdp.vcounter));
-        localStorage.setItem('vdphcounter', JSON.stringify(vdp.hcounter));
-        localStorage.setItem('vdpRegister00', JSON.stringify(vdp.register00));
-        localStorage.setItem('vdpRegister01', JSON.stringify(vdp.register01));
-        localStorage.setItem('vdpRegister02', JSON.stringify(vdp.register02));
-        localStorage.setItem('vdpRegister03', JSON.stringify(vdp.register03));
-        localStorage.setItem('vdpRegister04', JSON.stringify(vdp.register04));
-        localStorage.setItem('vdpRegister05', JSON.stringify(vdp.register05));
-        localStorage.setItem('vdpRegister06', JSON.stringify(vdp.register06));
-        localStorage.setItem('vdpRegister07', JSON.stringify(vdp.register07));
-        localStorage.setItem('vdpRegister08', JSON.stringify(vdp.register08));
-        localStorage.setItem('vdpRegister09', JSON.stringify(vdp.register09));
-        localStorage.setItem('vdpRegister0a', JSON.stringify(vdp.register0a));
-
-        // --- System Memory Bus and Cartridge SRAM Mapping States ---
-        localStorage.setItem('mmuram8k', JSON.stringify(mmu.systemWorkRam));
-        localStorage.setItem('mmumapperSlot2IsCartridgeRam', JSON.stringify(mmu.mapper.mapperSlot2IsCartridgeRam));
-        localStorage.setItem('mmucartridgeRam', JSON.stringify(mmu.mapper.cartridgeRam));
+    async serialize(cname, cpu, vdp, mmu, psg) {
+        if (!this.db) await this.initDB();
 
         // Track and map dynamic page selections relative to BaseMapper romBanks slots
         const slotsIndices = [-1, -1, -1];
         for (let i = 0; i < 3; i++) {
             slotsIndices[i] = mmu.mapper.romBanks.indexOf(mmu.mapper.mapperSlots[i]);
         }
-        localStorage.setItem('mmumapperSlotsIdx', JSON.stringify(slotsIndices));
 
-        // --- PSG Sound State Parameters ---
-        localStorage.setItem('psgvolregister', JSON.stringify(psg.volregister));
-        localStorage.setItem('psgtoneregister', JSON.stringify(psg.toneregister));
-        localStorage.setItem('psgwavePos', JSON.stringify(psg.wavePos));
-        localStorage.setItem('psgchan2belatched', JSON.stringify(psg.chan2belatched));
-        localStorage.setItem('psgwhat2latch', JSON.stringify(psg.what2latch));
-        localStorage.setItem('psglatch', JSON.stringify(psg.latch));
-        localStorage.setItem('psginternalClock', JSON.stringify(psg.internalClock));
-        localStorage.setItem('psginternalClockPos', JSON.stringify(psg.internalClockPos));
+        // Construct the consolidated state payload.
+        // NOTE: IndexedDB natively supports saving Uint8Array without JSON stringification.
+        const statePayload = {
+            cartName: cname,
+            
+            cpu: {
+                registers: { ...cpu.registers },
+                shadowRegisters: { ...cpu.shadowRegisters },
+                maskableInterruptsEnabled: cpu.maskableInterruptsEnabled,
+                maskableInterruptWaiting: cpu.maskableInterruptWaiting,
+                interruptMode: cpu.interruptMode,
+                totCycles: cpu.totCycles,
+                NMIWaiting: cpu.NMIWaiting,
+                m_bAfterEI: cpu.m_bAfterEI
+            },
 
-        // Active frame screenshot payload for UI previews
-        localStorage.setItem('savestateScreenshot', JSON.stringify(vdp.glbFrameBuffer));
+            vdp: {
+                colorRam: vdp.colorRam, // Native Uint8Array
+                vRam: vdp.vRam,         // Native Uint8Array
+                currentScanlineIndex: vdp.currentScanlineIndex,
+                lineCounter: vdp.lineCounter,
+                controlWordFlag: vdp.controlWordFlag,
+                controlWord: vdp.controlWord,
+                dataPortReadWriteAddress: vdp.dataPortReadWriteAddress,
+                dataPortWriteMode: vdp.dataPortWriteMode,
+                readBufferByte: vdp.readBufferByte,
+                statusFlags: vdp.statusFlags,
+                nameTableBaseAddress: vdp.nameTableBaseAddress,
+                spriteAttributeTableBaseAddress: vdp.spriteAttributeTableBaseAddress,
+                spritePatternGeneratorBaseAddress: vdp.spritePatternGeneratorBaseAddress,
+                vcounter: vdp.vcounter,
+                hcounter: vdp.hcounter,
+                register00: vdp.register00, register01: vdp.register01,
+                register02: vdp.register02, register03: vdp.register03,
+                register04: vdp.register04, register05: vdp.register05,
+                register06: vdp.register06, register07: vdp.register07,
+                register08: vdp.register08, register09: vdp.register09,
+                register0a: vdp.register0a
+            },
 
-        console.log(`LocalStorageSerializer::State stored for [${cname}]`);
+            mmu: {
+                systemWorkRam: mmu.systemWorkRam, // Native Uint8Array
+                mapperSlot2IsCartridgeRam: mmu.mapper.mapperSlot2IsCartridgeRam,
+                cartridgeRam: mmu.mapper.cartridgeRam, // Native Uint8Array
+                slotsIndices: slotsIndices
+            },
+
+            psg: {
+                volregister: [...psg.volregister],
+                toneregister: [...psg.toneregister],
+                wavePos: [...psg.wavePos],
+                chan2belatched: psg.chan2belatched,
+                what2latch: psg.what2latch,
+                latch: psg.latch,
+                internalClock: psg.internalClock,
+                internalClockPos: psg.internalClockPos
+            }
+        };
+
+        // Write binary payload to IndexedDB
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction([this.storeName], "readwrite");
+            const store = transaction.objectStore(this.storeName);
+            const request = store.put(statePayload); // Inserts or overrides by keyPath
+
+            request.onsuccess = () => {
+                // UI Visualizer Screenshot (Saved synchronously to LocalStorage for instant UI access)
+                const smallArray = Array.from(vdp.glbFrameBuffer);
+                localStorage.setItem('savestateScreenshot', JSON.stringify(smallArray));
+                localStorage.setItem('cartName', cname);
+                
+                console.log(`IndexedDBSerializer::State stored successfully for [${cname}]`);
+                resolve();
+            };
+
+            request.onerror = (e) => reject(e.target.error);
+        });
     }
 
     /**
-     * Reconstitutes the stored emulator state from localStorage.
-     * @returns {number} 0 if successful, 1 if mismatch error.
+     * Reconstitutes the stored emulator state from IndexedDB.
+     * @returns {Promise<number>} Resolves to 0 if successful, 1 if error.
      */
-    deserialize(cname, cpu, vdp, mmu, psg) {
-        // Validate active ROM alignment matching state footprint
-        const storedCartName = localStorage.getItem('cartName');
-        if (cname !== storedCartName) {
-            console.error("LocalStorageSerializer::Failed to load state. Mismatch between ROM database names.");
-            return 1;
-        }
+    async deserialize(cname, cpu, vdp, mmu, psg) {
+        if (!this.db) await this.initDB();
 
-        // --- Restore CPU State ---
-        cpu.registers = Object.assign(cpu.registers, JSON.parse(localStorage.getItem('cpuRegisters')));
-        cpu.shadowRegisters = Object.assign(cpu.shadowRegisters, JSON.parse(localStorage.getItem('cpuShadowRegisters')));
-        cpu.maskableInterruptsEnabled = JSON.parse(localStorage.getItem('cpuMaskableIntEnabled'));
-        cpu.maskableInterruptWaiting = JSON.parse(localStorage.getItem('cpuMaskableIntWaiting'));
-        cpu.interruptMode = JSON.parse(localStorage.getItem('cpuinterruptMode'));
-        cpu.totCycles = JSON.parse(localStorage.getItem('cputotCycles'));
-        cpu.NMIWaiting = JSON.parse(localStorage.getItem('cpuNMIWaiting'));
-        cpu.m_bAfterEI = JSON.parse(localStorage.getItem('cpum_bAfterEI'));
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction([this.storeName], "readonly");
+            const store = transaction.objectStore(this.storeName);
+            const request = store.get(cname);
 
-        // --- Restore VDP State ---
-        vdp.colorRam = JSON.parse(localStorage.getItem('vdpColorRAM'));
-        vdp.vRam = JSON.parse(localStorage.getItem('vdpvRam'));
-        vdp.currentScanlineIndex = JSON.parse(localStorage.getItem('vdpcurrentScanlineIndex'));
-        vdp.lineCounter = JSON.parse(localStorage.getItem('vdplineCounter'));
-        vdp.controlWordFlag = JSON.parse(localStorage.getItem('vdpcontrolWordFlag'));
-        vdp.controlWord = JSON.parse(localStorage.getItem('vdpcontrolWord'));
-        vdp.dataPortReadWriteAddress = JSON.parse(localStorage.getItem('vdpdataPortReadWriteAddress'));
-        vdp.dataPortWriteMode = JSON.parse(localStorage.getItem('vdpdataPortWriteMode'));
-        vdp.readBufferByte = JSON.parse(localStorage.getItem('vdpreadBufferByte'));
-        vdp.statusFlags = JSON.parse(localStorage.getItem('vdpstatusFlags'));
-        vdp.nameTableBaseAddress = JSON.parse(localStorage.getItem('vdpnameTableBaseAddress'));
-        vdp.spriteAttributeTableBaseAddress = JSON.parse(localStorage.getItem('vdpspriteAttributeTableBaseAddress'));
-        vdp.spritePatternGeneratorBaseAddress = JSON.parse(localStorage.getItem('vdpspritePatternGeneratorBaseAddress'));
-        vdp.vcounter = JSON.parse(localStorage.getItem('vdpvcounter'));
-        vdp.hcounter = JSON.parse(localStorage.getItem('vdphcounter'));
-        vdp.register00 = JSON.parse(localStorage.getItem('vdpRegister00'));
-        vdp.register01 = JSON.parse(localStorage.getItem('vdpRegister01'));
-        vdp.register02 = JSON.parse(localStorage.getItem('vdpRegister02'));
-        vdp.register03 = JSON.parse(localStorage.getItem('vdpRegister03'));
-        vdp.register04 = JSON.parse(localStorage.getItem('vdpRegister04'));
-        vdp.register05 = JSON.parse(localStorage.getItem('vdpRegister05'));
-        vdp.register06 = JSON.parse(localStorage.getItem('vdpRegister06'));
-        vdp.register07 = JSON.parse(localStorage.getItem('vdpRegister07'));
-        vdp.register08 = JSON.parse(localStorage.getItem('vdpRegister08'));
-        vdp.register09 = JSON.parse(localStorage.getItem('vdpRegister09'));
-        vdp.register0a = JSON.parse(localStorage.getItem('vdpRegister0a'));
+            request.onsuccess = (event) => {
+                const state = event.target.result;
 
-        // --- Restore Memory Bus State ---
-        mmu.systemWorkRam.set(JSON.parse(localStorage.getItem('mmuram8k')));
-        mmu.mapper.mapperSlot2IsCartridgeRam = JSON.parse(localStorage.getItem('mmumapperSlot2IsCartridgeRam'));
-        
-        const loadedSram = JSON.parse(localStorage.getItem('mmucartridgeRam'));
-        for (let i = 0; i < loadedSram.length; i++) {
-            mmu.mapper.cartridgeRam[i] = loadedSram[i];
-        }
+                if (!state) {
+                    console.error(`IndexedDBSerializer::No saved state found for [${cname}]`);
+                    resolve(1);
+                    return;
+                }
 
-        // Restore dynamic banking assignments
-        const slotIndices = JSON.parse(localStorage.getItem('mmumapperSlotsIdx'));
-        if (slotIndices[0] !== -1) mmu.mapper.mapperSlots[0] = mmu.mapper.romBanks[slotIndices[0]];
-        if (slotIndices[1] !== -1) mmu.mapper.mapperSlots[1] = mmu.mapper.romBanks[slotIndices[1]];
-        if (slotIndices[2] !== -1) mmu.mapper.mapperSlots[2] = mmu.mapper.romBanks[slotIndices[2]];
+                // --- Restore CPU State ---
+                Object.assign(cpu.registers, state.cpu.registers);
+                Object.assign(cpu.shadowRegisters, state.cpu.shadowRegisters);
+                cpu.maskableInterruptsEnabled = state.cpu.maskableInterruptsEnabled;
+                cpu.maskableInterruptWaiting = state.cpu.maskableInterruptWaiting;
+                cpu.interruptMode = state.cpu.interruptMode;
+                cpu.totCycles = state.cpu.totCycles;
+                cpu.NMIWaiting = state.cpu.NMIWaiting;
+                cpu.m_bAfterEI = state.cpu.m_bAfterEI;
 
-        // --- Restore PSG Audio State ---
-        psg.volregister = JSON.parse(localStorage.getItem('psgvolregister'));
-        psg.toneregister = JSON.parse(localStorage.getItem('psgtoneregister'));
-        psg.wavePos = JSON.parse(localStorage.getItem('psgwavePos'));
-        psg.chan2belatched = JSON.parse(localStorage.getItem('psgchan2belatched'));
-        psg.what2latch = JSON.parse(localStorage.getItem('psgwhat2latch'));
-        psg.latch = JSON.parse(localStorage.getItem('psglatch'));
-        psg.internalClock = JSON.parse(localStorage.getItem('psginternalClock'));
-        psg.internalClockPos = JSON.parse(localStorage.getItem('psginternalClockPos'));
+                // --- Restore VDP State ---
+                // Use .set() to copy the retrieved binary arrays into the existing memory references
+                vdp.colorRam.set(state.vdp.colorRam);
+                vdp.vRam.set(state.vdp.vRam);
+                vdp.currentScanlineIndex = state.vdp.currentScanlineIndex;
+                vdp.lineCounter = state.vdp.lineCounter;
+                vdp.controlWordFlag = state.vdp.controlWordFlag;
+                vdp.controlWord = state.vdp.controlWord;
+                vdp.dataPortReadWriteAddress = state.vdp.dataPortReadWriteAddress;
+                vdp.dataPortWriteMode = state.vdp.dataPortWriteMode;
+                vdp.readBufferByte = state.vdp.readBufferByte;
+                vdp.statusFlags = state.vdp.statusFlags;
+                vdp.nameTableBaseAddress = state.vdp.nameTableBaseAddress;
+                vdp.spriteAttributeTableBaseAddress = state.vdp.spriteAttributeTableBaseAddress;
+                vdp.spritePatternGeneratorBaseAddress = state.vdp.spritePatternGeneratorBaseAddress;
+                vdp.vcounter = state.vdp.vcounter;
+                vdp.hcounter = state.vdp.hcounter;
+                vdp.register00 = state.vdp.register00; vdp.register01 = state.vdp.register01;
+                vdp.register02 = state.vdp.register02; vdp.register03 = state.vdp.register03;
+                vdp.register04 = state.vdp.register04; vdp.register05 = state.vdp.register05;
+                vdp.register06 = state.vdp.register06; vdp.register07 = state.vdp.register07;
+                vdp.register08 = state.vdp.register08; vdp.register09 = state.vdp.register09;
+                vdp.register0a = state.vdp.register0a;
 
-        console.log(`LocalStorageSerializer::State reconstituted for [${cname}]`);
-        return 0;
+                // --- Restore Memory Bus State ---
+                mmu.systemWorkRam.set(state.mmu.systemWorkRam);
+                mmu.mapper.cartridgeRam.set(state.mmu.cartridgeRam);
+                mmu.mapper.mapperSlot2IsCartridgeRam = state.mmu.mapperSlot2IsCartridgeRam;
+
+                // Restore dynamic banking assignments
+                const slotIndices = state.mmu.slotsIndices;
+                if (slotIndices[0] !== -1) mmu.mapper.mapperSlots[0] = mmu.mapper.romBanks[slotIndices[0]];
+                if (slotIndices[1] !== -1) mmu.mapper.mapperSlots[1] = mmu.mapper.romBanks[slotIndices[1]];
+                if (slotIndices[2] !== -1) mmu.mapper.mapperSlots[2] = mmu.mapper.romBanks[slotIndices[2]];
+
+                // --- Restore PSG Audio State ---
+                psg.volregister = state.psg.volregister;
+                psg.toneregister = state.psg.toneregister;
+                psg.wavePos = state.psg.wavePos;
+                psg.chan2belatched = state.psg.chan2belatched;
+                psg.what2latch = state.psg.what2latch;
+                psg.latch = state.psg.latch;
+                psg.internalClock = state.psg.internalClock;
+                psg.internalClockPos = state.psg.internalClockPos;
+
+                console.log(`IndexedDBSerializer::State reconstituted successfully for [${cname}]`);
+                resolve(0);
+            };
+
+            request.onerror = (e) => {
+                console.error(`IndexedDBSerializer::Error fetching state for [${cname}]`);
+                reject(e.target.error);
+            };
+        });
     }
 }
