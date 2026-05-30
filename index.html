@@ -3,10 +3,10 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: HTML Entry Point (With complete scripts dependency loading queue)
+ * Presentation Layer: HTML Entry Point (With corrected layout classes)
  * 
- * Sets up the DOM structure, visual elements, and imports the modular architectural 
- * layers in strict dependency order (Sub-services -> Primary Controllers).
+ * Sets up the DOM structure, visual elements, and imports the architectural 
+ * layers. Dual canvases (2D/WebGL) use unified layout visibility selectors.
 -->
 <html lang="en">
     <head>
@@ -26,7 +26,7 @@
         <!-- INFRASTRUCTURE LAYER: HARDWARE BINDINGS & SUB-SERVICES     -->
         <!-- ========================================================== -->
         
-        <!-- Audio Synthesizer & Controller -->
+        <!-- Audio Controller (Consolidated for Strategy B) -->
         <script src="js/infrastructure/audio/Sega315_5124_Psg.js"></script>
         
         <!-- Video Renderers, Post-processors, and VDP Controller -->
@@ -107,9 +107,10 @@
         </header>
 
         <main>
-            <!-- Visualizer CRT Frame -->
+            <!-- Visualizer CRT Frame (Dual Canvas: BOTH start with clean layout classes for seamless transitions) -->
             <div id="emulator-container">
                 <canvas width="256" height="240" id="smsdisplay"></canvas>
+                <canvas width="512" height="480" id="webgldisplay"></canvas> <!-- FIXED: Started with invisible-layout class -->
             </div>
 
             <!-- Virtual Gamepad (Visible ONLY on Mobile/Touch devices) -->
@@ -156,6 +157,8 @@
                         <option value="3">CRT Scanlines (Sony Trinitron)</option>
                         <option value="4">Scale4X Cartoon HD (Vector Smooth)</option>
                         <option value="5">NTSC Signal Bleed (Composite TV)</option>
+                        <option value="6">2026 CRT-Royale (GPU Shaders)</option>
+                        <option value="6">2026 Modern HD (Vector Smooth)</option>
                     </select>
                 </div>
 

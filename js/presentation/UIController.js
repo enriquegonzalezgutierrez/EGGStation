@@ -2,10 +2,11 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: UI Controller (With Audio DSP and Video Filter bindings)
+ * Presentation Layer: UI Controller (With Cache-Proof Layout Controls)
  * 
  * Maps DOM interactions (buttons, file inputs, selects) and keyboard/touch events 
- * to the Emulator Orchestrator. Keeps selectors visible during active gameplay (SRP).
+ * to the Emulator Orchestrator. Swaps viewports via clean display rules to prevent
+ * flexbox offset anomalies during active play (SRP).
  */
 
 class UIController {
@@ -120,19 +121,35 @@ class UIController {
     }
 
     /**
-     * Handles changes in the post-processing filter, toggling hardware Bilinear filtering.
+     * Handles changes in the post-processing filter, toggling canvas styles via inline JS.
      * @param {number} mode - Selected filter mode index.
      */
     handlePostProcessChange(mode) {
-        const display = document.getElementById("smsdisplay");
-        if (!display) return;
+        const display2D = document.getElementById("smsdisplay");
+        const displayGL = document.getElementById("webgldisplay");
+        if (!display2D || !displayGL) return;
 
-        if (mode === 1) {
-            // Bilinear smoothing handled directly by the browser rendering engine via GPU
-            display.style.imageRendering = "auto";
+        if (mode === 6) {
+            // Decouple from flex layout completely to prevent shifting anomalies
+            display2D.style.display = "none";
+            displayGL.style.display = "block";
+            
+            // Re-enforce visible states
+            displayGL.style.visibility = "visible";
+            displayGL.style.position = "relative";
         } else {
-            // Standard pixel boundaries required for retro sharp, Scale2X, and CRT scanlines
-            display.style.imageRendering = "pixelated";
+            // Restore standard canvas layout
+            display2D.style.display = "block";
+            displayGL.style.display = "none";
+            
+            display2D.style.visibility = "visible";
+            display2D.style.position = "relative";
+
+            if (mode === 1) {
+                display2D.style.imageRendering = "auto";
+            } else {
+                display2D.style.imageRendering = "pixelated";
+            }
         }
 
         // Delegate the selected configuration to the Application orchestrator
@@ -240,17 +257,25 @@ class UIController {
      * Adjusts the canvas framing when transitioning in or out of Fullscreen mode.
      */
     handleFullscreenChange() {
-        const display = document.getElementById("smsdisplay");
+        const display2D = document.getElementById("smsdisplay");
+        const displayGL = document.getElementById("webgldisplay");
         const titleDiv = document.getElementById("titleDiv");
 
-        if (document.fullscreenElement) {
-            if (titleDiv) titleDiv.classList.add("hidden");
-            display.style.width = "100%";
-            display.style.height = "100vh";
-        } else {
-            if (titleDiv) titleDiv.classList.remove("hidden");
-            display.style.width = "768px";
-            display.style.height = "720px";
+        const targetWidth = document.fullscreenElement ? "100%" : "768px";
+        const targetHeight = document.fullscreenElement ? "100vh" : "720px";
+
+        if (titleDiv) {
+            if (document.fullscreenElement) titleDiv.classList.add("hidden");
+            else titleDiv.classList.remove("hidden");
+        }
+
+        if (display2D) {
+            display2D.style.width = targetWidth;
+            display2D.style.height = targetHeight;
+        }
+        if (displayGL) {
+            displayGL.style.width = targetWidth;
+            displayGL.style.height = targetHeight;
         }
     }
 

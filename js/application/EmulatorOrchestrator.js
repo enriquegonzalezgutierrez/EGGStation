@@ -2,7 +2,7 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Emulator Orchestrator (With Audio Filter routing)
+ * Application Layer: Emulator Orchestrator (With WebGL2 dependency injection)
  * 
  * Coordinates system execution loops, schedules frame sync rates (NTSC/PAL),
  * and links the isolated Domain entities with Infrastructure services.
@@ -13,10 +13,12 @@ class EmulatorOrchestrator {
     /**
      * Initializes the Orchestrator.
      * @param {CanvasRenderingContext2D} videoContext - The HTML5 Canvas 2D context for video output.
+     * @param {WebGL2RenderingContext} glContext - The HTML5 Canvas WebGL2 context for GPU Shaders.
      * @param {Function} onFpsUpdate - Callback function to notify the UI of FPS changes.
      */
-    constructor(videoContext, onFpsUpdate) {
+    constructor(videoContext, glContext, onFpsUpdate) {
         this.videoContext = videoContext;
+        this.glContext = glContext;
         this.onFpsUpdate = onFpsUpdate;
         
         // Emulation state machine
@@ -24,10 +26,10 @@ class EmulatorOrchestrator {
         this.isPaused = false;
         this.fastForward = false;
         
-        // Visual post-processing filter configuration index (0: Sharp, 1: Bilinear, 2: Scale2X, 3: Scanlines, 4: Scale4X, 5: NTSC Bleed)
+        // Visual post-processing filter configuration index (0: Sharp, 1: Bilinear, etc.)
         this.postProcessMode = 0;
 
-        // Audio DSP soundstage configuration index (0: Mono, 1: Arcade Warmth Low-Pass, 2: Lush 3D Stereo)
+        // Audio DSP soundstage configuration index (0: Mono, 1: Arcade Warmth Low-Pass, 2: Haas Stereo)
         this.audioFilterMode = 0;
 
         // Target timing metrics matching native hardware
@@ -98,8 +100,8 @@ class EmulatorOrchestrator {
         this.cartridge = new SegaMasterSystemCartridge(filename);
         this.cartridge.load(arrayBuffer);
         
-        // 2. Initialize Infrastructure Layer: Co-processors
-        this.vdp = new Sega315_5124_Vdp(this.vdpMode);
+        // 2. Initialize Infrastructure Layer: Co-processors (Injected with WebGL2 Context)
+        this.vdp = new Sega315_5124_Vdp(this.vdpMode, this.glContext);
         this.psg = new Sega315_5124_Psg();
         
         // 3. Initialize Domain Layer: System Bus (MMU) & CPU

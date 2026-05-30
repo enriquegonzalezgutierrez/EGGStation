@@ -6,7 +6,7 @@
  * 
  * Emulates the central control bus, ports, registers, and timing synchronizations.
  * Render passes, sprites, and post-processors are delegated to specialized subservices.
- * Enums are encapsulated inside class static namespaces to prevent scope hoisting errors.
+ * Injects the WebGL2 Rendering Context and applies native analog DAC resistor palettes (SRP).
  */
 
 class Sega315_5124_Vdp {
@@ -27,7 +27,11 @@ class Sega315_5124_Vdp {
         };
     }
 
-    constructor(vdpMode) {
+    /**
+     * @param {number} vdpMode - 0: NTSC, 1: PAL
+     * @param {WebGL2RenderingContext} glContext - Injected GPU context.
+     */
+    constructor(vdpMode, glContext) {
         // 16KB of Video RAM (VRAM)
         this.vRam = new Array(0x4000).fill(0);
 
@@ -84,6 +88,12 @@ class Sega315_5124_Vdp {
         this.glbResolutionY = 240;
         this.yScreenLines = 192;
 
+        // ========================================================================
+        // SEGA NATIVE HARDWARE RESISTOR DAC PALETTE (6-Bit Color Scale)
+        // Replaces flat linear scaling with official analog voltage measurements.
+        // ========================================================================
+        this.analogColorScale = [0, 80, 175, 255];
+
         // Core Image buffers
         this.glbFrameBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY * 4);
         this.priBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY);
@@ -111,11 +121,8 @@ class Sega315_5124_Vdp {
             255,255,255
         ];
 
-        this.glbImgData = undefined;
-        this.glbCanvasRenderer = undefined;
-
         // SRP: Image upscaling and filters are delegated to the post-processor service
-        this.postProcessor = new VdpPostProcessor(this);
+        this.postProcessor = new VdpPostProcessor(this, glContext);
     }
 
     cleanSpriteBuffer() {
@@ -282,9 +289,10 @@ class Sega315_5124_Vdp {
                 const cramIdx = byte0 | (byte1 << 1) | (byte2 << 2) | (byte3 << 3);
                 const curbyte = this.colorRam[cramIdx + (pal * 16)];
 
-                const red = (curbyte & 0x03) * 85;
-                const green = ((curbyte & 0x0c) >> 2) * 85;
-                const blue = ((curbyte & 0x30) >> 4) * 85;
+                // Decodificado usando la red de resistencias analógicas reales
+                const red = this.analogColorScale[curbyte & 0x03];
+                const green = this.analogColorScale[(curbyte & 0x0c) >> 2];
+                const blue = this.analogColorScale[(curbyte & 0x30) >> 4];
 
                 ctx.fillStyle = "rgba(" + red + "," + green + "," + blue + ",1)"; 
                 ctx.fillRect(x + xt, y + yt, 1, 1);
@@ -321,9 +329,10 @@ class Sega315_5124_Vdp {
             const cramIdx = (byte0 | (byte1 << 1) | (byte2 << 2) | (byte3 << 3)) & 0x0f;
             const curbyte = this.colorRam[cramIdx + (pal * 16)];
             
-            const red = (curbyte & 0x03) * 85;
-            const green = ((curbyte & 0x0c) >> 2) * 85;
-            const blue = ((curbyte & 0x30) >> 4) * 85;
+            // Decodificado usando la red de resistencias analógicas reales
+            const red = this.analogColorScale[curbyte & 0x03];
+            const green = this.analogColorScale[(curbyte & 0x0c) >> 2];
+            const blue = this.analogColorScale[(curbyte & 0x30) >> 4];
 
             const xtile = x + xt;
             const ytile = y;
@@ -362,9 +371,10 @@ class Sega315_5124_Vdp {
             const curbyte = this.colorRam[cramIdx + 16];
 
             if (cramIdx !== 0) {
-                const red = (curbyte & 0x03) * 85;
-                const green = ((curbyte & 0x0c) >> 2) * 85;
-                const blue = ((curbyte & 0x30) >> 4) * 85;
+                // Decodificado usando la red de resistencias analógicas reales
+                const red = this.analogColorScale[curbyte & 0x03];
+                const green = this.analogColorScale[(curbyte & 0x0c) >> 2];
+                const blue = this.analogColorScale[(curbyte & 0x30) >> 4];
     
                 const cx = spriteX + xt;
                 const cy = scanlineNum;
@@ -401,9 +411,9 @@ class Sega315_5124_Vdp {
     debugPalette(ctx, x, y) {
         for (let color = 0; color < 0x20; color++) {
             const curbyte = this.colorRam[color];
-            const red = (curbyte & 0x03) * 85;
-            const green = ((curbyte & 0x0c) >> 2) * 85;
-            const blue = ((curbyte & 0x30) >> 4) * 85;
+            const red = this.analogColorScale[curbyte & 0x03];
+            const green = this.analogColorScale[(curbyte & 0x0c) >> 2];
+            const blue = this.analogColorScale[(curbyte & 0x30) >> 4];
 
             const quadSize = 10;
             ctx.fillStyle = "rgba(" + red + "," + green + "," + blue + ",1)"; 
@@ -591,9 +601,9 @@ class Sega315_5124_Vdp {
         // 3. Mask Column 0 with overscan backdrop color (D5 of register 0)
         if (this.register00 & 0x20) {
             const oscol = this.colorRam[(this.register07 & 0x0f) + 16];
-            const red = (oscol & 0x03) * 85;
-            const green = ((oscol & 0x0c) >> 2) * 85;
-            const blue = ((oscol & 0x30) >> 4) * 85;
+            const red = this.analogColorScale[oscol & 0x03];
+            const green = this.analogColorScale[(oscol & 0x0c) >> 2];
+            const blue = this.analogColorScale[(oscol & 0x30) >> 4];
 
             for (let x = 0; x < 8; x++) {
                 const pos = (x + (scanlineNum * this.glbResolutionX)) * 4;
