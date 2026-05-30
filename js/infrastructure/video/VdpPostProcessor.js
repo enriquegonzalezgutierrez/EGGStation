@@ -2,11 +2,11 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: VDP Post-Processor Service (With Modern HD Shaders)
+ * Infrastructure Layer: VDP Post-Processor Service (With CRT-Royale Extreme Shaders)
  * 
  * Manages zero-allocation hardware upscalers (Scale2X, Scale4X), 
- * and compiles a native WebGL2 Modern Ultra-HD Vector Smoothing Shader.
- * Features advanced Edge-Directed Anti-Aliasing and Vibrance Color Grading (SRP).
+ * CRT Scanline emulators, and compiles a native WebGL2 CRT-Royale Shader.
+ * Features an Extreme high-contrast CRT preset for highly visible retro simulation (SRP).
  */
 
 class VdpPostProcessor {
@@ -55,7 +55,7 @@ class VdpPostProcessor {
             }
         `;
 
-        // 2. Fragment Shader: Modern HD Vector-Smoothing & Vibrance Color Grading
+        // 2. Fragment Shader: Ultra High-Fidelity CRT-Royale & Chromatic Aberration (Cranked Up Preset)
         const fsSource = `#version 300 es
             precision highp float;
             in vec2 vTexCoord;
@@ -64,65 +64,69 @@ class VdpPostProcessor {
             uniform sampler2D uTexture;
             uniform vec2 uResolution;
 
-            // Advanced Edge-Directed Anti-Aliasing (9-tap smart diagonal smoothing)
-            vec3 edgeSmooth(sampler2D tex, vec2 uv, vec2 res) {
-                vec2 texel = 1.0 / res;
-                
-                // Fetch surrounding 9-pixel grid
-                vec3 c  = texture(tex, uv).rgb;
-                vec3 tl = texture(tex, uv + vec2(-texel.x, -texel.y)).rgb;
-                vec3 tc = texture(tex, uv + vec2(0.0, -texel.y)).rgb;
-                vec3 tr = texture(tex, uv + vec2(texel.x, -texel.y)).rgb;
-                vec3 ml = texture(tex, uv + vec2(-texel.x, 0.0)).rgb;
-                vec3 mr = texture(tex, uv + vec2(texel.x, 0.0)).rgb;
-                vec3 bl = texture(tex, uv + vec2(-texel.x, texel.y)).rgb;
-                vec3 bc = texture(tex, uv + vec2(0.0, texel.y)).rgb;
-                vec3 br = texture(tex, uv + vec2(texel.x, texel.y)).rgb;
-
-                // Detect diagonal edge directions using color distances
-                float d_tl_br = distance(tl, br);
-                float d_tr_bl = distance(tr, bl);
-
-                vec3 result = c;
-                if (d_tl_br < d_tr_bl) {
-                    // Blend along Top-Left to Bottom-Right edge
-                    result = mix(result, (tl + br) * 0.5, 0.35);
-                } else if (d_tr_bl < d_tl_br) {
-                    // Blend along Top-Right to Bottom-Left edge
-                    result = mix(result, (tr + bl) * 0.5, 0.35);
-                }
-                
-                // Fine blend with cross neighbors for smooth anti-aliased vector boundaries
-                result = mix(result, (tc + bc + ml + mr) * 0.25, 0.20);
-                return result;
+            // Simulates physical screen curvature (pronounced bulbous barrel distortion)
+            vec2 curve(vec2 uv) {
+                uv = (uv - 0.5) * 2.0;
+                uv.x *= 1.10; // Compensate horizontal zoom for pronounced curvature
+                uv.x *= 1.0 + (uv.y * uv.y) * 0.09; // Curved horizontal distortion (Upgraded to 0.09)
+                uv.y *= 1.0 + (uv.x * uv.x) * 0.10; // Curved vertical distortion (Upgraded to 0.10)
+                uv = (uv / 2.0) + 0.5;
+                return uv;
             }
 
-            // High-fidelity Color Vibrance, Contrast, and Saturation boost
-            vec3 enrichColors(vec3 color) {
-                // 1. Boost standard Saturation (45% increase for modern cartoon pop)
-                float luma = dot(color, vec3(0.299, 0.587, 0.114));
-                color = mix(vec3(luma), color, 1.45);
-                
-                // 2. Apply warm Contrast S-Curve
-                color = smoothstep(0.0, 1.0, color);
-                
-                // 3. Dynamic Vibrance (boost less saturated pixels more, preserving skin tones)
-                float maxColor = max(color.r, max(color.g, color.b));
-                float minColor = min(color.r, min(color.g, color.b));
-                float lumaDiff = maxColor - minColor;
-                color = mix(color, color * (1.0 + lumaDiff * 0.3), 0.5);
+            // Decodes standard sRGB space to linear space (Gamma 2.2)
+            vec3 decodeGamma(vec3 c) {
+                return pow(c, vec3(2.2));
+            }
 
-                return color;
+            // Encodes linear space back to standard sRGB space (Gamma 1.0 / 2.2)
+            vec3 encodeGamma(vec3 c) {
+                return pow(c, vec3(1.0 / 2.2));
+            }
+
+            // Performs analog Chromatic Aberration (Microscopic RGB fringe splitting near edges)
+            vec3 textureAberration(sampler2D tex, vec2 uv) {
+                // Shift Red and Blue coordinates sutilmente on the horizontal axis
+                float r = texture(tex, uv - vec2(0.0018, 0.0)).r;
+                float g = texture(tex, uv).g;
+                float b = texture(tex, uv + vec2(0.0018, 0.0)).b;
+                return vec3(r, g, b);
             }
 
             void main() {
-                // Render perfectly flat, smooth, anti-aliased HD vectors
-                vec3 color = edgeSmooth(uTexture, vTexCoord, uResolution);
+                vec2 uv = curve(vTexCoord);
                 
-                // Apply vibrant, deep, modern color grading
-                color = enrichColors(color);
+                // Vignette edge clipping with soft, organic curved corners (CRT shadow mask frame)
+                vec2 vignette = smoothstep(vec2(0.0), vec2(0.025), uv) * smoothstep(vec2(0.0), vec2(0.025), 1.0 - uv);
+                float vignetteFactor = vignette.x * vignette.y;
 
-                fragColor = vec4(color, 1.0);
+                if (vignetteFactor == 0.0) {
+                    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                    return;
+                }
+
+                // Retrieve chromatic-split pixel color and decode to linear space
+                vec3 color = decodeGamma(textureAberration(uTexture, uv));
+                
+                // 1. CRT Scanline calculation (sine-wave brightness modulation - Upgraded to 38% depth)
+                float scanline = sin(uv.y * uResolution.y * 3.14159) * 0.38 + 0.62;
+                color *= scanline;
+                
+                // 2. Aperture Grille subpixel replication (Sony Trinitron phosphor triad look - Upgraded to 25% depth)
+                float phosphor = sin(uv.x * uResolution.x * 3.14159 * 2.0) * 0.25 + 0.75;
+                color *= phosphor;
+
+                // 3. Subtle bloom halation (makes colors pop sutilmente on dark backdrops - Upgraded to 15%)
+                vec3 bloom = vec3(0.0);
+                bloom += decodeGamma(texture(uTexture, uv + vec2(-0.004, 0.0)).rgb) * 0.15;
+                bloom += decodeGamma(texture(uTexture, uv + vec2(0.004, 0.0)).rgb) * 0.15;
+                color += bloom;
+
+                // Apply soft vignette shadow framing
+                color *= vignetteFactor;
+
+                // Re-encode color back to sRGB space
+                fragColor = vec4(encodeGamma(color), 1.0);
             }
         `;
 
@@ -228,7 +232,6 @@ class VdpPostProcessor {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.textureHandle);
         
-        // Fixed 240 lines texture upload limit to maintain 4:3 native ratio
         const activeLength = width * 240 * 4;
         const webglCompatibleBuffer = new Uint8Array(src.buffer, src.byteOffset, activeLength);
         
@@ -377,7 +380,7 @@ class VdpPostProcessor {
      * @param {number} postProcessMode - Selected filter.
      */
     blit(ctx, src, yScreenLines, postProcessMode) {
-        // Option 6: Execute high-performance GPU Fragment Shaders (Modern HD)
+        // Option 6: Execute high-performance GPU Fragment Shaders
         if (postProcessMode === 6 && this.webglInitialized) {
             const targetGLWidth = 512; // Double native for nice CRT resolution
             const targetGLHeight = 480; // Fixed 480 lines height on WebGL

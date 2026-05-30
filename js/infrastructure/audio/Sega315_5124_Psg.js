@@ -2,11 +2,12 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: Sega 315-5124 custom PSG Controller
+ * Infrastructure Layer: Sega 315-5124 custom PSG
  * 
- * Emulates the physical registers, volume attenuators, noise states, and snychronous 
- * write timeline of the PSG soundchip. Upgraded with hardware-accelerated Web Audio 
- * BiquadFilters and mathematically synthesized Acoustic Convolution Reverb (Haas & Cabinet).
+ * Emulates the custom sound generator chip integrated within the standard system.
+ * Optimized under Strategy B (Zero-Allocation) and integrated with dynamic
+ * real-time software DSP filters, including native hardware-accelerated 
+ * BiquadFilters and synthesized Acoustic Convolution Reverb.
  */
 
 class Sega315_5124_Psg {
@@ -50,6 +51,18 @@ class Sega315_5124_Psg {
         this.audioBufSize = 2048; // Expanded buffer for Strategy B stability
         this.multiplier = 0;
         this.audioEnabled = false;
+
+        // ========================================================================
+        // HIGH-PERFORMANCE DSP PRE-ALLOCATED BUFFER ARRAYS (Strategy B)
+        // ========================================================================
+        this.audioFilterMode = 0; // 0: Mono, 1: Low-Pass, 2: Haas Stereo, 3: Spatial Atmos
+        this.delayBuffer = new Float32Array(2048).fill(0.0); // Circular delay line
+        this.delayBufferWritePos = 0;
+        this.delayBufferReadPos = 0;
+        this.delaySamplesLength = 882; // 20ms delay at 44.1kHz
+        
+        this.smoothedValue = 0.0; // Filter accumulator
+        this.sampleOut = 0.0;
 
         // Pre-allocated loop variables to guarantee zero-heap-allocations on execution (Strategy B)
         this.runningTotal = 0.0;
@@ -110,9 +123,10 @@ class Sega315_5124_Psg {
     /**
      * Dynamic routing changer. Adjusts parameters of native C++ Web Audio nodes 
      * on the fly, avoiding structural re-connections and pop noises.
-     * @param {number} mode - Selected filter (0: Dry Mono, 1: Arcade Warmth Low-Pass, 2: Lush 3D Stereo)
+     * @param {number} mode - Selected filter (0: Dry Mono, 1: Low-pass Cabinet, 2: Haas Stereo, 3: Spatial Atmos)
      */
     setAudioFilter(mode) {
+        this.audioFilterMode = mode;
         if (!this.audioInitialized) return;
 
         switch (mode) {
@@ -120,12 +134,21 @@ class Sega315_5124_Psg {
                 this.biquadFilterNode.frequency.value = 3500; // Cut off frequencies above 3.5kHz
                 this.dryGain.gain.value = 1.0;
                 this.wetGain.gain.value = 0.0; // Mute convolution
+                this.delaySamplesLength = 0;   // Collapse to mono
                 break;
                 
-            case 2: // Lush 3D Stereo (Convolver + Low-Pass)
+            case 2: // Lush 3D Stereo (Haas spatializer)
                 this.biquadFilterNode.frequency.value = 5500; // Smooth out high-end sutilmente
-                this.dryGain.gain.value = 0.65; // Mix clean signal
-                this.wetGain.gain.value = 0.75; // Mix reverberated spacious signal
+                this.dryGain.gain.value = 1.0;
+                this.wetGain.gain.value = 0.0; // Mute convolution
+                this.delaySamplesLength = Math.floor(0.02 * this.context.sampleRate); // 20ms delay
+                break;
+
+            case 3: // 2026 Spatial Atmos (Atmos Convolution + Haas Stereo!)
+                this.biquadFilterNode.frequency.value = 6500; // Bright but smooth
+                this.dryGain.gain.value = 0.65; // Mix clean stereo signal
+                this.wetGain.gain.value = 0.80; // Mix physical room reflections
+                this.delaySamplesLength = Math.floor(0.025 * this.context.sampleRate); // 25ms wide Haas delay
                 break;
 
             case 0: // Original Mono (Sharp & Dry)
@@ -133,6 +156,7 @@ class Sega315_5124_Psg {
                 this.biquadFilterNode.frequency.value = 20000; // Fully open (bypassed)
                 this.dryGain.gain.value = 1.0;
                 this.wetGain.gain.value = 0.0; // Mute convolution
+                this.delaySamplesLength = 0;   // Collapse to mono
                 break;
         }
     }
@@ -263,9 +287,28 @@ class Sega315_5124_Psg {
 
             this.runningTotal /= this.multiplier;
 
-            // Output generated mono sample stream to left/right arrays
-            dataL[this.sampleIndex] = this.runningTotal;
-            dataR[this.sampleIndex] = this.runningTotal;
+            this.sampleOut = this.runningTotal;
+
+            // Apply Arcade Low-Pass filter (cures square wave harshness)
+            if (this.audioFilterMode === 1) {
+                this.smoothedValue += (this.runningTotal - this.smoothedValue) * 0.15; // IIR Filter
+                this.sampleOut = this.smoothedValue;
+            }
+
+            // Apply dynamic 3D Stereo spatializer (Haas delay line)
+            // Works for both standard Lush Stereo (mode 2) and Spatial Atmos (mode 3)
+            if ((this.audioFilterMode === 2 || this.audioFilterMode === 3) && this.delaySamplesLength > 0) {
+                this.delayBuffer[this.delayBufferWritePos] = this.sampleOut;
+                this.delayBufferReadPos = (this.delayBufferWritePos - this.delaySamplesLength + 2048) % 2048;
+
+                dataL[this.sampleIndex] = this.sampleOut;
+                dataR[this.sampleIndex] = this.delayBuffer[this.delayBufferReadPos];
+                
+                this.delayBufferWritePos = (this.delayBufferWritePos + 1) % 2048;
+            } else {
+                dataL[this.sampleIndex] = this.sampleOut;
+                dataR[this.sampleIndex] = this.sampleOut;
+            }
         }
 
         if (this.eventsQueue.length > 0) {
