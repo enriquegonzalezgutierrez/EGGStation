@@ -6,10 +6,17 @@
  * 
  * This class encapsulates all Z80 CPU instructions that modify the Program Counter (PC),
  * controlling branching, loops, subroutine calls, software restarts, and interrupt returns.
- * Refactored to accept a clean 'opcodeRegistry' object instead of a long parameter list.
+ * The logic follows the Command Pattern, mapping branches onto the CPU registers (SRP).
  */
 
 class Z80ProgramFlow {
+    /**
+     * Registers all Program Flow opcodes onto the provided CPU opcode maps.
+     * @param {ZilogZ80} cpu - The CPU Orchestrator instance.
+     * @param {Z80Registers} registers - The CPU Registers state object.
+     * @param {Z80Alu} alu - The Arithmetic Logic Unit for flag/math processing.
+     * @param {Object} registry - The categorized opcode mapping arrays.
+     */
     static register(cpu, registers, alu, registry) {
 
         // ========================================================================
@@ -23,7 +30,7 @@ class Z80ProgramFlow {
             cpu.incPc(2);
             if (registers.b !== 0) {
                 cpu.jumpRel(jq); 
-                cpu.additionalCycles = 5;
+                cpu.additionalCycles = 5; // Extra T-state penalty when branching occurs
             } 
         }, "DJNZ %d", 8, 1, false];
 
@@ -32,7 +39,7 @@ class Z80ProgramFlow {
         registry.standard[0x20] = [() => { 
             const jq = cpu.theMMU.readAddr(registers.pc + 1); 
             cpu.incPc(2); 
-            if (!(registers.f & z80flags.FLAG_Z)) {
+            if (!(registers.f & Z80Flags.FLAG_Z)) {
                 cpu.additionalCycles = 5;
                 cpu.jumpRel(jq); 
             }
@@ -41,7 +48,7 @@ class Z80ProgramFlow {
         registry.standard[0x28] = [() => { 
             const jq = cpu.theMMU.readAddr(registers.pc + 1); 
             cpu.incPc(2); 
-            if (registers.f & z80flags.FLAG_Z) {
+            if (registers.f & Z80Flags.FLAG_Z) {
                 cpu.additionalCycles = 5;
                 cpu.jumpRel(jq); 
             }
@@ -50,7 +57,7 @@ class Z80ProgramFlow {
         registry.standard[0x30] = [() => { 
             const jq = cpu.theMMU.readAddr(registers.pc + 1); 
             cpu.incPc(2); 
-            if (!(registers.f & z80flags.FLAG_C)) {
+            if (!(registers.f & Z80Flags.FLAG_C)) {
                 cpu.additionalCycles = 5;
                 cpu.jumpRel(jq); 
             }
@@ -59,7 +66,7 @@ class Z80ProgramFlow {
         registry.standard[0x38] = [() => { 
             const jq = cpu.theMMU.readAddr(registers.pc + 1); 
             cpu.incPc(2); 
-            if (registers.f & z80flags.FLAG_C) {
+            if (registers.f & Z80Flags.FLAG_C) {
                 cpu.additionalCycles = 5;
                 cpu.jumpRel(jq); 
             }
@@ -67,7 +74,7 @@ class Z80ProgramFlow {
 
         // --- Returns ---
         registry.standard[0xc0] = [() => {
-            if (!(registers.f & z80flags.FLAG_Z)) {
+            if (!(registers.f & Z80Flags.FLAG_Z)) {
                 registers.pc = cpu.popWord();
                 cpu.additionalCycles = 6;
             } else {
@@ -76,7 +83,7 @@ class Z80ProgramFlow {
         }, "RET NZ", 5, 0, false];
 
         registry.standard[0xc8] = [() => {
-            if (registers.f & z80flags.FLAG_Z) {
+            if (registers.f & Z80Flags.FLAG_Z) {
                 registers.pc = cpu.popWord();
                 cpu.additionalCycles = 6;
             } else {
@@ -89,7 +96,7 @@ class Z80ProgramFlow {
         }, "RET", 10, 0, false];
 
         registry.standard[0xd0] = [() => {
-            if (!(registers.f & z80flags.FLAG_C)) {
+            if (!(registers.f & Z80Flags.FLAG_C)) {
                 registers.pc = cpu.popWord();
                 cpu.additionalCycles = 6;
             } else {
@@ -98,7 +105,7 @@ class Z80ProgramFlow {
         }, "RET NC", 5, 0, false];
 
         registry.standard[0xd8] = [() => {
-            if (registers.f & z80flags.FLAG_C) {
+            if (registers.f & Z80Flags.FLAG_C) {
                 registers.pc = cpu.popWord();
                 cpu.additionalCycles = 6;
             } else {
@@ -107,7 +114,7 @@ class Z80ProgramFlow {
         }, "RET C", 5, 0, false];
 
         registry.standard[0xe0] = [() => {
-            if (!(registers.f & z80flags.FLAG_PV)) {
+            if (!(registers.f & Z80Flags.FLAG_PV)) {
                 registers.pc = cpu.popWord();
                 cpu.additionalCycles = 6;
             } else {
@@ -116,7 +123,7 @@ class Z80ProgramFlow {
         }, "RET PO", 5, 0, false];
 
         registry.standard[0xe8] = [() => {
-            if (registers.f & z80flags.FLAG_PV) {
+            if (registers.f & Z80Flags.FLAG_PV) {
                 registers.pc = cpu.popWord();
                 cpu.additionalCycles = 6;
             } else {
@@ -125,7 +132,7 @@ class Z80ProgramFlow {
         }, "RET PE", 5, 0, false];
 
         registry.standard[0xf0] = [() => {
-            if (!(registers.f & z80flags.FLAG_S)) {
+            if (!(registers.f & Z80Flags.FLAG_S)) {
                 registers.pc = cpu.popWord();
                 cpu.additionalCycles = 6;
             } else {
@@ -134,7 +141,7 @@ class Z80ProgramFlow {
         }, "RET P", 5, 0, false];
 
         registry.standard[0xf8] = [() => {
-            if (registers.f & z80flags.FLAG_S) {
+            if (registers.f & Z80Flags.FLAG_S) {
                 registers.pc = cpu.popWord();
                 cpu.additionalCycles = 6;
             } else {
@@ -146,7 +153,7 @@ class Z80ProgramFlow {
         registry.standard[0xc2] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
-            if (!(registers.f & z80flags.FLAG_Z)) {
+            if (!(registers.f & Z80Flags.FLAG_Z)) {
                 registers.pc = (m2 << 8) | m1;
             } else {
                 cpu.incPc(3);
@@ -162,7 +169,7 @@ class Z80ProgramFlow {
         registry.standard[0xca] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
-            if ((registers.f & z80flags.FLAG_Z) !== 0) {
+            if ((registers.f & Z80Flags.FLAG_Z) !== 0) {
                 registers.pc = (m2 << 8) | m1;
             } else {
                 cpu.incPc(3);
@@ -172,7 +179,7 @@ class Z80ProgramFlow {
         registry.standard[0xd2] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
-            if (!(registers.f & z80flags.FLAG_C)) {
+            if (!(registers.f & Z80Flags.FLAG_C)) {
                 registers.pc = (m2 << 8) | m1;
             } else {
                 cpu.incPc(3);
@@ -182,7 +189,7 @@ class Z80ProgramFlow {
         registry.standard[0xda] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
-            if (registers.f & z80flags.FLAG_C) {
+            if (registers.f & Z80Flags.FLAG_C) {
                 registers.pc = (m2 << 8) | m1;
             } else {
                 cpu.incPc(3);
@@ -192,7 +199,7 @@ class Z80ProgramFlow {
         registry.standard[0xe2] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
-            if (!(registers.f & z80flags.FLAG_PV)) {
+            if (!(registers.f & Z80Flags.FLAG_PV)) {
                 registers.pc = (m2 << 8) | m1;
             } else {
                 cpu.incPc(3);
@@ -202,7 +209,7 @@ class Z80ProgramFlow {
         registry.standard[0xea] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
-            if (registers.f & z80flags.FLAG_PV) {
+            if (registers.f & Z80Flags.FLAG_PV) {
                 registers.pc = (m2 << 8) | m1;
             } else {
                 cpu.incPc(3);
@@ -212,7 +219,7 @@ class Z80ProgramFlow {
         registry.standard[0xf2] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
-            if ((registers.f & z80flags.FLAG_S) === 0) {
+            if ((registers.f & Z80Flags.FLAG_S) === 0) {
                 registers.pc = (m2 << 8) | m1;
             } else {
                 cpu.incPc(3);
@@ -222,7 +229,7 @@ class Z80ProgramFlow {
         registry.standard[0xfa] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
-            if (registers.f & z80flags.FLAG_S) {
+            if (registers.f & Z80Flags.FLAG_S) {
                 registers.pc = (m2 << 8) | m1;
             } else {
                 cpu.incPc(3);
@@ -239,7 +246,7 @@ class Z80ProgramFlow {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
             const newaddr = m1 | (m2 << 8);
-            if (!(registers.f & z80flags.FLAG_Z)) {
+            if (!(registers.f & Z80Flags.FLAG_Z)) {
                 cpu.pushWord(registers.pc + 3);
                 registers.pc = newaddr;
                 cpu.additionalCycles = 7;
@@ -252,7 +259,7 @@ class Z80ProgramFlow {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
             const newaddr = m1 | (m2 << 8);
-            if (registers.f & z80flags.FLAG_Z) {
+            if (registers.f & Z80Flags.FLAG_Z) {
                 cpu.pushWord(registers.pc + 3);
                 registers.pc = newaddr;
                 cpu.additionalCycles = 7;
@@ -273,7 +280,7 @@ class Z80ProgramFlow {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
             const newaddr = m1 | (m2 << 8);
-            if (!(registers.f & z80flags.FLAG_C)) {
+            if (!(registers.f & Z80Flags.FLAG_C)) {
                 cpu.pushWord(registers.pc + 3);
                 registers.pc = newaddr;
                 cpu.additionalCycles = 7;
@@ -286,7 +293,7 @@ class Z80ProgramFlow {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
             const newaddr = m1 | (m2 << 8);
-            if (registers.f & z80flags.FLAG_C) {
+            if (registers.f & Z80Flags.FLAG_C) {
                 cpu.pushWord(registers.pc + 3);
                 registers.pc = newaddr;
                 cpu.additionalCycles = 7;
@@ -299,7 +306,7 @@ class Z80ProgramFlow {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
             const newaddr = m1 | (m2 << 8);
-            if (!(registers.f & z80flags.FLAG_PV)) {
+            if (!(registers.f & Z80Flags.FLAG_PV)) {
                 cpu.pushWord(registers.pc + 3);
                 registers.pc = newaddr;
                 cpu.additionalCycles = 7;
@@ -312,7 +319,7 @@ class Z80ProgramFlow {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
             const newaddr = m1 | (m2 << 8);
-            if (registers.f & z80flags.FLAG_PV) {
+            if (registers.f & Z80Flags.FLAG_PV) {
                 cpu.pushWord(registers.pc + 3);
                 registers.pc = newaddr;
                 cpu.additionalCycles = 7;
@@ -325,7 +332,7 @@ class Z80ProgramFlow {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
             const newaddr = m1 | (m2 << 8);
-            if (!(registers.f & z80flags.FLAG_S)) {
+            if (!(registers.f & Z80Flags.FLAG_S)) {
                 cpu.pushWord(registers.pc + 3);
                 registers.pc = newaddr;
                 cpu.additionalCycles = 7;
@@ -338,7 +345,7 @@ class Z80ProgramFlow {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
             const newaddr = m1 | (m2 << 8);
-            if (registers.f & z80flags.FLAG_S) {
+            if (registers.f & Z80Flags.FLAG_S) {
                 cpu.pushWord(registers.pc + 3);
                 registers.pc = newaddr;
                 cpu.additionalCycles = 7;

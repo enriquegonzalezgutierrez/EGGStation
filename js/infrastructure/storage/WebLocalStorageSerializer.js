@@ -84,10 +84,10 @@ class WebLocalStorageSerializer {
         localStorage.setItem('psginternalClock', JSON.stringify(psg.internalClock));
         localStorage.setItem('psginternalClockPos', JSON.stringify(psg.internalClockPos));
 
-        // Active frame screenshot payload
+        // Active frame screenshot payload for UI previews
         localStorage.setItem('savestateScreenshot', JSON.stringify(vdp.glbFrameBuffer));
 
-        console.log("LocalStorageSerializer::State stored for [" + cname + "]");
+        console.log(`LocalStorageSerializer::State stored for [${cname}]`);
     }
 
     /**
@@ -165,10 +165,7 @@ class WebLocalStorageSerializer {
         psg.internalClock = JSON.parse(localStorage.getItem('psginternalClock'));
         psg.internalClockPos = JSON.parse(localStorage.getItem('psginternalClockPos'));
 
-        console.log("LocalStorageSerializer::State reconstituted for [" + cname + "]");
+        console.log(`LocalStorageSerializer::State reconstituted for [${cname}]`);
         return 0;
     }
 }
-
-// Global legacy alias to prevent breaking unrefactored application components
-const serializer = WebLocalStorageSerializer;

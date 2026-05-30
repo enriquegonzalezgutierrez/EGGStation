@@ -5,16 +5,28 @@
  * Domain Layer: Z80 Shift and Rotate Instruction Registry
  * 
  * This class encapsulates all Z80 CPU instructions designed for bit shifts and 
- * rotations (SLA, SRL, SRA, RL, RR, RLC, RRC, and BCD-related RLD/RRD). 
- * Refactored to accept a clean 'opcodeRegistry' object instead of a long parameter list.
+ * rotations (SLA, SRL, SRA, SLL, RL, RR, RLC, RRC, and BCD-related RLD/RRD). 
+ * All internal shift evaluations are delegated directly to the Z80Alu (SRP).
  */
 
 class Z80ShiftRotate {
+    /**
+     * Registers all Shift and Rotate opcodes onto the provided CPU opcode maps.
+     * @param {ZilogZ80} cpu - The CPU Orchestrator instance.
+     * @param {Z80Registers} registers - The CPU Registers state object.
+     * @param {Z80Alu} alu - The Arithmetic Logic Unit for flag/math processing.
+     * @param {Object} registry - The categorized opcode mapping arrays.
+     */
     static register(cpu, registers, alu, registry) {
 
-        // Helper for displacement address computation used in index-relative addressing (IX+d, IY+d)
+        /**
+         * Helper for displacement address computation used in index-relative 
+         * addressing (e.g., SLA (IX+d)).
+         * @param {number} indexValue - Base 16-bit index (IX or IY).
+         * @returns {number} The absolute 16-bit memory offset.
+         */
         const getDisplacement = (indexValue) => {
-            const d = cpu.theMMU.readAddr(cpu.registers.pc + 2);
+            const d = cpu.theMMU.readAddr(registers.pc + 2);
             const incr = (d & 0x80) === 0x80 ? -0x80 + (d & 0x7F) : d;
             return (indexValue + incr) & 0xffff;
         };
@@ -299,34 +311,35 @@ class Z80ShiftRotate {
 
     }
 
-    // Helper functions for BCD Rotate Operations
+    /**
+     * Executes the RLD (Rotate Left Decimal) extended instruction.
+     * @param {ZilogZ80} cpu - CPU reference.
+     * @param {Z80Registers} registers - Registers.
+     * @param {Z80Alu} alu - Alu reference for parity check.
+     */
     static executeRld(cpu, registers, alu) {
         const address = registers.hl;
         const byte = cpu.theMMU.readAddr(address);
 
-        const result = (registers.a & 0xf0) | ((byte >> 4) & 0x0F);
-        cpu.theMMU.writeAddr(address, ((byte << 4) & 0xF0) | (registers.a & 0x0F));
+        const result = (registers.a & 0xf0) | ((byte >> 4) & 0x0f);
+        cpu.theMMU.writeAddr(address, ((byte << 4) & 0xf0) | (registers.a & 0x0f));
         registers.a = result;
 
-        registers.f &= 0x01;
+        registers.f &= 0x01; // Preserve C flag
 
-        if (alu.parityLookUp[registers.a]) {
-            registers.f |= z80flags.FLAG_PV;
-        }
-        if (registers.a & 0x08) {
-            registers.f |= z80flags.FLAG_F3;
-        }
-        if (registers.a & 0x20) {
-            registers.f |= z80flags.FLAG_F5;
-        }
-        if (registers.a === 0) {
-            registers.f |= z80flags.FLAG_Z;
-        }
-        if (registers.a & 0x80) {
-            registers.f |= z80flags.FLAG_S;
-        }
+        if (alu.parityLookUp[registers.a]) registers.f |= Z80Flags.FLAG_PV;
+        if (registers.a & 0x08) registers.f |= Z80Flags.FLAG_F3;
+        if (registers.a & 0x20) registers.f |= Z80Flags.FLAG_F5;
+        if (registers.a === 0) registers.f |= Z80Flags.FLAG_Z;
+        if (registers.a & 0x80) registers.f |= Z80Flags.FLAG_S;
     }
 
+    /**
+     * Executes the RRD (Rotate Right Decimal) extended instruction.
+     * @param {ZilogZ80} cpu - CPU reference.
+     * @param {Z80Registers} registers - Registers.
+     * @param {Z80Alu} alu - Alu reference for parity check.
+     */
     static executeRrd(cpu, registers, alu) {
         const address = registers.hl;
         let byte = cpu.theMMU.readAddr(address);
@@ -340,22 +353,12 @@ class Z80ShiftRotate {
 
         cpu.theMMU.writeAddr(address, byte);
 
-        registers.f &= 0x01;
+        registers.f &= 0x01; // Preserve C flag
 
-        if (alu.parityLookUp[registers.a]) {
-            registers.f |= z80flags.FLAG_PV;
-        }
-        if (registers.a & 0x08) {
-            registers.f |= z80flags.FLAG_F3;
-        }
-        if (registers.a & 0x20) {
-            registers.f |= z80flags.FLAG_F5;
-        }
-        if (registers.a === 0) {
-            registers.f |= z80flags.FLAG_Z;
-        }
-        if (registers.a & 0x80) {
-            registers.f |= z80flags.FLAG_S;
-        }
+        if (alu.parityLookUp[registers.a]) registers.f |= Z80Flags.FLAG_PV;
+        if (registers.a & 0x08) registers.f |= Z80Flags.FLAG_F3;
+        if (registers.a & 0x20) registers.f |= Z80Flags.FLAG_F5;
+        if (registers.a === 0) registers.f |= Z80Flags.FLAG_Z;
+        if (registers.a & 0x80) registers.f |= Z80Flags.FLAG_S;
     }
 }

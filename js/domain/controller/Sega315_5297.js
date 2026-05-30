@@ -2,47 +2,71 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: Sega315_5297
+ * Domain Layer: Sega 315-5297 Input/Output Chip
  * 
- * Emulates the physical Sega 315-5297 input/output controller chip.
- * It coordinates the DB-9 input pin active-low states, which drop to 0 volts (ground)
- * when a directional key or button is pressed, mirroring the real hardware behavior.
+ * Emulates the physical Sega 315-5297 controller interface chip.
+ * Coordinates pin-out states for standard DB-9 Gamepad ports using native 
+ * active-low digital logic (low-voltage Ground reads as 0 when pressed).
  */
 
-// Hardware bitmasks representing each pin on Controller Port 1 and Port 2
-const SEGA_IO_PIN_MASK = {
-    PORT_1_UP:       0x01, // Bit 0: Up directional switch (Port 1)
-    PORT_1_DOWN:     0x02, // Bit 1: Down directional switch (Port 1)
-    PORT_1_LEFT:     0x04, // Bit 2: Left directional switch (Port 1)
-    PORT_1_RIGHT:    0x08, // Bit 3: Right directional switch (Port 1)
-    PORT_1_BUTTON_1: 0x10, // Bit 4: Button 1 / Fire 1 (Port 1 - TL line)
-    PORT_1_BUTTON_2: 0x20, // Bit 5: Button 2 / Fire 2 (Port 1 - TR line)
-    PORT_2_UP:       0x40, // Bit 6: Up directional switch (Port 2)
-    PORT_2_DOWN:     0x80  // Bit 7: Down directional switch (Port 2)
+// General Bitmasks mapping DB-9 lines onto SMS Register Ports 0xDC and 0xDD
+const SegaIOPinMask = {
+    // Port Register 0xDC Bits
+    PORT_1_UP:       0x01, // Bit 0: Gamepad 1 Up Direction
+    PORT_1_DOWN:     0x02, // Bit 1: Gamepad 1 Down Direction
+    PORT_1_LEFT:     0x04, // Bit 2: Gamepad 1 Left Direction
+    PORT_1_RIGHT:    0x08, // Bit 3: Gamepad 1 Right Direction
+    PORT_1_BUTTON_1: 0x10, // Bit 4: Gamepad 1 Button 1 (TL line)
+    PORT_1_BUTTON_2: 0x20, // Bit 5: Gamepad 1 Button 2 (TR line)
+    PORT_2_UP:       0x40, // Bit 6: Gamepad 2 Up Direction
+    PORT_2_DOWN:     0x80, // Bit 7: Gamepad 2 Down Direction
+    
+    // Port Register 0xDD Bits
+    PORT_2_LEFT:     0x01, // Bit 0: Gamepad 2 Left Direction
+    PORT_2_RIGHT:    0x02, // Bit 1: Gamepad 2 Right Direction
+    PORT_2_BUTTON_1: 0x04, // Bit 2: Gamepad 2 Button 1
+    PORT_2_BUTTON_2: 0x08, // Bit 3: Gamepad 2 Button 2
+    RESET_BUTTON:    0x10, // Bit 4: Console Soft Reset button
+    EXPANSION_SLOT:  0x20, // Bit 5: Expansion slot detection
+    PORT_A_TR:       0x40, // Bit 6: Port A TR state (output status)
+    PORT_B_TR:       0x80  // Bit 7: Port B TR state (output status)
 };
 
 class Sega315_5297 {
     constructor() {
-        // Internal state registers default to 0xFF (VCC pull-up logic, inactive state)
+        // Registers default to 0xFF (VCC pull-up logic state: all inputs open)
         this.portRegisterDC = 0xff;
         this.portRegisterDD = 0xff; 
     }
 
     /**
-     * Toggles the low-voltage ground state of a DB-9 register pin.
-     * @param {string} pinName - Name of the pin defined in SEGA_IO_PIN_MASK.
-     * @param {boolean} isPressed - True if active-low state is triggered (0V/Ground).
+     * Toggles the Ground (low-level 0) state of a Port 0xDC register pin.
+     * @param {string} pinName - Name of the pin defined in SegaIOPinMask.
+     * @param {boolean} isPressed - True if active-low state is triggered.
      */
-    writePinState(pinName, isPressed) {
+    writePinStateDC(pinName, isPressed) {
         if (isPressed) {
-            this.portRegisterDC &= ~SEGA_IO_PIN_MASK[pinName]; // Drop to low-level (0)
+            this.portRegisterDC &= ~SegaIOPinMask[pinName]; // Pull-down to 0 (pressed)
         } else {
-            this.portRegisterDC |= SEGA_IO_PIN_MASK[pinName];  // Return to pull-up (1)
+            this.portRegisterDC |= SegaIOPinMask[pinName];  // Pull-up to 1 (unpressed)
         }
     }
 
     /**
-     * Reads register 0xDC (exposes Port 1 buttons and partial Port 2 directionals).
+     * Toggles the Ground (low-level 0) state of a Port 0xDD register pin.
+     * @param {string} pinName - Name of the pin defined in SegaIOPinMask.
+     * @param {boolean} isPressed - True if active-low state is triggered.
+     */
+    writePinStateDD(pinName, isPressed) {
+        if (isPressed) {
+            this.portRegisterDD &= ~SegaIOPinMask[pinName]; // Pull-down to 0
+        } else {
+            this.portRegisterDD |= SegaIOPinMask[pinName];  // Pull-up to 1
+        }
+    }
+
+    /**
+     * Reads register 0xDC.
      * @returns {number} 8-bit state.
      */
     readRegisterDC() {
@@ -50,7 +74,7 @@ class Sega315_5297 {
     }
 
     /**
-     * Reads register 0xDD (exposes Port 2 buttons and system configuration switches).
+     * Reads register 0xDD.
      * @returns {number} 8-bit state.
      */
     readRegisterDD() {
@@ -58,18 +82,34 @@ class Sega315_5297 {
     }
 
     // ========================================================================
-    // SEGA GAMEPAD DELEGATE INPUT INTERFACE
+    // GAMEPAD 1 PIN CONVENIENCE DELEGATOR METHODS
     // ========================================================================
-    pressButton1()   { this.writePinState('PORT_1_BUTTON_1', true); }
-    depressButton1() { this.writePinState('PORT_1_BUTTON_1', false); }
-    pressButton2()   { this.writePinState('PORT_1_BUTTON_2', true); }
-    depressButton2() { this.writePinState('PORT_1_BUTTON_2', false); }
-    pressUp()        { this.writePinState('PORT_1_UP', true); }
-    depressUp()      { this.writePinState('PORT_1_UP', false); }
-    pressDown()      { this.writePinState('PORT_1_DOWN', true); }
-    depressDown()    { this.writePinState('PORT_1_DOWN', false); }
-    pressLeft()      { this.writePinState('PORT_1_LEFT', true); }
-    depressLeft()    { this.writePinState('PORT_1_LEFT', false); }
-    pressRight()     { this.writePinState('PORT_1_RIGHT', true); }
-    depressRight()   { this.writePinState('PORT_1_RIGHT', false); }
+    pressButton1()   { this.writePinStateDC('PORT_1_BUTTON_1', true); }
+    depressButton1() { this.writePinStateDC('PORT_1_BUTTON_1', false); }
+    pressButton2()   { this.writePinStateDC('PORT_1_BUTTON_2', true); }
+    depressButton2() { this.writePinStateDC('PORT_1_BUTTON_2', false); }
+    pressUp()        { this.writePinStateDC('PORT_1_UP', true); }
+    depressUp()      { this.writePinStateDC('PORT_1_UP', false); }
+    pressDown()      { this.writePinStateDC('PORT_1_DOWN', true); }
+    depressDown()    { this.writePinStateDC('PORT_1_DOWN', false); }
+    pressLeft()      { this.writePinStateDC('PORT_1_LEFT', true); }
+    depressLeft()    { this.writePinStateDC('PORT_1_LEFT', false); }
+    pressRight()     { this.writePinStateDC('PORT_1_RIGHT', true); }
+    depressRight()   { this.writePinStateDC('PORT_1_RIGHT', false); }
+
+    // ========================================================================
+    // GAMEPAD 2 PIN CONVENIENCE DELEGATOR METHODS
+    // ========================================================================
+    pressButton1Player2()   { this.writePinStateDD('PORT_2_BUTTON_1', true); }
+    depressButton1Player2() { this.writePinStateDD('PORT_2_BUTTON_1', false); }
+    pressButton2Player2()   { this.writePinStateDD('PORT_2_BUTTON_2', true); }
+    depressButton2Player2() { this.writePinStateDD('PORT_2_BUTTON_2', false); }
+    pressUpPlayer2()        { this.writePinStateDC('PORT_2_UP', true); }
+    depressUpPlayer2()      { this.writePinStateDC('PORT_2_UP', false); }
+    pressDownPlayer2()      { this.writePinStateDC('PORT_2_DOWN', true); }
+    depressDownPlayer2()    { this.writePinStateDC('PORT_2_DOWN', false); }
+    pressLeftPlayer2()      { this.writePinStateDD('PORT_2_LEFT', true); }
+    depressLeftPlayer2()    { this.writePinStateDD('PORT_2_LEFT', false); }
+    pressRightPlayer2()     { this.writePinStateDD('PORT_2_RIGHT', true); }
+    depressRightPlayer2()   { this.writePinStateDD('PORT_2_RIGHT', false); }
 }

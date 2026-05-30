@@ -5,16 +5,29 @@
  * Domain Layer: Z80 Data Transfer Instruction Registry
  * 
  * This class encapsulates all Z80 CPU instructions designed for moving and copying 
- * data (LD, PUSH, POP, EX, EXX). Refactored to accept a clean 'opcodeRegistry' object
- * instead of a long parameter list of arrays.
+ * data (LD, PUSH, POP, EX, EXX). We use the Command Pattern to map closures
+ * dynamically onto the CPU's opcode arrays during instantiation.
  */
 
 class Z80DataTransfer {
+    /**
+     * Registers all Data Transfer opcodes onto the provided CPU opcode maps.
+     * @param {ZilogZ80} cpu - The CPU Orchestrator instance.
+     * @param {Z80Registers} registers - The CPU Registers state object.
+     * @param {Z80Alu} alu - The Arithmetic Logic Unit for flag/math processing.
+     * @param {Object} registry - The categorized opcode mapping arrays.
+     */
     static register(cpu, registers, alu, registry) {
 
-        // Helper for displacement address computation used in index-relative addressing (IX+d, IY+d)
+        /**
+         * Helper for displacement address computation used in index-relative 
+         * addressing (e.g., LD A,(IX+d)).
+         * @param {number} indexValue - Base 16-bit index (IX or IY).
+         * @returns {number} The absolute 16-bit memory offset.
+         */
         const getDisplacement = (indexValue) => {
-            const d = cpu.theMMU.readAddr(cpu.registers.pc + 2);
+            const d = cpu.theMMU.readAddr(registers.pc + 2);
+            // Sign-extend the 8-bit displacement value (-128 to 127)
             const incr = (d & 0x80) === 0x80 ? -0x80 + (d & 0x7F) : d;
             return (indexValue + incr) & 0xffff;
         };
@@ -68,7 +81,9 @@ class Z80DataTransfer {
             const m1 = cpu.theMMU.readAddr(registers.pc + 1);
             const m2 = cpu.theMMU.readAddr(registers.pc + 2);
             const addr = (m2 << 8) | m1;
-            registers.hl = cpu.theMMU.readAddr16bit(addr);
+            const word = cpu.theMMU.readAddr16bit(addr);
+            registers.h = (word >> 8) & 0xff;
+            registers.l = word & 0xff;
             cpu.incPc(3); 
         }, "LD HL,(%d)", 16, 2, false];
 
@@ -191,9 +206,9 @@ class Z80DataTransfer {
         registry.standard[0xf5] = [() => { cpu.pushWord(registers.af); cpu.incPc(1); },"PUSH AF", 11, 0, false];
 
         // --- Exchange Registers Group ---
-        registry.standard[0x08] = [() => { registers.exchangeAF(); cpu.incPc(1); }, "XCHG AF,AF'", 4, 0, false];
+        registry.standard[0x08] = [() => { registers.exchangeAF(); cpu.incPc(1); }, "EX AF,AF'", 4, 0, false];
         registry.standard[0xd9] = [() => { registers.exchangeBC_DE_HL(); cpu.incPc(1); }, "EXX", 4, 0, false];
-        registry.standard[0xeb] = [() => { registers.exchangeDE_HL(); cpu.incPc(1); }, "XCHG DE,HL", 4, 0, false];
+        registry.standard[0xeb] = [() => { registers.exchangeDE_HL(); cpu.incPc(1); }, "EX DE,HL", 4, 0, false];
         
         registry.standard[0xe3] = [() => { 
             let tmp = cpu.theMMU.readAddr(registers.sp);
@@ -205,7 +220,7 @@ class Z80DataTransfer {
             registers.h = tmp;
 
             cpu.incPc(1); 
-        },"XCHG (SP),HL", 19, 0, false];
+        },"EX (SP),HL", 19, 0, false];
 
 
         // ========================================================================
@@ -224,7 +239,9 @@ class Z80DataTransfer {
         registry.extended[0x4b] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 2);
             const m2 = cpu.theMMU.readAddr(registers.pc + 3);
-            registers.bc = cpu.theMMU.readAddr16bit((m2 << 8) | m1);
+            const word = cpu.theMMU.readAddr16bit((m2 << 8) | m1);
+            registers.b = (word >> 8) & 0xff;
+            registers.c = word & 0xff;
             cpu.incPc(4);
         }, "LD BC,(%d)", 20, 2, false];
 
@@ -240,7 +257,9 @@ class Z80DataTransfer {
         registry.extended[0x5b] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 2);
             const m2 = cpu.theMMU.readAddr(registers.pc + 3);
-            registers.de = cpu.theMMU.readAddr16bit((m2 << 8) | m1);
+            const word = cpu.theMMU.readAddr16bit((m2 << 8) | m1);
+            registers.d = (word >> 8) & 0xff;
+            registers.e = word & 0xff;
             cpu.incPc(4);
         }, "LD DE,(%d)", 20, 2, false];
 
@@ -263,16 +282,21 @@ class Z80DataTransfer {
         // --- I / R Special Register Transfer ---
         registry.extended[0x47] = [() => { registers.i = registers.a; cpu.incPc(2); }, "LD I,A", 9, 0, false];
         registry.extended[0x4f] = [() => { registers.r = registers.a; cpu.incPc(2); }, "LD R,A", 9, 0, false];
+        
         registry.extended[0x57] = [() => {
             registers.a = registers.i;
-            registers.f &= ~z80flags.FLAG_N;
-            registers.f &= ~z80flags.FLAG_H;
-            if ((registers.a & 0x80) !== 0) registers.f |= z80flags.FLAG_S;
-            else registers.f &= ~z80flags.FLAG_S;
-            if (registers.a === 0) registers.f |= z80flags.FLAG_Z;
-            else registers.f &= ~z80flags.FLAG_Z;
-            if (registers.iff2) registers.f |= z80flags.FLAG_PV;
-            else registers.f &= ~z80flags.FLAG_PV;
+            registers.f &= ~Z80Flags.FLAG_N;
+            registers.f &= ~Z80Flags.FLAG_H;
+            
+            if ((registers.a & 0x80) !== 0) registers.f |= Z80Flags.FLAG_S;
+            else registers.f &= ~Z80Flags.FLAG_S;
+            
+            if (registers.a === 0) registers.f |= Z80Flags.FLAG_Z;
+            else registers.f &= ~Z80Flags.FLAG_Z;
+            
+            if (registers.iff2) registers.f |= Z80Flags.FLAG_PV;
+            else registers.f &= ~Z80Flags.FLAG_PV;
+            
             cpu.incPc(2);
         }, "LD A,I", 9, 0, false];
 
@@ -280,14 +304,19 @@ class Z80DataTransfer {
             registers.r += 2;
             registers.r &= 0x7f;
             registers.a = registers.r;
-            registers.f &= ~z80flags.FLAG_N;
-            registers.f &= ~z80flags.FLAG_H;
-            if ((registers.a & 0x80) !== 0) registers.f |= z80flags.FLAG_S;
-            else registers.f &= ~z80flags.FLAG_S;
-            if (registers.a === 0) registers.f |= z80flags.FLAG_Z;
-            else registers.f &= ~z80flags.FLAG_Z;
-            if (registers.iff2) registers.f |= z80flags.FLAG_PV;
-            else registers.f &= ~z80flags.FLAG_PV;
+            
+            registers.f &= ~Z80Flags.FLAG_N;
+            registers.f &= ~Z80Flags.FLAG_H;
+            
+            if ((registers.a & 0x80) !== 0) registers.f |= Z80Flags.FLAG_S;
+            else registers.f &= ~Z80Flags.FLAG_S;
+            
+            if (registers.a === 0) registers.f |= Z80Flags.FLAG_Z;
+            else registers.f &= ~Z80Flags.FLAG_Z;
+            
+            if (registers.iff2) registers.f |= Z80Flags.FLAG_PV;
+            else registers.f &= ~Z80Flags.FLAG_PV;
+            
             cpu.incPc(2);
         }, "LD A,R", 9, 2, false];
 
@@ -313,7 +342,9 @@ class Z80DataTransfer {
         registry.indexedIX[0x2a] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 2);
             const m2 = cpu.theMMU.readAddr(registers.pc + 3);
-            registers.ix = cpu.theMMU.readAddr16bit(m1 | (m2 << 8));
+            const word = cpu.theMMU.readAddr16bit(m1 | (m2 << 8));
+            registers.ixh = (word >> 8) & 0xff;
+            registers.ixl = word & 0xff;
             cpu.incPc(4); 
         }, "LD IX,(%d)", 20, 2, false];
 
@@ -364,8 +395,17 @@ class Z80DataTransfer {
         }, "LD (IX+%d),%d", 19, 1, false];
 
         // --- IX PUSH / POP ---
-        registry.indexedIX[0xe1] = [() => { registers.ix = cpu.popWord(); cpu.incPc(2); },"POP IX", 14, 0, false];
-        registry.indexedIX[0xe5] = [() => { cpu.pushWord(registers.ix); cpu.incPc(2); }, "PUSH IX", 15, 0, false];
+        registry.indexedIX[0xe1] = [() => { 
+            const word = cpu.popWord(); 
+            registers.ixh = (word >> 8) & 0xff; 
+            registers.ixl = word & 0xff; 
+            cpu.incPc(2); 
+        },"POP IX", 14, 0, false];
+
+        registry.indexedIX[0xe5] = [() => { 
+            cpu.pushWord(registers.ix); 
+            cpu.incPc(2); 
+        }, "PUSH IX", 15, 0, false];
 
         // --- IX Exchanges ---
         registry.indexedIX[0xe3] = [() => { 
@@ -378,7 +418,7 @@ class Z80DataTransfer {
             registers.ixh = tmp;
 
             cpu.incPc(2); 
-        },"XCHG (SP),IX", 23, 0, false];
+        },"EX (SP),IX", 23, 0, false];
 
 
         // ========================================================================
@@ -402,7 +442,9 @@ class Z80DataTransfer {
         registry.indexedIY[0x2a] = [() => {
             const m1 = cpu.theMMU.readAddr(registers.pc + 2);
             const m2 = cpu.theMMU.readAddr(registers.pc + 3);
-            registers.iy = cpu.theMMU.readAddr16bit(m1 | (m2 << 8));
+            const word = cpu.theMMU.readAddr16bit(m1 | (m2 << 8));
+            registers.iyh = (word >> 8) & 0xff;
+            registers.iyl = word & 0xff;
             cpu.incPc(4); 
         }, "LD IY,(%d)", 20, 2, false];
 
@@ -452,8 +494,17 @@ class Z80DataTransfer {
         }, "LD (IY+%d),%d", 19, 1, false];
 
         // --- IY PUSH / POP ---
-        registry.indexedIY[0xe1] = [() => { registers.iy = cpu.popWord(); cpu.incPc(2); },"POP IY", 14, 0, false];
-        registry.indexedIY[0xe5] = [() => { cpu.pushWord(registers.iy); cpu.incPc(2); }, "PUSH IY", 15, 0, false];
+        registry.indexedIY[0xe1] = [() => { 
+            const word = cpu.popWord(); 
+            registers.iyh = (word >> 8) & 0xff; 
+            registers.iyl = word & 0xff; 
+            cpu.incPc(2); 
+        },"POP IY", 14, 0, false];
+
+        registry.indexedIY[0xe5] = [() => { 
+            cpu.pushWord(registers.iy); 
+            cpu.incPc(2); 
+        }, "PUSH IY", 15, 0, false];
 
         // --- IY Exchanges ---
         registry.indexedIY[0xe3] = [() => { 
@@ -466,7 +517,7 @@ class Z80DataTransfer {
             registers.iyh = tmp;
 
             cpu.incPc(2); 
-        },"XCHG (SP),IY", 23, 0, false];
+        },"EX (SP),IY", 23, 0, false];
 
     }
 }

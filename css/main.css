@@ -4,90 +4,126 @@
  * 
  * Presentation Layer: EGGStation Style Sheet
  * 
- * Provides responsive presentation styling, retro visualizer CRT framing, 
- * control board layouts, tooltip notifications, and hides background helper elements.
+ * Modern, Responsive, Synthwave-inspired CSS. Includes mobile scaling
+ * and Virtual Gamepad layouts for touch devices.
  */
 
-/* General Page Reset & Typography */
-body {
-    background-color: #121214;
-    color: #e1e1e6;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+/* ==========================================================================
+   Design System Variables (Theme)
+   ========================================================================== */
+   :root {
+    --bg-color: #0d0d12;
+    --panel-bg: rgba(29, 29, 34, 0.85);
+    --border-color: #3e3e46;
+    --text-color: #e1e1e6;
+    --text-muted: #a8a8b3;
+    --accent-pink: #ff007f;
+    --accent-purple: #7f00ff;
+    --success: #04d361;
+}
+
+/* ==========================================================================
+   General Reset & Base Styles
+   ========================================================================== */
+* {
+    box-sizing: border-box;
     margin: 0;
-    padding: 20px;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent; /* Remove blue tap highlight on mobile */
+}
+
+body {
+    background-color: var(--bg-color);
+    background-image: radial-gradient(circle at top, #1a1a24 0%, var(--bg-color) 80%);
+    color: var(--text-color);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    min-height: 90vh;
+    min-height: 100vh;
+    padding: 20px 10px;
+    overflow-x: hidden;
 }
 
-/* Header & Status Indicator Frame */
+main {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: 800px;
+}
+
+/* Glassmorphism Panel Reusable Class */
+.glass-panel {
+    background: var(--panel-bg);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+/* ==========================================================================
+   Header & Info Area
+   ========================================================================== */
 #titleDiv {
     display: flex;
+    justify-content: space-between;
     align-items: center;
-    gap: 15px;
-    background-color: #1d1d22;
-    padding: 10px 20px;
-    border-radius: 8px;
-    border: 1px solid #29292e;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    padding: 12px 20px;
     margin-bottom: 20px;
     width: 100%;
-    max-width: 730px;
-    box-sizing: border-box;
+    max-width: 800px;
+    z-index: 10;
+}
+
+.brand {
+    display: flex;
+    align-items: baseline;
+    gap: 15px;
 }
 
 .logo-text {
-    font-size: 1.5rem;
-    font-weight: 800;
+    font-size: 1.6rem;
+    font-weight: 900;
     letter-spacing: 1px;
-    background: linear-gradient(45deg, #ff007f, #7f00ff);
+    background: linear-gradient(90deg, var(--accent-pink), var(--accent-purple));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
-.divider {
-    color: #29292e;
-    font-weight: 300;
-}
-
 .fps-counter {
-    color: #a8a8b3;
-    font-size: 0.9rem;
-    font-weight: 500;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 600;
 }
 
 #fpsSpan {
-    color: #04d361;
-    font-weight: bold;
+    color: var(--success);
 }
 
-/* Tooltip & Preview Notification Structure */
+.header-controls {
+    display: flex;
+    gap: 15px;
+}
+
+/* Tooltips */
 a.tooltip {
     position: relative;
     display: inline-flex;
-    align-items: center;
     text-decoration: none;
     transition: opacity 0.2s;
+    font-size: 1.4rem;
 }
 
-a.tooltip:hover {
-    opacity: 0.8;
-}
-
-a.tooltip img {
-    width: 24px;
-    height: 24px;
-}
+a.tooltip:hover { opacity: 0.8; }
 
 a.tooltip span {
     visibility: hidden;
     position: absolute;
-    top: 35px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 99;
+    top: 40px;
+    right: 0;
+    z-index: 100;
     opacity: 0;
     transition: opacity 0.2s, visibility 0.2s;
 }
@@ -97,148 +133,237 @@ a.tooltip:hover span {
     opacity: 1;
 }
 
-/* Save State Snapshot Image Preview inside tooltip */
 #savestateImg {
-    border: 3px solid #7f00ff;
-    border-radius: 6px;
-    width: 128px;
-    height: 120px;
-    box-shadow: 0 10px 15px rgba(0, 0, 0, 0.5);
+    border: 3px solid var(--accent-purple);
+    border-radius: 8px;
+    width: 140px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.8);
     background-color: #000;
 }
 
-/* Helper Tooltip Styling */
 .help-tooltip {
-    background-color: #1d1d22;
-    border: 1px solid #29292e;
-    color: #e1e1e6;
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
     padding: 15px;
     border-radius: 8px;
-    width: 280px;
+    width: max-content;
     font-size: 0.85rem;
-    line-height: 1.4;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    line-height: 1.6;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.8);
+    color: var(--text-color);
 }
 
-/* Visualizer Frame & CRT Canvas Styling */
+.help-tooltip strong { color: var(--accent-pink); }
+
+/* ==========================================================================
+   Visualizer Frame & CRT Canvas (Responsive Magic)
+   ========================================================================== */
 #emulator-container {
+    width: 100%;
+    /* Enforces 4:3 / SMS Aspect Ratio scaling */
+    aspect-ratio: 256 / 240; 
+    max-width: 768px; /* Standard 3x integer scale limit for desktop */
+    max-height: 720px;
     background: #000;
-    padding: 10px;
     border-radius: 12px;
-    border: 4px solid #29292e;
-    box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8), 0 10px 30px rgba(0, 0, 0, 0.7);
+    /* Synthwave neon glow border */
+    border: 3px solid #1a1a24;
+    box-shadow: 0 0 15px rgba(127, 0, 255, 0.3), inset 0 0 20px rgba(0,0,0,1);
+    overflow: hidden;
     margin-bottom: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
 #smsdisplay {
-    display: block;
-    width: 768px; /* Original SMS scan width multiplied x3 */
-    height: 720px; /* Original SMS scan height multiplied x3 */
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    /* Crisp integer scaling for pixel art */
     image-rendering: pixelated;
-    image-rendering: crisp-edges;
+    image-rendering: crisp-edges; 
 }
 
-/* Interactive Control Panel Structure */
+/* ==========================================================================
+   Interactive Control Board
+   ========================================================================== */
 .control-panel {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 20px;
-    margin-bottom: 20px;
     width: 100%;
-    max-width: 750px;
-    justify-content: center;
-    box-sizing: border-box;
+    padding: 20px;
 }
 
 .control-group {
-    background-color: #1d1d22;
-    border: 1px solid #29292e;
-    padding: 12px 20px;
-    border-radius: 8px;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    flex: 1;
-    max-width: 350px;
 }
 
 .control-group label {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: #a8a8b3;
+    letter-spacing: 1px;
+    color: var(--text-muted);
 }
 
-/* Form Buttons & Select Elements */
 button, select {
-    background-color: #29292e;
-    color: #e1e1e6;
-    border: 1px solid #3e3e46;
-    padding: 10px 14px;
-    border-radius: 6px;
-    font-size: 0.9rem;
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
     cursor: pointer;
-    transition: background-color 0.2s, border-color 0.2s;
+    transition: all 0.2s ease;
     outline: none;
+    appearance: none;
 }
 
 button:hover, select:hover {
-    background-color: #323238;
-    border-color: #7f00ff;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: var(--accent-purple);
 }
 
 button:active {
-    background-color: #1d1d22;
+    transform: scale(0.98);
 }
 
-/* Instruction Text Panel */
-.instructions {
-    text-align: center;
-    font-size: 0.9rem;
-    color: #8d8d99;
-    max-width: 500px;
-    line-height: 1.5;
+.primary-btn {
+    background: linear-gradient(90deg, rgba(255,0,127,0.2), rgba(127,0,255,0.2));
+    border-color: var(--accent-purple);
 }
 
-.instructions strong {
-    color: #ff007f;
+.primary-btn:hover {
+    background: linear-gradient(90deg, rgba(255,0,127,0.4), rgba(127,0,255,0.4));
+    box-shadow: 0 0 15px rgba(127, 0, 255, 0.4);
 }
 
-/* Interactive Debugging Elements */
-#debugCanvas {
-    background-color: #fff;
-    border: 2px solid #ff007f;
-    border-radius: 8px;
-    margin-top: 20px;
-    display: none; /* Controlled dynamically by debugger states */
+/* ==========================================================================
+   Virtual Gamepad (Mobile Only)
+   ========================================================================== */
+.mobile-only {
+    display: none; /* Hidden on Desktop */
 }
 
-#debugButtons {
-    display: none; /* Controlled dynamically by debugger parameters */
-    background-color: #1d1d22;
-    padding: 20px;
-    border-radius: 8px;
-    border: 1px solid #29292e;
-    margin-top: 15px;
+#virtual-gamepad {
     width: 100%;
-    max-width: 710px;
-    text-align: center;
-}
-
-#debugButtons input {
-    background-color: #29292e;
-    color: #e1e1e6;
-    border: 1px solid #3e3e46;
+    justify-content: space-between;
+    align-items: flex-end;
     padding: 10px;
-    border-radius: 6px;
-    outline: none;
-    margin-right: 10px;
+    margin-top: 10px;
+    margin-bottom: 20px;
+    user-select: none; /* Prevents text selection while tapping */
 }
 
-#debugButtons button {
-    margin: 5px;
+/* D-Pad Layout */
+.d-pad {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
 }
 
-/* Helpers utility selectors */
-.hidden {
-    display: none !important;
+.d-row {
+    display: flex;
+    gap: 5px;
 }
+
+.d-center {
+    width: 50px;
+    height: 50px;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* Action Buttons Layout */
+.action-buttons {
+    display: flex;
+    align-items: flex-end;
+    gap: 15px;
+    position: relative;
+}
+
+/* Virtual Buttons Style */
+.v-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(5px);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 1.5rem;
+    padding: 0;
+    width: 50px;
+    height: 50px;
+    border-radius: 12px;
+}
+
+.v-btn:active {
+    background: rgba(127, 0, 255, 0.5);
+    border-color: var(--accent-pink);
+    color: #fff;
+    transform: scale(0.9);
+}
+
+.round-btn {
+    width: 65px;
+    height: 65px;
+    border-radius: 50%;
+    font-size: 1.8rem;
+    font-weight: bold;
+}
+
+.small-btn {
+    width: 70px;
+    height: 40px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    position: absolute;
+    top: -50px;
+    right: 30px;
+}
+
+/* ==========================================================================
+   Responsive Media Queries
+   ========================================================================== */
+
+/* Mobile Phones (Portrait) */
+@media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+
+    #titleDiv {
+        flex-direction: column;
+        gap: 10px;
+        padding: 15px;
+    }
+
+    .brand {
+        flex-direction: column;
+        align-items: center;
+        gap: 5px;
+    }
+
+    #emulator-container {
+        border-width: 2px;
+        border-radius: 8px;
+    }
+
+    .control-panel {
+        grid-template-columns: 1fr; /* Stack settings vertically */
+        padding: 15px;
+    }
+
+    /* Show Virtual Gamepad on screens smaller than 768px */
+    .mobile-only {
+        display: flex;
+    }
+}
+
+/* Utility */
+.hidden { display: none !important; }

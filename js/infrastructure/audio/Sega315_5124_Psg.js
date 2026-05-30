@@ -2,24 +2,24 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: Sega 315-5124 Custom PSG
+ * Infrastructure Layer: Sega 315-5124 custom PSG
  * 
- * Emulates the custom Programmable Sound Generator (PSG) chip integrated within 
- * the custom 315-5124 block (functionally matching the TI SN76489 standard).
- * Manages 4 channels (3 tones, 1 noise) and mixes output buffers using Web Audio.
+ * Emulates the custom sound generator chip integrated within the standard system.
+ * Manages 4 independent sound channels (3 square wave tone generators, 
+ * 1 pseudo-random white noise generator) and mixes output buffers using Web Audio.
  */
 
 class Sega315_5124_Psg {
     constructor() {
         this.volregister = [0xf, 0xf, 0xf, 0xf]; // Volume attenuation registers (0x0 = Max, 0xF = Muted)
-        this.toneregister = [0, 0, 0, 0];       // 10-bit tone/noise generator period registers
-        this.wavePos = [0, 0, 0, 0];            // Internal wave phase position tracking
+        this.toneregister = [0, 0, 0, 0];       // 10-bit tone period registers
+        this.wavePos = [0, 0, 0, 0];            // Internal phase accumulator
 
-        this.chan2belatched = 0; // Latch targets (Channels 0-3)
-        this.what2latch = 0;     // Latch category (0: Tone/Noise, 1: Volume)
+        this.chan2belatched = 0; // Currently latched target channel (0-3)
+        this.what2latch = 0;     // Latch classification (0: Tone/Noise, 1: Volume)
         this.latch = 0;
 
-        // Audio processing parameters
+        // Queue for thread-safe asynchronous sound register writes
         this.eventsQueue = [];
         this.internalClock = 0;
         this.internalClockPos = 0;
@@ -32,12 +32,22 @@ class Sega315_5124_Psg {
         }
         this.randPos = 0;
 
+        // Encapsulated state to replace old global variables
+        this.isMuted = false;
         this.audioInitialized = false;
     }
 
     /**
-     * Bootstraps the Web Audio API context, node connections, and execution timing.
-     * @param {ZilogZ80} thecpu - Reference to the system CPU for clock rate syncing.
+     * Controls the active muting state of the audio output.
+     * @param {boolean} shouldMute - True to mute the hardware voices.
+     */
+    setMuted(shouldMute) {
+        this.isMuted = shouldMute;
+    }
+
+    /**
+     * Initializes the host Web Audio API context, custom Script Nodes, and gain modules.
+     * @param {ZilogZ80} cpu - System CPU reference used to sync internal clock steps.
      */
     startMix(thecpu) {
         try {
@@ -51,7 +61,7 @@ class Sega315_5124_Psg {
             this.context = new AudioContext();
     
             this.gainNode = this.context.createGain();
-            this.gainNode.gain.value = 0.5;
+            this.gainNode.gain.value = 0.5; // Master volume scaling
     
             this.jsNode = this.context.createScriptProcessor(this.audioBufSize, 0, 2);
             this.jsNode.onaudioprocess = function(e) {
@@ -65,21 +75,21 @@ class Sega315_5124_Psg {
             this.audioInitialized = true;
         }
         catch(e) {
-            console.error("PSG::Failed to initialize Web Audio API. Audio output is disabled.", e);
+            console.error("PSG::Failed to bootstrap Web Audio context.", e);
             this.webAudioAPIsupported = false;
         }        
     }
 
     /**
-     * Steps the internal PSG sound clock index.
-     * @param {number} totCpuCycles - Global elapsed CPU cycles.
+     * Updates the internal elapsed cycles index.
+     * @param {number} totCpuCycles - Global clock states.
      */
     step(totCpuCycles) {
         this.internalClock = totCpuCycles;
     }
 
     /**
-     * Core Web Audio callback that consumes and processes queued sound writes.
+     * Audio Processor Callback. Consumes queued register updates on a timeline-accurate basis.
      */
     mixFunction(e) {
         if (!this.audioEnabled || !this.audioInitialized) return;
@@ -95,23 +105,23 @@ class Sega315_5124_Psg {
             let runningTotal = 0.0;
 
             for (let cyc = 0; cyc < this.multiplier; cyc++) {
-                // Consume audio control register write events matching the current execution timeline
+                // Dequeue any register configuration events scheduled at or before this clock offset
                 if ((this.eventsQueue.length > 0) && (this.eventsQueue[0][1] <= Math.floor(this.internalClockPos))) {
                     const curEvent = this.eventsQueue.shift();
                     const b = curEvent[0];
 
                     if (b & 0x80) {
-                        // LATCH / DATA Byte
+                        // LATCH / DATA control word
                         this.chan2belatched = (b >> 5) & 0x03;
-                        this.what2latch = ((b & 0x10) === 0x10) ? 1 : 0; // 1: Volume, 0: Tone/Noise
+                        this.what2latch = ((b & 0x10) === 0x10) ? 1 : 0; // 1: Volume registers, 0: Tone/Noise
 
                         if (this.what2latch === 1) {
                             this.volregister[this.chan2belatched] = b & 0x0f;
                         } else {
-                            this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff00) | ((b << 4) & 0x00FF);
+                            this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff00) | ((b << 4) & 0x00ff);
                         }
                     } else {
-                        // Pure DATA Byte (updates high bits of currently latched register)
+                        // DATA update word (applies to active latched selection)
                         if (this.what2latch === 1) {
                             this.volregister[this.chan2belatched] = b & 0xf;
                         } else {
@@ -126,6 +136,7 @@ class Sega315_5124_Psg {
 
             runningTotal /= this.multiplier;
 
+            // Output mono mix to left/right stereo targets
             dataL[s] = runningTotal;
             dataR[s] = runningTotal;
         }
@@ -136,11 +147,13 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Mixes sample states from standard 3 tone voices and the un-pitched noise generator.
+     * Synthesizes waveforms for standard square-wave and noise generation buffers.
+     * @returns {number} Combined mono audio sample level.
      */
     mixVoices() {
-        if (glbMaxSpeed || (glbEmulatorStatus !== 1)) {
-            return 0; // Mute when fast-forwarding or execution is paused/debugging
+        // Safe check using private member state
+        if (this.isMuted) {
+            return 0; 
         }
 
         let finalSample = 0;
@@ -151,7 +164,7 @@ class Sega315_5124_Psg {
             if (this.volregister[v] !== 0xf) {
                 if (this.toneregister[v] !== 0) {
                     if (v < 3) {
-                        // Tone Channels: Square wave generation
+                        // Tone Channels: Generate square wave phase states
                         const pos = Math.floor(this.wavePos[v] % this.squareWaveLen);
                         if (pos < (this.squareWaveLen / 2)) {
                             curSamp = 1.0;
@@ -160,14 +173,14 @@ class Sega315_5124_Psg {
                         this.wavePos[v] += realFreq;
                         this.wavePos[v] %= this.squareWaveLen;
                     } else {
-                        // Noise Channel: White noise random sample extraction
+                        // Noise Channel: Fetch pseudo-random white noise values
                         curSamp = this.randBuffer[this.randPos] * 2.0;
                         this.randPos++;
                         this.randPos %= this.randDim;
                     }
                 }
 
-                // Apply exponential volume attenuation (0xF is muted, 0x0 is maximum volume)
+                // Apply exponential volume attenuation (0x0 is max volume, 0xF is complete mute)
                 curSamp = (curSamp * (0xf - this.volregister[v])) / 0x0f;
                 finalSample += curSamp;
             }
@@ -177,13 +190,10 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Enqueues an 8-bit command byte matching a specific CPU cycle timestamp.
-     * @param {number} b - Sound register parameter byte.
+     * Registers a sound control write operation.
+     * @param {number} b - Sound register write value.
      */
     writeByte(b) {
         this.eventsQueue.push([b, this.internalClock]);
     }
 }
-
-// Global legacy alias to prevent breaking unrefactored application components
-const sn79489 = Sega315_5124_Psg;

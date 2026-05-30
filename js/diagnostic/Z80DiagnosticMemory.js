@@ -2,21 +2,21 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Diagnostic Layer: Z80DiagnosticMemory
+ * Diagnostic Layer: Z80 Diagnostic Memory
  * 
- * Emulates a flat 64KB memory interface and mock I/O ports designed exclusively 
- * to execute Z80 cycle-accurate CPU instruction validation tests.
+ * Emulates a flat, isolated 64KB memory space and mock I/O port interface 
+ * designed exclusively for parsing and executing dry CPU test cycles (SRP).
  */
 
 class Z80DiagnosticMemory {
     constructor() {
         this.ram64k = new Uint8Array(0x10000).fill(0);
         this.portValues = [];
-        console.log("DiagnosticMemory::Initialized");
+        console.log("DiagnosticMemory::Initialized flat testing memory block.");
     }
 
     /**
-     * Resets the entire 64KB RAM memory block back to zero.
+     * Resets the entire 64KB RAM block back to 0.
      */
     cleanMem() {
         this.ram64k.fill(0);
@@ -28,8 +28,7 @@ class Z80DiagnosticMemory {
      * @returns {number} 8-bit value.
      */
     readAddr(addr) {
-        addr &= 0xffff;
-        return this.ram64k[addr];            
+        return this.ram64k[addr & 0xffff];            
     }
 
     /**
@@ -38,40 +37,35 @@ class Z80DiagnosticMemory {
      * @param {number} value - 8-bit value.
      */
     writeAddr(addr, value) {
-        addr &= 0xffff;
-        value &= 0xff;
-        this.ram64k[addr] = value;            
+        this.ram64k[addr & 0xffff] = value & 0xff;            
     }
 
     /**
      * Reads a 16-bit word (little-endian) from diagnostic memory.
-     * @param {number} addr - 16-bit address.
+     * @param {number} addr - 16-bit starting address.
      * @returns {number} 16-bit value.
      */
     readAddr16bit(addr) {
-        addr &= 0xffff;
-        if (addr <= 0xff) {
-            // Support zero-page diagnostic index wrap around logic
-            return (this.readAddr(addr) | (this.readAddr((addr + 1) & 0xff) << 8)) & 0xffff;
+        const address = addr & 0xffff;
+        if (address <= 0xff) {
+            // Diagnostic zero-page index wrapping simulation
+            return (this.readAddr(address) | (this.readAddr((address + 1) & 0xff) << 8)) & 0xffff;
         }
-        return (this.readAddr(addr) | (this.readAddr((addr + 1) & 0xffff) << 8)) & 0xffff;
+        return (this.readAddr(address) | (this.readAddr((address + 1) & 0xffff) << 8)) & 0xffff;
     }
 
     /**
      * Writes a 16-bit word (little-endian) to diagnostic memory.
-     * @param {number} address - 16-bit address.
-     * @param {number} word - 16-bit value.
+     * @param {number} address - 16-bit physical address.
+     * @param {number} word - 16-bit word value.
      */
 	writeAddr16bit(address, word) {
-		const byte1 = word & 0xFF;
-		const byte2 = (word >> 8) & 0xFF;
-
-		this.writeAddr(address, byte1);
-		this.writeAddr(address + 1, byte2);
+		this.writeAddr(address, word & 0xff);
+		this.writeAddr(address + 1, (word >> 8) & 0xff);
 	}    
 
     /**
-     * Fetches a wrapped address offset (pointer redirection logic helper).
+     * Fetches a wrapped address offset pointer.
      */
     getWrappedAddr(addr) {
         if ((addr & 0xff) === 0xff) {
@@ -82,29 +76,25 @@ class Z80DiagnosticMemory {
     }    
 
     /**
-     * Prepares mock incoming data inside the diagnostic I/O ports.
-     * @param {number} v - Byte to load.
+     * Preloads mock data inside the target I/O port registry.
+     * @param {number} v - Byte to write.
      */
     preparePort(v) {
-        this.portValues = [];
-        this.portValues.push(v);
+        this.portValues = [v & 0xff];
     }
 
     /**
-     * Writes a byte to diagnostic ports (stubbed).
+     * Writes a byte to mock diagnostic port.
      */
     writePort(p, v) {
-        // Port outputs are typically ignored during dry CPU execution verification
+        // Output cycles are ignored during dry CPU logic verification
     }
 
     /**
-     * Reads a byte from diagnostic ports.
-     * @returns {number} Mock port value.
+     * Reads a byte from mock diagnostic port.
+     * @returns {number} Mock port byte.
      */
     readPort(p) {
         return this.portValues[0] !== undefined ? this.portValues[0] : 0;
     }
 }
-
-// Global legacy alias to prevent breaking unrefactored diagnostic runners
-const testMMU = Z80DiagnosticMemory;

@@ -6,10 +6,17 @@
  * 
  * This class encapsulates all Z80 CPU instructions designed for block memory 
  * transfers and block searches (LDI, LDIR, LDD, LDDR, CPI, CPIR, CPD, CPDR).
- * Refactored to accept a clean 'opcodeRegistry' object instead of a long parameter list.
+ * The logic follows the Command Pattern, mapping execution blocks dynamically (SRP).
  */
 
 class Z80BlockOps {
+    /**
+     * Registers all Block Operations opcodes onto the provided CPU opcode maps.
+     * @param {ZilogZ80} cpu - The CPU Orchestrator instance.
+     * @param {Z80Registers} registers - The CPU Registers state object.
+     * @param {Z80Alu} alu - The Arithmetic Logic Unit for flag/math processing.
+     * @param {Object} registry - The categorized opcode mapping arrays.
+     */
     static register(cpu, registers, alu, registry) {
 
         // ========================================================================
@@ -44,24 +51,24 @@ class Z80BlockOps {
 
         hl = (hl + 1) & 0xffff;
         de = (de + 1) & 0xffff;
-        bc = (bc - 1); // Preserves historic math bug logic exactly
+        bc = (bc - 1); // Cycle count decremented 
         de &= 0xffff;  
 
         registers.hl = hl;
         registers.de = de;
         registers.bc = bc & 0xffff;
 
-        registers.f &= 0xc1;
+        registers.f &= 0xc1; // Clear S, Z, H, P/V, N flags
         const testByte = (byte + registers.a) & 0xff;
 
         if ((bc & 0xffff) > 0) {
-            registers.f |= z80flags.FLAG_PV;
+            registers.f |= Z80Flags.FLAG_PV;
         }
         if (testByte & 0x08) {
-            registers.f |= z80flags.FLAG_F3;
+            registers.f |= Z80Flags.FLAG_F3;
         }
         if (testByte & 0x02) {
-            registers.f |= z80flags.FLAG_F5;
+            registers.f |= Z80Flags.FLAG_F5;
         }
         cpu.incPc(2);
     }
@@ -83,30 +90,30 @@ class Z80BlockOps {
         const rawNewValue = v1 - v2;
         const newValue = rawNewValue & 0xff;
 
-        registers.f &= 0x01;
+        registers.f &= 0x01; // Preserve C flag
 
         if ((v1 & 0x0f) - (v2 & 0x0f) < 0) {
-            registers.f |= z80flags.FLAG_H;
+            registers.f |= Z80Flags.FLAG_H;
         }
 
-        const testByte = (registers.a - byte - ((registers.f & z80flags.FLAG_H) ? 1 : 0)) & 0xff;
+        const testByte = (registers.a - byte - ((registers.f & Z80Flags.FLAG_H) ? 1 : 0)) & 0xff;
 
-        registers.f |= z80flags.FLAG_N;
+        registers.f |= Z80Flags.FLAG_N; // Subtraction set
 
         if (bc !== 0) {
-            registers.f |= z80flags.FLAG_PV;
+            registers.f |= Z80Flags.FLAG_PV;
         }
         if (testByte & 0x08) {
-            registers.f |= z80flags.FLAG_F3;
+            registers.f |= Z80Flags.FLAG_F3;
         }
         if (testByte & 0x02) {
-            registers.f |= z80flags.FLAG_F5;
+            registers.f |= Z80Flags.FLAG_F5;
         }
         if (newValue === 0) {
-            registers.f |= z80flags.FLAG_Z;
+            registers.f |= Z80Flags.FLAG_Z;
         }
         if (newValue & 0x80) {
-            registers.f |= z80flags.FLAG_S;
+            registers.f |= Z80Flags.FLAG_S;
         }
         cpu.incPc(2);
     }
@@ -131,13 +138,13 @@ class Z80BlockOps {
         const testByte = (byte + registers.a) & 0xff;
 
         if (bc > 0) {
-            registers.f |= z80flags.FLAG_PV;
+            registers.f |= Z80Flags.FLAG_PV;
         }
         if (testByte & 0x08) {
-            registers.f |= z80flags.FLAG_F3;
+            registers.f |= Z80Flags.FLAG_F3;
         }
         if (testByte & 0x02) {
-            registers.f |= z80flags.FLAG_F5;
+            registers.f |= Z80Flags.FLAG_F5;
         }
         cpu.incPc(2);
     }
@@ -159,30 +166,30 @@ class Z80BlockOps {
         const rawNewValue = v1 - v2;
         const newValue = rawNewValue & 0xff;
 
-        registers.f &= 0x01;
+        registers.f &= 0x01; // Preserve C flag
 
         if ((v1 & 0x0f) - (v2 & 0x0f) < 0) {
-            registers.f |= z80flags.FLAG_H;
+            registers.f |= Z80Flags.FLAG_H;
         }
 
-        const testByte = (registers.a - byte - ((registers.f & z80flags.FLAG_H) ? 1 : 0)) & 0xff;
+        const testByte = (registers.a - byte - ((registers.f & Z80Flags.FLAG_H) ? 1 : 0)) & 0xff;
 
-        registers.f |= z80flags.FLAG_N;
+        registers.f |= Z80Flags.FLAG_N;
 
         if (bc !== 0) {
-            registers.f |= z80flags.FLAG_PV;
+            registers.f |= Z80Flags.FLAG_PV;
         }
         if (testByte & 0x08) {
-            registers.f |= z80flags.FLAG_F3;
+            registers.f |= Z80Flags.FLAG_F3;
         }
         if (testByte & 0x02) {
-            registers.f |= z80flags.FLAG_F5;
+            registers.f |= Z80Flags.FLAG_F5;
         }
         if (newValue === 0) {
-            registers.f |= z80flags.FLAG_Z;
+            registers.f |= Z80Flags.FLAG_Z;
         }
         if (newValue & 0x80) {
-            registers.f |= z80flags.FLAG_S;
+            registers.f |= Z80Flags.FLAG_S;
         }
         cpu.incPc(2);
     }
@@ -207,17 +214,18 @@ class Z80BlockOps {
         const testByte = (byte + registers.a) & 0xff;
 
         if (bc > 0) {
-            registers.f |= z80flags.FLAG_PV;
+            registers.f |= Z80Flags.FLAG_PV;
         }
         if (testByte & 0x08) {
-            registers.f |= z80flags.FLAG_F3;
+            registers.f |= Z80Flags.FLAG_F3;
         }
         if (testByte & 0x02) {
-            registers.f |= z80flags.FLAG_F5;
+            registers.f |= Z80Flags.FLAG_F5;
         }
 
+        // Loop branching instruction logic
         if (bc > 0) {
-            cpu.additionalCycles = 5;
+            cpu.additionalCycles = 5; // branch taken cycle penalty
         } else {
             cpu.incPc(2);
         }
@@ -240,33 +248,33 @@ class Z80BlockOps {
         const rawNewValue = v1 - v2;
         const newValue = rawNewValue & 0xff;
 
-        registers.f &= 0x01;
+        registers.f &= 0x01; // Preserve C flag
 
         if ((v1 & 0x0f) - (v2 & 0x0f) < 0) {
-            registers.f |= z80flags.FLAG_H;
+            registers.f |= Z80Flags.FLAG_H;
         }
 
-        const testByte = (registers.a - byte - ((registers.f & z80flags.FLAG_H) ? 1 : 0)) & 0xff;
+        const testByte = (registers.a - byte - ((registers.f & Z80Flags.FLAG_H) ? 1 : 0)) & 0xff;
 
-        registers.f |= z80flags.FLAG_N;
+        registers.f |= Z80Flags.FLAG_N;
 
         if (bc !== 0) {
-            registers.f |= z80flags.FLAG_PV;
+            registers.f |= Z80Flags.FLAG_PV;
         }
         if (testByte & 0x04) {
-            registers.f |= z80flags.FLAG_F3;
+            registers.f |= Z80Flags.FLAG_F3;
         }
         if (testByte & 0x02) {
-            registers.f |= z80flags.FLAG_F5;
+            registers.f |= Z80Flags.FLAG_F5;
         }
         if (newValue === 0) {
-            registers.f |= z80flags.FLAG_Z;
+            registers.f |= Z80Flags.FLAG_Z;
         }
         if (newValue & 0x80) {
-            registers.f |= z80flags.FLAG_S;
+            registers.f |= Z80Flags.FLAG_S;
         }
 
-        if ((bc !== 0) && ((registers.f & z80flags.FLAG_Z) === 0)) {
+        if ((bc !== 0) && ((registers.f & Z80Flags.FLAG_Z) === 0)) {
             cpu.additionalCycles = 5;
         } else {
             cpu.incPc(2);
@@ -289,13 +297,13 @@ class Z80BlockOps {
         registers.de = de;
         registers.bc = bc;
 
-        registers.f &= ~z80flags.FLAG_N;
-        registers.f &= ~z80flags.FLAG_H;
+        registers.f &= ~Z80Flags.FLAG_N;
+        registers.f &= ~Z80Flags.FLAG_H;
 
         if (bc !== 0) {
-            registers.f |= z80flags.FLAG_PV;
+            registers.f |= Z80Flags.FLAG_PV;
         } else {
-            registers.f &= ~z80flags.FLAG_PV;
+            registers.f &= ~Z80Flags.FLAG_PV;
         }
 
         if (bc !== 0) {
@@ -322,33 +330,33 @@ class Z80BlockOps {
         const rawNewValue = v1 - v2;
         const newValue = rawNewValue & 0xff;
 
-        registers.f &= 0x01;
+        registers.f &= 0x01; // Preserve C flag
 
         if ((v1 & 0x0f) - (v2 & 0x0f) < 0) {
-            registers.f |= z80flags.FLAG_H;
+            registers.f |= Z80Flags.FLAG_H;
         }
 
-        const testByte = (registers.a - byte - ((registers.f & z80flags.FLAG_H) ? 1 : 0)) & 0xff;
+        const testByte = (registers.a - byte - ((registers.f & Z80Flags.FLAG_H) ? 1 : 0)) & 0xff;
 
-        registers.f |= z80flags.FLAG_N;
+        registers.f |= Z80Flags.FLAG_N;
 
         if (bc !== 0) {
-            registers.f |= z80flags.FLAG_PV;
+            registers.f |= Z80Flags.FLAG_PV;
         }
         if (testByte & 0x08) {
-            registers.f |= z80flags.FLAG_F3;
+            registers.f |= Z80Flags.FLAG_F3;
         }
         if (testByte & 0x02) {
-            registers.f |= z80flags.FLAG_F5;
+            registers.f |= Z80Flags.FLAG_F5;
         }
         if (newValue === 0) {
-            registers.f |= z80flags.FLAG_Z;
+            registers.f |= Z80Flags.FLAG_Z;
         }
         if (newValue & 0x80) {
-            registers.f |= z80flags.FLAG_S;
+            registers.f |= Z80Flags.FLAG_S;
         }
 
-        if ((bc !== 0) && ((registers.f & z80flags.FLAG_Z) === 0)) {
+        if ((bc !== 0) && ((registers.f & Z80Flags.FLAG_Z) === 0)) {
             cpu.additionalCycles = 5;
         } else {
             cpu.incPc(2);

@@ -6,15 +6,27 @@
  * 
  * This class encapsulates all Z80 CPU instructions designed for arithmetic and 
  * logical operations on 8-bit and 16-bit operands. It delegates heavy mathematical 
- * calculations and flag updates directly to the Z80Alu instance.
+ * calculations and flag updates directly to the Z80Alu instance (SRP).
  */
 
 class Z80Arithmetic {
+    /**
+     * Registers all Arithmetic and Logical opcodes onto the provided CPU opcode maps.
+     * @param {ZilogZ80} cpu - The CPU Orchestrator instance.
+     * @param {Z80Registers} registers - The CPU Registers state object.
+     * @param {Z80Alu} alu - The Arithmetic Logic Unit for flag/math processing.
+     * @param {Object} registry - The categorized opcode mapping arrays.
+     */
     static register(cpu, registers, alu, registry) {
 
-        // Helper for displacement address computation used in index-relative addressing (IX+d, IY+d)
+        /**
+         * Helper for displacement address computation used in index-relative 
+         * addressing (e.g., ADD A,(IX+d)).
+         * @param {number} indexValue - Base 16-bit index (IX or IY).
+         * @returns {number} The absolute 16-bit memory offset.
+         */
         const getDisplacement = (indexValue) => {
-            const d = cpu.theMMU.readAddr(cpu.registers.pc + 2);
+            const d = cpu.theMMU.readAddr(registers.pc + 2);
             const incr = (d & 0x80) === 0x80 ? -0x80 + (d & 0x7F) : d;
             return (indexValue + incr) & 0xffff;
         };
@@ -78,18 +90,18 @@ class Z80Arithmetic {
         // --- Carry Flag Operations ---
         registry.standard[0x37] = [() => { 
             registers.f &= 0xc4; 
-            registers.f |= z80flags.FLAG_C;
+            registers.f |= Z80Flags.FLAG_C;
             cpu.incPc(1); 
         }, "SCF", 4, 0, false];
 
         registry.standard[0x3f] = [() => { 
-            const oldC = registers.f & z80flags.FLAG_C;
+            const oldC = registers.f & Z80Flags.FLAG_C;
             registers.f &= 0xc4;
             if (!oldC) {
-                registers.f |= z80flags.FLAG_C;
+                registers.f |= Z80Flags.FLAG_C;
             }
             if (oldC) {
-                registers.f |= z80flags.FLAG_H;
+                registers.f |= Z80Flags.FLAG_H;
             }
             cpu.incPc(1); 
         }, "CCF", 4, 0, false];

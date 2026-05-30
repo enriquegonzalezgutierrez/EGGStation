@@ -9,12 +9,12 @@
  * Derived from the TMS9918 with Master System-specific extensions (Mode 4).
  */
 
-const vdpDataPortWriteMode = {
+const VdpDataPortWriteMode = {
     toVRAM: 0,
     toCRAM: 1
 };
 
-const vdpStandard = {
+const VdpStandard = {
     vdpNTSC: 0,
     vdpPAL: 1
 };
@@ -28,9 +28,9 @@ class Sega315_5124_Vdp {
         this.colorRam = new Array(0x20).fill(0);
 
         // Standard timing configurations
-        this.vdpStd = (vdpMode === 0) ? vdpStandard.vdpNTSC : vdpStandard.vdpPAL;
+        this.vdpStd = (vdpMode === 0) ? VdpStandard.vdpNTSC : VdpStandard.vdpPAL;
 
-        if (this.vdpStd === vdpStandard.vdpNTSC) {
+        if (this.vdpStd === VdpStandard.vdpNTSC) {
             this.numberOfScanlines = 262;
             this.clockCyclesPerScanline = 228;
             console.log("VDP::NTSC Standard");
@@ -46,7 +46,7 @@ class Sega315_5124_Vdp {
         this.controlWordFlag = false;
         this.controlWord = 0;
         this.dataPortReadWriteAddress = 0;
-        this.dataPortWriteMode = vdpDataPortWriteMode.toVRAM;
+        this.dataPortWriteMode = VdpDataPortWriteMode.toVRAM;
         this.readBufferByte = 0;
         this.statusFlags = 0;
 
@@ -186,13 +186,13 @@ class Sega315_5124_Vdp {
             this.dataPortReadWriteAddress = (this.controlWord & 0x3fff);        
 
             if (controlCode === 0) {
-                this.dataPortWriteMode = vdpDataPortWriteMode.toVRAM;
+                this.dataPortWriteMode = VdpDataPortWriteMode.toVRAM;
                 this.readBufferByte = this.vRam[this.dataPortReadWriteAddress & 0x3fff];
                 this.dataPortReadWriteAddress++;
                 this.dataPortReadWriteAddress &= 0x3fff;                
             }
             else if (controlCode === 1) {
-                this.dataPortWriteMode = vdpDataPortWriteMode.toVRAM;
+                this.dataPortWriteMode = VdpDataPortWriteMode.toVRAM;
             }
             else if (controlCode === 2) {
                 const registerIndex = (this.controlWord & 0x0f00) >> 8;
@@ -200,7 +200,7 @@ class Sega315_5124_Vdp {
                 this.writeByteToRegister(registerIndex, dataByte);                
             }
             else if (controlCode === 3) {
-                this.dataPortWriteMode = vdpDataPortWriteMode.toCRAM;
+                this.dataPortWriteMode = VdpDataPortWriteMode.toCRAM;
             }
         }
     }
@@ -208,14 +208,14 @@ class Sega315_5124_Vdp {
     writeByteToDataPort(b) {
         this.controlWordFlag = false;
 
-        if (this.dataPortWriteMode === vdpDataPortWriteMode.toVRAM) {
+        if (this.dataPortWriteMode === VdpDataPortWriteMode.toVRAM) {
             if (this.dataPortReadWriteAddress < 0x4000) {
                 this.vRam[this.dataPortReadWriteAddress] = b;
             } else {
                 console.error("VDP::Attempted out-of-bounds write inside VRAM address: 0x" + this.dataPortReadWriteAddress.toString(16));
             }
         }
-        else if (this.dataPortWriteMode === vdpDataPortWriteMode.toCRAM) {
+        else if (this.dataPortWriteMode === VdpDataPortWriteMode.toCRAM) {
             const cramAddress = this.dataPortReadWriteAddress & 0x1f;
             this.colorRam[cramAddress] = b;
         }
@@ -438,7 +438,7 @@ class Sega315_5124_Vdp {
             let vCounterJumpOnScanlineIndex = 219;
             let vCounterJumpToIndex = 213;   
 
-            if (this.vdpStd !== vdpStandard.vdpNTSC) {
+            if (this.vdpStd !== VdpStandard.vdpNTSC) {
                 vCounterJumpOnScanlineIndex = 243;
                 vCounterJumpToIndex = 186;    
             }
@@ -446,7 +446,7 @@ class Sega315_5124_Vdp {
             let interruptAfterScanlineIndex = 192;
 
             if (this.yScreenLines === 224) {
-                if (this.vdpStd === vdpStandard.vdpNTSC) {
+                if (this.vdpStd === VdpStandard.vdpNTSC) {
                     vCounterJumpOnScanlineIndex = 235;
                     vCounterJumpToIndex = 229;   
                 } else {
@@ -457,7 +457,7 @@ class Sega315_5124_Vdp {
                 interruptAfterScanlineIndex = 224; 
             }
             else if (this.yScreenLines === 240) {
-                if (this.vdpStd === vdpStandard.vdpNTSC) {
+                if (this.vdpStd === VdpStandard.vdpNTSC) {
                     vCounterJumpOnScanlineIndex = 256;
                     vCounterJumpToIndex = 0;    
                 } else {
@@ -827,6 +827,3 @@ class Sega315_5124_Vdp {
         }
     }
 }
-
-// Global legacy alias to prevent breaking unrefactored application components
-const smsVDP = Sega315_5124_Vdp;

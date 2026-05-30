@@ -2,18 +2,18 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: SegaMasterSystemBus
+ * Domain Layer: Sega Master System Memory and I/O Bus
  * 
  * Emulates the physical Address Bus and Control Bus of the Sega Master System.
  * It decodes memory requests (/MREQ) and I/O requests (/IORQ) to route data 
- * cycles to their respective physical integrated circuits and memory blocks.
+ * cycles to their respective integrated circuits and memory blocks (SRP).
  */
 
 class SegaMasterSystemBus {
     /**
-     * @param {SegaMasterSystemCartridge} cartridge - The physical cartridge instance.
+     * @param {SegaMasterSystemCartridge} cartridge - The loaded physical cartridge.
      * @param {Sega315_5124_Vdp} vdp - Sega 315-5124 Video Display Processor.
-     * @param {Sega315_5124_Psg} psg - Texas Instruments SN76489 Programmable Sound Generator.
+     * @param {Sega315_5124_Psg} psg - Texas Instruments SN76489-compatible Programmable Sound Generator.
      * @param {Sega315_5297} ioController - Sega 315-5297 DB-9 Pin I/O Controller.
      */
     constructor(cartridge, vdp, psg, ioController) {
@@ -21,10 +21,10 @@ class SegaMasterSystemBus {
         this.vdp = vdp;
         this.psg = psg;
 
-        // Factory-driven strategy pattern based on Cartridge ROM physical properties
+        // OCP: Instantiates the mapper strategy dynamically based on ROM parameters
         this.mapper = SegaMasterSystemMapperFactory.createMapper(this.cartridge);
 
-        // Fallback implementation to handle hardware integration gracefully
+        // Standard I/O chip. Fallback ensures runtime safety
         this.ioController = ioController || new Sega315_5297();
 
         // 8KB System Work RAM (0xC000 - 0xDFFF, mirrored at 0xE000 - 0xFFFF)
@@ -44,15 +44,15 @@ class SegaMasterSystemBus {
         address &= 0xffff;
 
         if (address <= 0xbfff) {
-            // Cartridge Space: Routed to the active Cartridge Mapper strategy
+            // Cartridge ROM/RAM Space (Delegated to active Mapper)
             return this.mapper.read(address);
         } 
         else if (address >= 0xc000 && address <= 0xdfff) {
-            // System Work RAM
+            // Main 8KB System Work RAM
             return this.systemWorkRam[address - 0xc000];
         } 
         else if (address >= 0xe000 && address <= 0xffff) {
-            // System Work RAM Mirror
+            // Mirrored System Work RAM space
             return this.systemWorkRam[address - 0xe000];
         }
 
@@ -69,15 +69,15 @@ class SegaMasterSystemBus {
         data &= 0xff;
 
         if (address <= 0xbfff) {
-            // Cartridge Space: Pass cycle to Cartridge Mapper (for bank switching or SRAM writes)
+            // Write to Cartridge Mapper registers or cartridge RAM
             this.mapper.write(address, data);
         } 
         else if (address >= 0xc000 && address <= 0xdfff) {
-            // System Work RAM
+            // Main 8KB System Work RAM
             this.systemWorkRam[address - 0xc000] = data;
         } 
         else if (address >= 0xe000 && address <= 0xffff) {
-            // System Work RAM Mirror
+            // Mirrored System Work RAM space
             this.systemWorkRam[address - 0xe000] = data;
 
             // Sega Mapper control registers respond to writes on mirror RAM (0xFFFC-0xFFFF)
@@ -87,7 +87,7 @@ class SegaMasterSystemBus {
 
     /**
      * Reads a 16-bit word (little-endian) from the memory address bus.
-     * @param {number} address - 16-bit starting physical address.
+     * @param {number} address - 16-bit physical address.
      * @returns {number} 16-bit word.
      */
     mreqRead16bit(address) {
@@ -98,7 +98,7 @@ class SegaMasterSystemBus {
 
     /**
      * Writes a 16-bit word (little-endian) to the memory address bus.
-     * @param {number} address - 16-bit starting physical address.
+     * @param {number} address - 16-bit physical address.
      * @param {number} word - 16-bit word value.
      */
     mreqWrite16bit(address, word) {
@@ -115,14 +115,14 @@ class SegaMasterSystemBus {
 
     /**
      * Reads an 8-bit byte from an hardware I/O Port.
-     * @param {number} port - 8-bit physical port index.
+     * @param {number} port - 8-bit hardware port.
      * @returns {number} 8-bit register state.
      */
     iorqRead(port) {
         port &= 0xff;
 
         if (port >= 0x40 && port < 0x80) {
-            // Video Display Processor Counters (Even: Vertical Line, Odd: Horizontal Beam)
+            // Video Display Processor Counters (Even: Vertical line, Odd: Horizontal beam)
             if ((port & 0x01) === 0x00) {
                 return this.vdp.readDataPort(0x7e);
             } else {
@@ -142,14 +142,14 @@ class SegaMasterSystemBus {
                 return 0xff; 
             }
             if (port === 0xf2) {
-                return 0; // Legacy FM synthesis slot (unpopulated)
+                return 0; // FM Synthesis (YM2413) slot (unpopulated)
             }
 
             if ((port % 2) === 0) {
-                // Sega DB-9 Input Controller Register DC (Controller Port 1 & Port 2 bits)
+                // Read Sega I/O Controller Register DC (Joypad 1 & Joypad 2 Up/Down)
                 return this.ioController.readRegisterDC();
             } else {
-                // Sega DB-9 Input Controller Register DD (Port 2 bits & System state)
+                // Read Sega I/O Controller Register DD (Joypad 2 Buttons, System state)
                 return this.ioController.readRegisterDD();
             }
         }
@@ -159,7 +159,7 @@ class SegaMasterSystemBus {
 
     /**
      * Writes an 8-bit byte to an hardware I/O Port.
-     * @param {number} port - 8-bit physical port index.
+     * @param {number} port - 8-bit hardware port.
      * @param {number} data - 8-bit value.
      */
     iorqWrite(port, data) {
@@ -167,11 +167,11 @@ class SegaMasterSystemBus {
         data &= 0xff;
 
         if (port >= 0x40 && port <= 0x7f) {
-            // Sound Chip Data Register (SN76489)
+            // Programmable Sound Generator Data Register (SN76489)
             this.psg.writeByte(data);
         } 
         else if (port >= 0x80 && port <= 0xbf) {
-            // VDP Controller Ports
+            // Video Display Processor Command/Data Writes
             if ((port % 2) === 0) {
                 this.vdp.writeByteToDataPort(data);
             } else {
@@ -181,7 +181,7 @@ class SegaMasterSystemBus {
     }
 
     // ========================================================================
-    // BACKWARD COMPATIBILITY & CPU INTERFACE WRAPPERS
+    // BACKWARD COMPATIBILITY WRAPPERS
     // ========================================================================
     readAddr(address)             { return this.mreqRead(address); }
     writeAddr(address, data)       { this.mreqWrite(address, data); }
@@ -190,7 +190,7 @@ class SegaMasterSystemBus {
     readPort(port)                { return this.iorqRead(port); }
     writePort(port, data)         { this.iorqWrite(port, data); }
 
-    // Direct interface methods for hardware inputs
+    // Joystick Event Wrappers
     pressButton1()   { this.ioController.pressButton1(); }
     depressButton1() { this.ioController.depressButton1(); }
     pressButton2()   { this.ioController.pressButton2(); }
@@ -204,6 +204,3 @@ class SegaMasterSystemBus {
     pressRight()     { this.ioController.pressRight(); }
     depressRight()   { this.ioController.depressRight(); }
 }
-
-// Global legacy mapping to prevent runtime crashes during structural evolution
-const smsMmu = SegaMasterSystemBus;
