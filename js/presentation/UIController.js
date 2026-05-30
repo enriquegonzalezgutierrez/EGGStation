@@ -2,11 +2,10 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: UI Controller (With Mobile Touch Bindings)
+ * Presentation Layer: UI Controller (With Audio DSP and Video Filter bindings)
  * 
  * Maps DOM interactions (buttons, file inputs, selects) and keyboard/touch events 
- * to the Emulator Orchestrator. Keeps the browser environment completely 
- * isolated from the emulator's core execution logic (SRP).
+ * to the Emulator Orchestrator. Keeps selectors visible during active gameplay (SRP).
  */
 
 class UIController {
@@ -45,14 +44,32 @@ class UIController {
             });
         }
 
-        // 3. Fullscreen Hook
+        // 3. Post-Processing Visual Filters Selector
+        const postProcessSelector = document.getElementById('postProcessSelector');
+        if (postProcessSelector) {
+            postProcessSelector.addEventListener('change', (e) => {
+                const mode = parseInt(e.target.value, 10);
+                this.handlePostProcessChange(mode);
+            });
+        }
+
+        // 4. Audio DSP Soundstage Selector
+        const audioFilterSelector = document.getElementById('audioFilterSelector');
+        if (audioFilterSelector) {
+            audioFilterSelector.addEventListener('change', (e) => {
+                const mode = parseInt(e.target.value, 10);
+                this.orchestrator.setAudioFilterMode(mode);
+            });
+        }
+
+        // 5. Fullscreen Hook
         document.addEventListener('fullscreenchange', () => this.handleFullscreenChange());
 
-        // 4. Keyboard Mappings for Controller and Emulator functions
+        // 6. Keyboard Mappings for Controller and Emulator functions
         document.addEventListener('keydown', (e) => this.handleKeyDown(e));
         document.addEventListener('keyup', (e) => this.handleKeyUp(e));
 
-        // 5. Mobil Virtual Gamepad Touch Mappings
+        // 7. Mobile Virtual Gamepad Touch Mappings
         this.bindVirtualGamepadEvents();
     }
 
@@ -100,6 +117,26 @@ class UIController {
                 this.orchestrator.togglePause();
             });
         }
+    }
+
+    /**
+     * Handles changes in the post-processing filter, toggling hardware Bilinear filtering.
+     * @param {number} mode - Selected filter mode index.
+     */
+    handlePostProcessChange(mode) {
+        const display = document.getElementById("smsdisplay");
+        if (!display) return;
+
+        if (mode === 1) {
+            // Bilinear smoothing handled directly by the browser rendering engine via GPU
+            display.style.imageRendering = "auto";
+        } else {
+            // Standard pixel boundaries required for retro sharp, Scale2X, and CRT scanlines
+            display.style.imageRendering = "pixelated";
+        }
+
+        // Delegate the selected configuration to the Application orchestrator
+        this.orchestrator.setPostProcessMode(mode);
     }
 
     /**
@@ -192,11 +229,11 @@ class UIController {
     }
 
     /**
-     * Cleans up the screen by hiding configuration elements once gameplay starts.
+     * Cleans up the screen by hiding only the file loading button once gameplay starts.
      */
     hideUIForGameplay() {
-        const settingsPanel = document.getElementById("settings-panel");
-        if (settingsPanel) settingsPanel.classList.add("hidden");
+        const fileSelector = document.getElementById("fileselector");
+        if (fileSelector) fileSelector.classList.add("hidden");
     }
 
     /**

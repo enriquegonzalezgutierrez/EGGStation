@@ -6,7 +6,7 @@
  * Presentation Layer: HTML Entry Point
  * 
  * Sets up the DOM structure, visual elements, and imports the architectural 
- * layers. Includes Responsive Design and Mobile Virtual Gamepad.
+ * layers. Includes Responsive Design, Mobile Gamepad, and Soundstage selectors.
 -->
 <html lang="en">
     <head>
@@ -111,9 +111,9 @@
                 </div>
             </div>
 
-            <!-- Interactive Control Board -->
+            <!-- Interactive Control Panel -->
             <div class="control-panel glass-panel" id="settings-panel">
-                <div class="control-group">
+                <div class="control-group" id="fileselector">
                     <label for="romLoaderBtn">Console Slot</label>
                     <button id="romLoaderBtn" class="primary-btn">Load ROM Cartridge</button>
                     <input type="file" id="cartridgeSelector" class="hidden" accept=".sms,.sg">
@@ -124,6 +124,29 @@
                     <select id="vdpModeSelector">
                         <option value="NTSC">NTSC (60Hz)</option>
                         <option value="PAL">PAL (50Hz)</option>
+                    </select>
+                </div>
+
+                <!-- Post-Processing Visual Filters Selection -->
+                <div class="control-group">
+                    <label for="postProcessSelector">Visual Filter</label>
+                    <select id="postProcessSelector">
+                        <option value="0">Retro Sharp (Nearest)</option>
+                        <option value="1">Analog Soft (Bilinear)</option>
+                        <option value="2">Scale2X HD (Smart Smoothing)</option>
+                        <option value="3">CRT Scanlines (Sony Trinitron)</option>
+                        <option value="4">Scale4X Cartoon HD (Vector Smooth)</option>
+                        <option value="5">NTSC Signal Bleed (Composite TV)</option>
+                    </select>
+                </div>
+
+                <!-- Audio DSP Soundstage Selection -->
+                <div class="control-group">
+                    <label for="audioFilterSelector">Audio Soundstage</label>
+                    <select id="audioFilterSelector">
+                        <option value="0">Original Mono (Chippy Dry)</option>
+                        <option value="1">Arcade Warmth (Low-Pass Filter)</option>
+                        <option value="2">Lush 3D Stereo (Haas Spatial Delay)</option>
                     </select>
                 </div>
             </div>

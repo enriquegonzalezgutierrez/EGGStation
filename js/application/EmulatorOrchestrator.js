@@ -2,11 +2,11 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Emulator Orchestrator
+ * Application Layer: Emulator Orchestrator (With Audio Filter routing)
  * 
  * Coordinates system execution loops, schedules frame sync rates (NTSC/PAL),
  * and links the isolated Domain entities with Infrastructure services.
- * Strictly decoupled from DOM manipulation and Browser events.
+ * Decoupled from DOM rendering and browser event APIs (SRP).
  */
 
 class EmulatorOrchestrator {
@@ -24,6 +24,12 @@ class EmulatorOrchestrator {
         this.isPaused = false;
         this.fastForward = false;
         
+        // Visual post-processing filter configuration index (0: Sharp, 1: Bilinear, 2: Scale2X, 3: Scanlines, 4: Scale4X, 5: NTSC Bleed)
+        this.postProcessMode = 0;
+
+        // Audio DSP soundstage configuration index (0: Mono, 1: Arcade Warmth Low-Pass, 2: Lush 3D Stereo)
+        this.audioFilterMode = 0;
+
         // Target timing metrics matching native hardware
         this.SMS_NTSC_FPS = 59.922743;
         this.SMS_PAL_FPS = 49.701459;
@@ -59,6 +65,25 @@ class EmulatorOrchestrator {
     }
 
     /**
+     * Updates the active visual filter post-processing mode index.
+     * @param {number} mode - Post-processing mode index.
+     */
+    setPostProcessMode(mode) {
+        this.postProcessMode = mode;
+    }
+
+    /**
+     * Updates the active audio DSP filter configuration index.
+     * @param {number} mode - Audio DSP filter mode index.
+     */
+    setAudioFilterMode(mode) {
+        this.audioFilterMode = mode;
+        if (this.psg && this.isRunning) {
+            this.psg.setAudioFilter(mode);
+        }
+    }
+
+    /**
      * Bootstraps the emulator hardware, injects dependencies, and begins execution.
      * @param {string} filename - The name of the loaded ROM file.
      * @param {ArrayBuffer} arrayBuffer - The raw binary buffer of the ROM.
@@ -83,6 +108,9 @@ class EmulatorOrchestrator {
         
         // 4. Boot Web Audio API Context tied to CPU clock
         this.psg.startMix(this.cpu);
+        
+        // Apply pre-configured audio filters immediately upon hardware boot
+        this.psg.setAudioFilter(this.audioFilterMode);
 
         // 5. Reset Timing and State
         this.isRunning = true;
@@ -174,7 +202,7 @@ class EmulatorOrchestrator {
             for (let i = 0; i < 4; i++) {
                 this.executeFrame(targetFps);
             }
-            this.vdp.hyperBlit(this.videoContext, 0);
+            this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
         } 
         // Normal Mode: Accumulate real-world time and execute matching frames
         else {
@@ -185,7 +213,7 @@ class EmulatorOrchestrator {
                 this.executeFrame(targetFps);
                 this.accumulatedTime -= targetFrameTime;
             }
-            this.vdp.hyperBlit(this.videoContext, 0); // Render visualizer frame
+            this.vdp.hyperBlit(this.videoContext, this.postProcessMode); // Render visualizer frame with active post-processing
         }
 
         // Frame rendering statistics update
