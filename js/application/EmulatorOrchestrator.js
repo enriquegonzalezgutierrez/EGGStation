@@ -2,14 +2,14 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Emulator Orchestrator (With WebGL2, DRC & Rewinding)
+ * Application Layer: Emulator Orchestrator (With WebGL2, DRC, Rewind & Shader Tuning)
  * 
  * Coordinates system execution loops, schedules frame sync rates (NTSC/PAL),
  * and links the isolated Domain entities with Infrastructure services.
  * Decoupled from DOM rendering and browser event APIs (SRP).
  * 
- * OPTIMIZED FOR PHASE 2: Added a high-speed, in-memory state caching ring buffer 
- * to support real-time fluid gameplay rewinding (Time Travel).
+ * OPTIMIZED FOR PHASE 4: Added a clean bridge wrapper to safely pipe interactive 
+ * WebGL2 shader parameters into the active post-processing pipeline.
  */
 
 class EmulatorOrchestrator {
@@ -91,6 +91,19 @@ class EmulatorOrchestrator {
         this.audioFilterMode = mode;
         if (this.psg && this.isRunning) {
             this.psg.setAudioFilter(mode);
+        }
+    }
+
+    /**
+     * Propagates custom CRT WebGL2 shader values to the active post-processing engine.
+     * @param {number} curvature - Scale factor of barrel screen bending.
+     * @param {number} scanlines - Blending weight opacity of scanlines.
+     * @param {number} phosphor - Intensity of the Trinitron subpixel grille.
+     * @param {number} bloom - Strength of the horizontal bleed glow.
+     */
+    updateShaderUniforms(curvature, scanlines, phosphor, bloom) {
+        if (this.vdp && this.vdp.postProcessor) {
+            this.vdp.postProcessor.updateShaderUniforms(curvature, scanlines, phosphor, bloom);
         }
     }
 

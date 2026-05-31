@@ -2,14 +2,14 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: UI Controller (With Cache-Proof Layout Controls, Gamepad, Rewinding & Phaser)
+ * Presentation Layer: UI Controller (With Gamepad, Rewinding, Phaser & Shader Tuning)
  * 
  * Maps DOM interactions (buttons, file inputs, selects), keyboard/touch events, 
  * and Physical USB/Bluetooth Gamepads to the Emulator Orchestrator. 
  * Swaps viewports via clean display rules to prevent flexbox offset anomalies (SRP).
  * 
- * OPTIMIZED FOR PHASE 3: Added touch/mouse handlers to emulate the SMS Light Phaser 
- * and latch coordinates directly into VDP counter registers.
+ * OPTIMIZED FOR PHASE 4: Added explicit inline style overrides to safely bypass 
+ * synchronous WebGL2 canvas display blockages initiated during early app bootstraps.
  */
 
 class UIController {
@@ -28,6 +28,9 @@ class UIController {
         };
 
         this.bindEvents();
+
+        // Synchronize initial slider states with GPU memory uniforms
+        this.handleShaderTuningChange();
 
         // Initiate the hardware gamepad polling loop
         this.pollGamepads();
@@ -102,6 +105,33 @@ class UIController {
                 }
             });
         }
+
+        // 10. WebGL2 CRT Shader Tuning Sliders
+        const bindSlider = (id) => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('input', () => this.handleShaderTuningChange());
+            }
+        };
+        bindSlider('sh-curvature');
+        bindSlider('sh-scanlines');
+        bindSlider('sh-phosphor');
+        bindSlider('sh-bloom');
+    }
+
+    /**
+     * Gathers current range slider states, scales them to normalized WebGL ratio ranges, 
+     * and streams them into active GPU uniform variables.
+     */
+    handleShaderTuningChange() {
+        // Translate slider integers (e.g. 0-150) to normalized float scales (e.g. 0.0 - 0.15)
+        const curvVal = parseInt(document.getElementById('sh-curvature')?.value || "90", 10) / 1000;
+        const scanVal = parseInt(document.getElementById('sh-scanlines')?.value || "38", 10) / 100;
+        const phosVal = parseInt(document.getElementById('sh-phosphor')?.value || "25", 10) / 100;
+        const blmVal  = parseInt(document.getElementById('sh-bloom')?.value || "15", 10) / 100;
+
+        // Pipe variables down to GPU memory space
+        this.orchestrator.updateShaderUniforms(curvVal, scanVal, phosVal, blmVal);
     }
 
     /**
@@ -273,20 +303,23 @@ class UIController {
         if (!display2D || !displayGL) return;
 
         if (mode === 6) {
-            // Decouple from flex layout completely to prevent shifting anomalies
-            display2D.style.display = "none";
-            displayGL.style.display = "block";
+            // Hide 2D Canvas completely
+            display2D.classList.add('hidden');
+            displayGL.classList.remove('hidden');
             
-            // Re-enforce visible states
+            // CRITICAL BUGFIX: Override the snychronous bootstrap inline styles injected by app.js
+            displayGL.style.display = "block";
             displayGL.style.visibility = "visible";
             displayGL.style.position = "relative";
         } else {
-            // Restore standard canvas layout
-            display2D.style.display = "block";
-            displayGL.style.display = "none";
+            // Show 2D Canvas completely
+            display2D.classList.remove('hidden');
+            displayGL.classList.add('hidden');
             
-            display2D.style.visibility = "visible";
-            display2D.style.position = "relative";
+            // Re-hide the WebGL canvas inline, aligning back to app.js's native state
+            displayGL.style.display = "none";
+            displayGL.style.visibility = "hidden";
+            displayGL.style.position = "absolute";
 
             if (mode === 1) {
                 display2D.style.imageRendering = "auto";

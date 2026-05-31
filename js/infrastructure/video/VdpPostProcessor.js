@@ -2,14 +2,13 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: VDP Post-Processor Service (With CRT-Royale & Anaglyph 3D)
+ * Infrastructure Layer: VDP Post-Processor Service (With CRT-Royale Uniform Tuning)
  * 
  * Manages zero-allocation hardware upscalers (Scale2X, Scale4X), 
  * CRT Scanline emulators, and compiles a native WebGL2 CRT-Royale Shader.
- * Features an Extreme high-contrast CRT preset for highly visible retro simulation (SRP).
  * 
- * OPTIMIZED FOR PHASE 3: Added support for zero-allocation Red/Cyan Anaglyph 
- * 3-D Glasses stereoscopic composite filtering (Mode 7).
+ * OPTIMIZED: Added safe null-guards for dynamic uniform bindings to prevent 
+ * JS thread-crashing exceptions on strict WebGL2 browsers/GPU drivers.
  */
 
 class VdpPostProcessor {
@@ -31,6 +30,20 @@ class VdpPostProcessor {
         this.vao = null;
         this.positionBuffer = null;
         this.textureHandle = null;
+
+        // Live shader tuning parameters (Cached state values)
+        this.shCurvature = 1.0;  // Curvature scale multiplier (1.0 = standard, 0.0 = flat)
+        this.shScanlines = 1.0;  // Scanlines weight multiplier (1.0 = standard, 0.0 = disabled)
+        this.shPhosphor = 1.0;   // Phosphor triads intensity multiplier (1.0 = standard)
+        this.shBloom = 1.0;      // Analog glow bleed intensity multiplier (1.0 = standard)
+
+        // Cached GPU uniform locations dictionary
+        this.uniformLocs = {
+            curvature: null,
+            scanlines: null,
+            phosphor: null,
+            bloom: null
+        };
 
         if (this.gl) {
             console.log("VdpPostProcessor::WebGL2 Context detected. Starting GPU compilation pipeline...");
@@ -58,7 +71,7 @@ class VdpPostProcessor {
             }
         `;
 
-        // 2. Fragment Shader: Ultra High-Fidelity CRT-Royale & Chromatic Aberration
+        // 2. Fragment Shader: CRT-Royale layout preserving original compilation mathematics
         const fsSource = `#version 300 es
             precision highp float;
             in vec2 vTexCoord;
@@ -67,12 +80,21 @@ class VdpPostProcessor {
             uniform sampler2D uTexture;
             uniform vec2 uResolution;
 
+            // Runtime scale multipliers (Defaults to 1.0 for original hardware look)
+            uniform float u_CurvatureScale;
+            uniform float u_ScanlineWeight;
+            uniform float u_PhosphorTriad;
+            uniform float u_BloomStrength;
+
             // Simulates physical screen curvature
             vec2 curve(vec2 uv) {
                 uv = (uv - 0.5) * 2.0;
                 uv.x *= 1.10; // Compensate horizontal zoom
-                uv.x *= 1.0 + (uv.y * uv.y) * 0.09; // Curved horizontal distortion
-                uv.y *= 1.0 + (uv.x * uv.x) * 0.10; // Curved vertical distortion
+                
+                // Safe progressive multiplications to preserve original shader pipeline math
+                uv.x *= 1.0 + (uv.y * uv.y) * (0.09 * u_CurvatureScale);
+                uv.y *= 1.0 + (uv.x * uv.x) * (0.10 * u_CurvatureScale);
+                
                 uv = (uv / 2.0) + 0.5;
                 return uv;
             }
@@ -110,18 +132,18 @@ class VdpPostProcessor {
                 // Retrieve chromatic-split pixel color and decode to linear space
                 vec3 color = decodeGamma(textureAberration(uTexture, uv));
                 
-                // 1. CRT Scanline calculation
-                float scanline = sin(uv.y * uResolution.y * 3.14159) * 0.38 + 0.62;
+                // 1. CRT Scanline calculation (sine-wave brightness modulation)
+                float scanline = sin(uv.y * uResolution.y * 3.14159) * (0.38 * u_ScanlineWeight) + (1.0 - (0.38 * u_ScanlineWeight));
                 color *= scanline;
                 
                 // 2. Aperture Grille subpixel replication
-                float phosphor = sin(uv.x * uResolution.x * 3.14159 * 2.0) * 0.25 + 0.75;
+                float phosphor = sin(uv.x * uResolution.x * 3.14159 * 2.0) * (0.25 * u_PhosphorTriad) + (1.0 - (0.25 * u_PhosphorTriad));
                 color *= phosphor;
 
                 // 3. Subtle bloom halation
                 vec3 bloom = vec3(0.0);
-                bloom += decodeGamma(texture(uTexture, uv + vec2(-0.004, 0.0)).rgb) * 0.15;
-                bloom += decodeGamma(texture(uTexture, uv + vec2(0.004, 0.0)).rgb) * 0.15;
+                bloom += decodeGamma(texture(uTexture, uv + vec2(-0.004, 0.0)).rgb) * (0.15 * u_BloomStrength);
+                bloom += decodeGamma(texture(uTexture, uv + vec2(0.004, 0.0)).rgb) * (0.15 * u_BloomStrength);
                 color += bloom;
 
                 // Apply soft vignette shadow framing
@@ -185,8 +207,16 @@ class VdpPostProcessor {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
-        // Ensure unpack alignment matches 1 byte to prevent GPU memory texture pitch crashes
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+
+        // 8. Cache Uniform Variables locations inside GPU memory (High-performance binding)
+        this.uniformLocs.curvature = gl.getUniformLocation(this.glProgram, "u_CurvatureScale");
+        this.uniformLocs.scanlines = gl.getUniformLocation(this.glProgram, "u_ScanlineWeight");
+        this.uniformLocs.phosphor  = gl.getUniformLocation(this.glProgram, "u_PhosphorTriad");
+        this.uniformLocs.bloom     = gl.getUniformLocation(this.glProgram, "u_BloomStrength");
+
+        // Diagnostic validation print: ensure locations bound successfully
+        console.log("VdpPostProcessor::Cached uniform locations:", this.uniformLocs);
 
         this.webglInitialized = true;
         console.log("VdpPostProcessor::WebGL2 post-processing pipeline fully active.");
@@ -204,6 +234,16 @@ class VdpPostProcessor {
             return null;
         }
         return shader;
+    }
+
+    /**
+     * Bridges shader slider changes in real-time.
+     */
+    updateShaderUniforms(curvature, scanlines, phosphor, bloom) {
+        this.shCurvature = curvature;
+        this.shScanlines = scanlines;
+        this.shPhosphor = phosphor;
+        this.shBloom = bloom;
     }
 
     /**
@@ -240,6 +280,12 @@ class VdpPostProcessor {
         // Update uniforms
         gl.uniform1i(gl.getUniformLocation(this.glProgram, "uTexture"), 0);
         gl.uniform2f(gl.getUniformLocation(this.glProgram, "uResolution"), width, 240);
+
+        // CRITICAL BUGFIX: Safe null-guards before binding uniforms to prevent crash loops
+        if (this.uniformLocs.curvature) gl.uniform1f(this.uniformLocs.curvature, this.shCurvature);
+        if (this.uniformLocs.scanlines) gl.uniform1f(this.uniformLocs.scanlines, this.shScanlines);
+        if (this.uniformLocs.phosphor)  gl.uniform1f(this.uniformLocs.phosphor,  this.shPhosphor);
+        if (this.uniformLocs.bloom)     gl.uniform1f(this.uniformLocs.bloom,     this.shBloom);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         gl.bindVertexArray(null);
@@ -370,7 +416,6 @@ class VdpPostProcessor {
 
     /**
      * Blits the frame buffer to the host canvas context.
-     * Routes the transaction to standard 2D upscalers, WebGL2, or Anaglyph 3D Glasses.
      * @param {CanvasRenderingContext2D} ctx - Target 2D Canvas context.
      * @param {Uint8ClampedArray} src - The core frame buffer.
      * @param {number} yScreenLines - Current active screen lines.
@@ -389,6 +434,11 @@ class VdpPostProcessor {
 
             this.renderGL(src, 256, 240);
             return;
+        }
+        
+        // SAFE FALLBACK: If WebGL failed to compile, redirect Mode 6 to bilinear 2D automatically
+        if (postProcessMode === 6) {
+            postProcessMode = 1; 
         }
 
         // Standard 2D Canvas modes (1x, Bilinear, Scalers, and Anaglyph 3D)
@@ -425,14 +475,12 @@ class VdpPostProcessor {
             this.applyNtsdBleed(src, 240);
             this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
         } 
-        // ========================================================================
         // ANAGLYPH 3-D GLASSES COMPOSITOR (Mode 7)
-        // ========================================================================
         else if (postProcessMode === 7) { 
             const width = 256;
             const height = 240;
             const dst = this.upscaledBuffer;
-            const previous = this.vdp.prevFrameBuffer; // Read the cached offset frame (Right Eye)
+            const previous = this.vdp.prevFrameBuffer; // Read the cached offset frame
 
             // Merge current frame (Left Eye) and previous frame (Right Eye) into Red/Cyan
             for (let i = 0; i < src.length; i += 4) {

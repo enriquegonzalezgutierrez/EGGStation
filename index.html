@@ -106,6 +106,7 @@
                         <option value="4">Scale4X HD CPU</option>
                         <option value="5">NTSC Bleed CPU</option>
                         <option value="6">CRT-Royale Extreme GPU</option>
+                        <option value="7">Anaglyph 3-D Glasses</option>
                     </select>
                 </div>
 
@@ -117,6 +118,39 @@
                         <option value="2">Lush 3D (Haas Stereo)</option>
                         <option value="3">Spatial Atmos (Convolution)</option>
                     </select>
+                </div>
+            </div>
+
+            <!-- WebGL2 CRT Shader Tuning Sliders -->
+            <div class="panel-section">
+                <h3>CRT Shader Tuning</h3>
+                
+                <div class="control-group">
+                    <div class="slider-header">
+                        <label>Screen Curvature</label>
+                    </div>
+                    <input type="range" id="sh-curvature" min="0" max="150" value="90">
+                </div>
+
+                <div class="control-group">
+                    <div class="slider-header">
+                        <label>Scanline Strength</label>
+                    </div>
+                    <input type="range" id="sh-scanlines" min="0" max="100" value="38">
+                </div>
+
+                <div class="control-group">
+                    <div class="slider-header">
+                        <label>Phosphor Triad</label>
+                    </div>
+                    <input type="range" id="sh-phosphor" min="0" max="100" value="25">
+                </div>
+
+                <div class="control-group">
+                    <div class="slider-header">
+                        <label>Halation Bloom</label>
+                    </div>
+                    <input type="range" id="sh-bloom" min="0" max="100" value="15">
                 </div>
             </div>
 
