@@ -2,95 +2,133 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Emulator Orchestrator (With Debugger & VRAM Inspector)
+ * Application Layer: Emulator Orchestrator (With GC-Free State Pools)
  * 
- * Coordinates system execution loops, schedules frame sync rates (NTSC/PAL),
- * and links the isolated Domain entities with Infrastructure services.
- * Decoupled from DOM rendering and browser event APIs (SRP).
- * 
- * OPTIMIZED FOR PHASE 5: Integrated active CPU step-debugging, breakpoint traps, 
- * and a contiguous 4bpp planar VRAM tile rasterizer.
+ * Coordinates system execution loops, schedules frame sync rates, and handles
+ * pre-allocated state pools to achieve zero Garbage Collection allocations.
  */
 
 class EmulatorOrchestrator {
     /**
-     * Initializes the Orchestrator.
-     * @param {CanvasRenderingContext2D} videoContext - The HTML5 Canvas 2D context for video output.
-     * @param {WebGL2RenderingContext} glContext - The HTML5 Canvas WebGL2 context for GPU Shaders.
-     * @param {Function} onFpsUpdate - Callback function to notify the UI of FPS changes.
+     * @param {CanvasRenderingContext2D} videoContext
+     * @param {WebGL2RenderingContext} glContext
+     * @param {Function} onFpsUpdate
      */
     constructor(videoContext, glContext, onFpsUpdate) {
         this.videoContext = videoContext;
         this.glContext = glContext;
         this.onFpsUpdate = onFpsUpdate;
         
-        // Emulation state machine
         this.isRunning = false;
         this.isPaused = false;
         this.fastForward = false;
         this.isRewinding = false; 
-        this.isDebugging = false; // Debugger state flag
+        this.isDebugging = false; 
         
-        // Visual post-processing filter configuration index (0: Sharp, 1: Bilinear, etc.)
         this.postProcessMode = 0;
-
-        // Audio DSP soundstage configuration index (0: Mono, 1: Arcade Warmth Low-Pass, 2: Haas Stereo)
         this.audioFilterMode = 0;
 
-        // Target timing metrics matching native hardware
         this.SMS_NTSC_FPS = 59.922743;
         this.SMS_PAL_FPS = 49.701459;
-        this.vdpMode = 0; // 0: NTSC (60Hz), 1: PAL (50Hz)
+        this.vdpMode = 0; 
         
-        // High-precision requestAnimationFrame synchronization variables
         this.animationFrameId = null;
         this.lastTime = 0;
         this.accumulatedTime = 0;
         this.framesRendered = 0;
 
-        // In-Memory Rewind Ring Buffer configurations
+        // GC-Free Static Buffer Ring Pool for real-time rewinding
+        this.maxRewindStates = 100; 
         this.rewindHistory = [];
-        this.maxRewindStates = 100; // Store last ~10 seconds of gameplay (approx. 2.5 MB in RAM)
+        this.rewindHistoryPointer = 0;
+        this.rewindActiveCount = 0;
+        
+        this.initializeStatePool();
+
         this.rewindFrameCount = 0;
+        this.breakpointAddress = null;
 
-        // Breakpoint trap configuration
-        this.breakpointAddress = null; // Stores 16-bit integer address
-
-        // Hardware Domain & Infrastructure Pointers
         this.cpu = null;
         this.mmu = null;
         this.vdp = null;
         this.psg = null;
         this.cartridge = null;
         
-        // Instantiate persistent auxiliary hardware/services
         this.ioController = new Sega315_5297();
         this.serializer = new WebIndexedDBSerializer(); 
 
-        // Hard bind the execution loop to preserve 'this' context in requestAnimationFrame
         this.loop = this.loop.bind(this);
     }
 
     /**
-     * Sets the Video Display Processor standard.
-     * @param {string} mode - "NTSC" or "PAL"
+     * Allocates memory buffers once during startup.
+     * Eliminates garbage collection pressure entirely during gameplay.
      */
+    initializeStatePool() {
+        this.rewindHistory = [];
+        for (let i = 0; i < this.maxRewindStates; i++) {
+            this.rewindHistory[i] = {
+                cpu: {
+                    a: 0, b: 0, c: 0, d: 0, e: 0, h: 0, l: 0, f: 0,
+                    shadow: { a: 0, b: 0, c: 0, d: 0, e: 0, h: 0, l: 0, f: 0 },
+                    ix: 0, iy: 0, pc: 0, sp: 0, r: 0, i: 0,
+                    iff1: 0, iff2: 0,
+                    maskableInterruptsEnabled: false,
+                    maskableInterruptWaiting: false,
+                    interruptMode: 0,
+                    totCycles: 0,
+                    NMIWaiting: false,
+                    m_bAfterEI: false
+                },
+                vdp: {
+                    vRam: new Uint8Array(0x4000),
+                    colorRam: new Uint8Array(0x20),
+                    currentScanlineIndex: 0,
+                    lineCounter: 0,
+                    controlWordFlag: false,
+                    controlWord: 0,
+                    dataPortReadWriteAddress: 0,
+                    dataPortWriteMode: 0,
+                    readBufferByte: 0,
+                    statusFlags: 0,
+                    nameTableBaseAddress: 0,
+                    spriteAttributeTableBaseAddress: 0,
+                    spritePatternGeneratorBaseAddress: 0,
+                    vcounter: 0,
+                    hcounter: 0,
+                    register00: 0, register01: 0, register02: 0, register03: 0,
+                    register04: 0, register05: 0, register06: 0, register07: 0,
+                    register08: 0, register09: 0, register0a: 0
+                },
+                mmu: {
+                    systemWorkRam: new Uint8Array(0x2000),
+                    mapperSlot2IsCartridgeRam: false,
+                    cartridgeRam: new Uint8Array(0x8000),
+                    slot0Idx: -1,
+                    slot1Idx: -1,
+                    slot2Idx: -1
+                },
+                psg: {
+                    volregister: new Int16Array(4),
+                    toneregister: new Int16Array(4),
+                    wavePos: new Float32Array(4),
+                    chan2belatched: 0,
+                    what2latch: 0,
+                    internalClock: 0,
+                    internalClockPos: 0
+                }
+            };
+        }
+    }
+
     setVdpMode(mode) {
         this.vdpMode = (mode === "PAL") ? 1 : 0;
     }
 
-    /**
-     * Updates the active visual filter post-processing mode index.
-     * @param {number} mode - Post-processing mode index.
-     */
     setPostProcessMode(mode) {
         this.postProcessMode = mode;
     }
 
-    /**
-     * Updates the active audio DSP filter configuration index.
-     * @param {number} mode - Audio DSP filter mode index.
-     */
     setAudioFilterMode(mode) {
         this.audioFilterMode = mode;
         if (this.psg && this.isRunning) {
@@ -98,96 +136,61 @@ class EmulatorOrchestrator {
         }
     }
 
-    /**
-     * Propagates custom CRT WebGL2 shader values to the active post-processing engine.
-     * @param {number} curvature - Scale factor of barrel screen bending.
-     * @param {number} scanlines - Blending weight opacity of scanlines.
-     * @param {number} phosphor - Intensity of the Trinitron subpixel grille.
-     * @param {number} bloom - Strength of the horizontal bleed glow.
-     */
     updateShaderUniforms(curvature, scanlines, phosphor, bloom) {
         if (this.vdp && this.vdp.postProcessor) {
             this.vdp.postProcessor.updateShaderUniforms(curvature, scanlines, phosphor, bloom);
         }
     }
 
-    /**
-     * Bootstraps the emulator hardware, injects dependencies, and begins execution.
-     * @param {string} filename - The name of the loaded ROM file.
-     * @param {ArrayBuffer} arrayBuffer - The raw binary buffer of the ROM.
-     */
     async loadRom(filename, arrayBuffer) {
-        // Prevent multiple loop collisions if a game is already running
         if (this.animationFrameId) {
             cancelAnimationFrame(this.animationFrameId);
         }
 
-        // 1. Initialize Domain Layer: Cartridge
         this.cartridge = new SegaMasterSystemCartridge(filename);
         this.cartridge.load(arrayBuffer);
         
-        // 2. Initialize Infrastructure Layer: Co-processors (Injected with WebGL2 Context)
         this.vdp = new Sega315_5124_Vdp(this.vdpMode, this.glContext);
         this.psg = new Sega315_5124_Psg();
         
-        // 3. Initialize Domain Layer: System Bus (MMU) & CPU
         this.mmu = new SegaMasterSystemBus(this.cartridge, this.vdp, this.psg, this.ioController);
         this.cpu = new ZilogZ80(this.mmu);
         
-        // 4. Boot Web Audio API Context and Await Worklet Compilation
         await this.psg.startMix(this.cpu);
-        
-        // Apply pre-configured audio filters immediately upon hardware boot
         this.psg.setAudioFilter(this.audioFilterMode);
 
-        // 5. Reset Timing, History, and State
         this.isRunning = true;
         this.isPaused = false;
         this.isRewinding = false;
         this.isDebugging = false;
         this.breakpointAddress = null;
-        this.rewindHistory = [];
+        
+        this.rewindHistoryPointer = 0;
+        this.rewindActiveCount = 0;
         this.rewindFrameCount = 0;
+
         this.lastTime = performance.now();
         this.accumulatedTime = 0;
         this.framesRendered = 0;
 
-        console.log(`EmulatorOrchestrator::System Booted with ROM [${filename}]`);
-        
-        // Kick off the execution loop
         this.animationFrameId = requestAnimationFrame(this.loop);
     }
 
-    /**
-     * Toggles the software pause state of the emulator loop.
-     */
     togglePause() {
         if (!this.isRunning) return;
-        
         this.isPaused = !this.isPaused;
-        
-        // If resuming, reset the delta-time baseline to prevent frame skipping logic
         if (!this.isPaused) {
             this.lastTime = performance.now();
             this.animationFrameId = requestAnimationFrame(this.loop);
-            console.log("EmulatorOrchestrator::Resumed Execution.");
-        } else {
-            console.log("EmulatorOrchestrator::Paused Execution.");
         }
     }
 
-    /**
-     * Triggers the physical SMS Console "PAUSE" button (which triggers a Non-Maskable Interrupt).
-     */
     triggerPauseButton() {
         if (this.cpu && this.isRunning) {
             this.cpu.raiseNMI(); 
         }
     }
 
-    /**
-     * Serializes current hardware states to the browser's IndexedDB.
-     */
     async saveState() {
         if (this.isRunning && this.cartridge) {
             try {
@@ -198,16 +201,14 @@ class EmulatorOrchestrator {
         }
     }
 
-    /**
-     * Restores hardware states from the browser's IndexedDB.
-     */
     async loadState() {
         if (this.isRunning && this.cartridge) {
             try {
                 const status = await this.serializer.deserialize(this.cartridge.cartridgeName, this.cpu, this.vdp, this.mmu, this.psg);
                 if (status === 0 && this.psg) {
                     this.psg.syncWorkletState();
-                    this.rewindHistory = []; // Clear rewind buffers on hard state loads to prevent timeline conflicts
+                    this.rewindActiveCount = 0;
+                    this.rewindHistoryPointer = 0;
                 }
             } catch (err) {
                 console.error("EmulatorOrchestrator::Load State failed:", err);
@@ -216,78 +217,98 @@ class EmulatorOrchestrator {
     }
 
     /**
-     * Captures a lightweight, synchronous in-memory snap of the complete emulator state.
-     * Pushes it into our dynamic circular ring buffer.
+     * Copy state directly into pre-allocated memory buffers.
+     * Avoids instantiation to secure smooth GC execution.
      */
     captureRewindState() {
         if (!this.isRunning || this.isPaused || this.isRewinding) return;
 
-        const stateSnap = {
-            cpu: {
-                registers: { ...this.cpu.registers },
-                shadowRegisters: { ...this.cpu.shadowRegisters },
-                maskableInterruptsEnabled: this.cpu.maskableInterruptsEnabled,
-                maskableInterruptWaiting: this.cpu.maskableInterruptWaiting,
-                interruptMode: this.cpu.interruptMode,
-                totCycles: this.cpu.totCycles,
-                NMIWaiting: this.cpu.NMIWaiting,
-                m_bAfterEI: this.cpu.m_bAfterEI
-            },
-            vdp: {
-                vRam: new Uint8Array(this.vdp.vRam), // Force deep array copy
-                colorRam: new Uint8Array(this.vdp.colorRam),
-                currentScanlineIndex: this.vdp.currentScanlineIndex,
-                lineCounter: this.vdp.lineCounter,
-                controlWordFlag: this.vdp.controlWordFlag,
-                controlWord: this.vdp.controlWord,
-                dataPortReadWriteAddress: this.vdp.dataPortReadWriteAddress,
-                dataPortWriteMode: this.vdp.dataPortWriteMode,
-                readBufferByte: this.vdp.readBufferByte,
-                statusFlags: this.vdp.statusFlags,
-                nameTableBaseAddress: this.vdp.nameTableBaseAddress,
-                spriteAttributeTableBaseAddress: this.vdp.spriteAttributeTableBaseAddress,
-                spritePatternGeneratorBaseAddress: this.vdp.spritePatternGeneratorBaseAddress,
-                vcounter: this.vdp.vcounter,
-                hcounter: this.vdp.hcounter,
-                register00: this.vdp.register00, register01: this.vdp.register01,
-                register02: this.vdp.register02, register03: this.vdp.register03,
-                register04: this.vdp.register04, register05: this.vdp.register05,
-                register06: this.vdp.register06, register07: this.vdp.register07,
-                register08: this.vdp.register08, register09: this.vdp.register09,
-                register0a: this.vdp.register0a
-            },
-            mmu: {
-                systemWorkRam: new Uint8Array(this.mmu.systemWorkRam),
-                mapperSlot2IsCartridgeRam: this.mmu.mapper.mapperSlot2IsCartridgeRam,
-                cartridgeRam: new Uint8Array(this.mmu.mapper.cartridgeRam),
-                slot0Idx: this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[0]),
-                slot1Idx: this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[1]),
-                slot2Idx: this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[2])
-            },
-            psg: {
-                volregister: [...this.psg.volregister],
-                toneregister: [...this.psg.toneregister],
-                wavePos: [...this.psg.wavePos],
-                chan2belatched: this.psg.chan2belatched,
-                what2latch: this.psg.what2latch,
-                internalClock: this.psg.internalClock,
-                internalClockPos: this.psg.internalClockPos
-            }
-        };
+        const state = this.rewindHistory[this.rewindHistoryPointer];
+        
+        // 1. Copy CPU registers
+        const r = this.cpu.registers;
+        state.cpu.a = r.a; state.cpu.b = r.b; state.cpu.c = r.c; state.cpu.d = r.d;
+        state.cpu.e = r.e; state.cpu.h = r.h; state.cpu.l = r.l; state.cpu.f = r.f;
+        state.cpu.ix = r.ix; state.cpu.iy = r.iy; state.cpu.pc = r.pc; state.cpu.sp = r.sp;
+        state.cpu.r = r.r; state.cpu.i = r.i;
+        state.cpu.iff1 = r.iff1; state.cpu.iff2 = r.iff2;
 
-        this.rewindHistory.push(stateSnap);
-        if (this.rewindHistory.length > this.maxRewindStates) {
-            this.rewindHistory.shift(); // Evicts oldest state to enforce circular buffer boundaries
-        }
+        const sh = r.shadow;
+        state.cpu.shadow.a = sh.a; state.cpu.shadow.b = sh.b; state.cpu.shadow.c = sh.c;
+        state.cpu.shadow.d = sh.d; state.cpu.shadow.e = sh.e; state.cpu.shadow.h = sh.h;
+        state.cpu.shadow.l = sh.l; state.cpu.shadow.f = sh.f;
+
+        state.cpu.maskableInterruptsEnabled = this.cpu.maskableInterruptsEnabled;
+        state.cpu.maskableInterruptWaiting = this.cpu.maskableInterruptWaiting;
+        state.cpu.interruptMode = this.cpu.interruptMode;
+        state.cpu.totCycles = this.cpu.totCycles;
+        state.cpu.NMIWaiting = this.cpu.NMIWaiting;
+        state.cpu.m_bAfterEI = this.cpu.m_bAfterEI;
+
+        // 2. Copy VDP arrays using high-performance typed array copy
+        state.vdp.colorRam.set(this.vdp.colorRam);
+        state.vdp.vRam.set(this.vdp.vRam);
+        state.vdp.currentScanlineIndex = this.vdp.currentScanlineIndex;
+        state.vdp.lineCounter = this.vdp.lineCounter;
+        state.vdp.controlWordFlag = this.vdp.controlWordFlag;
+        state.vdp.controlWord = this.vdp.controlWord;
+        state.vdp.dataPortReadWriteAddress = this.vdp.dataPortReadWriteAddress;
+        state.vdp.dataPortWriteMode = this.vdp.dataPortWriteMode;
+        state.vdp.readBufferByte = this.vdp.readBufferByte;
+        state.vdp.statusFlags = this.vdp.statusFlags;
+        state.vdp.nameTableBaseAddress = this.vdp.nameTableBaseAddress;
+        state.vdp.spriteAttributeTableBaseAddress = this.vdp.spriteAttributeTableBaseAddress;
+        state.vdp.spritePatternGeneratorBaseAddress = this.vdp.spritePatternGeneratorBaseAddress;
+        state.vdp.vcounter = this.vdp.vcounter;
+        state.vdp.hcounter = this.vdp.hcounter;
+
+        state.vdp.register00 = this.vdp.register00; state.vdp.register01 = this.vdp.register01;
+        state.vdp.register02 = this.vdp.register02; state.vdp.register03 = this.vdp.register03;
+        state.vdp.register04 = this.vdp.register04; state.vdp.register05 = this.vdp.register05;
+        state.vdp.register06 = this.vdp.register06; state.vdp.register07 = this.vdp.register07;
+        state.vdp.register08 = this.vdp.register08; state.vdp.register09 = this.vdp.register09;
+        state.vdp.register0a = this.vdp.register0a;
+
+        // 3. Copy Memory Bus
+        state.mmu.systemWorkRam.set(this.mmu.systemWorkRam);
+        state.mmu.cartridgeRam.set(this.mmu.mapper.cartridgeRam);
+        state.mmu.mapperSlot2IsCartridgeRam = this.mmu.mapper.mapperSlot2IsCartridgeRam;
+
+        state.mmu.slot0Idx = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[0]);
+        state.mmu.slot1Idx = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[1]);
+        state.mmu.slot2Idx = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[2]);
+
+        // 4. Copy sound state
+        state.psg.volregister.set(this.psg.volregister);
+        state.psg.toneregister.set(this.psg.toneregister);
+        state.psg.wavePos.set(this.psg.wavePos);
+        state.psg.chan2belatched = this.psg.chan2belatched;
+        state.psg.what2latch = this.psg.what2latch;
+        state.psg.internalClock = this.psg.internalClock;
+        state.psg.internalClockPos = this.psg.internalClockPos;
+
+        // Advance ring buffer pointers
+        this.rewindHistoryPointer = (this.rewindHistoryPointer + 1) % this.maxRewindStates;
+        this.rewindActiveCount = Math.min(this.maxRewindStates, this.rewindActiveCount + 1);
     }
 
     /**
-     * Restores an in-memory lightweight state snap, synchronizing all reference pointers.
-     * @param {Object} state - The state snap package to restore.
+     * Restore state from pre-allocated memory buffers.
+     * @param {Object} state
      */
     restoreRewindState(state) {
-        Object.assign(this.cpu.registers, state.cpu.registers);
-        Object.assign(this.cpu.shadowRegisters, state.cpu.shadowRegisters);
+        const r = this.cpu.registers;
+        r.a = state.cpu.a; r.b = state.cpu.b; r.c = state.cpu.c; r.d = state.cpu.d;
+        r.e = state.cpu.e; r.h = state.cpu.h; r.l = state.cpu.l; r.f = state.cpu.f;
+        r.ix = state.cpu.ix; r.iy = state.cpu.iy; r.pc = state.cpu.pc; r.sp = state.cpu.sp;
+        r.r = state.cpu.r; r.i = state.cpu.i;
+        r.iff1 = state.cpu.iff1; r.iff2 = state.cpu.iff2;
+
+        const sh = r.shadow;
+        sh.a = state.cpu.shadow.a; sh.b = state.cpu.shadow.b; sh.c = state.cpu.shadow.c;
+        sh.d = state.cpu.shadow.d; sh.e = state.cpu.shadow.e; sh.h = state.cpu.shadow.h;
+        sh.l = state.cpu.shadow.l; sh.f = state.cpu.shadow.f;
+
         this.cpu.maskableInterruptsEnabled = state.cpu.maskableInterruptsEnabled;
         this.cpu.maskableInterruptWaiting = state.cpu.maskableInterruptWaiting;
         this.cpu.interruptMode = state.cpu.interruptMode;
@@ -310,6 +331,7 @@ class EmulatorOrchestrator {
         this.vdp.spritePatternGeneratorBaseAddress = state.vdp.spritePatternGeneratorBaseAddress;
         this.vdp.vcounter = state.vdp.vcounter;
         this.vdp.hcounter = state.vdp.hcounter;
+
         this.vdp.register00 = state.vdp.register00; this.vdp.register01 = state.vdp.register01;
         this.vdp.register02 = state.vdp.register02; this.vdp.register03 = state.vdp.register03;
         this.vdp.register04 = state.vdp.register04; this.vdp.register05 = state.vdp.register05;
@@ -325,48 +347,38 @@ class EmulatorOrchestrator {
         if (state.mmu.slot1Idx !== -1) this.mmu.mapper.mapperSlots[1] = this.mmu.mapper.romBanks[state.mmu.slot1Idx];
         if (state.mmu.slot2Idx !== -1) this.mmu.mapper.mapperSlots[2] = this.mmu.mapper.romBanks[state.mmu.slot2Idx];
 
-        this.psg.volregister = [...state.psg.volregister];
-        this.psg.toneregister = [...state.psg.toneregister];
-        this.psg.wavePos = [...state.psg.wavePos];
+        this.psg.volregister.set(state.psg.volregister);
+        this.psg.toneregister.set(state.psg.toneregister);
+        this.psg.wavePos.set(state.psg.wavePos);
         this.psg.chan2belatched = state.psg.chan2belatched;
         this.psg.what2latch = state.psg.what2latch;
         this.psg.internalClock = state.psg.internalClock;
         this.psg.internalClockPos = state.psg.internalClockPos;
 
-        this.psg.syncWorkletState();
+        // Force PSG frequency step recalculation upon state restores
+        for (let i = 0; i < 4; i++) {
+            this.psg.recalculateVoiceStep(i);
+        }
     }
 
-    /**
-     * Executes precisely one CPU instruction (one fetch-decode-execute cycle).
-     * Used exclusively during active step debugging to trace hardware clocks.
-     */
     stepInstruction() {
         if (!this.isRunning || !this.cpu) return;
-        
-        // Execute exactly one CPU opcode and step the sound/video clocks
         const cycles = this.cpu.executeOne();
         this.psg.step(this.cpu.totCycles);
         this.vdp.update(this.cpu, cycles);
-        
         this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
     }
 
-    /**
-     * Rasterizes the VRAM pattern generator tiles to a 2D canvas context.
-     * Decodes SMS Mode 4 planar 4bpp sprite sheets to raw RGBA.
-     * @param {CanvasRenderingContext2D} ctx - Target 2D canvas context.
-     */
     rasterizeVramTiles(ctx) {
         if (!this.vdp) return;
         
-        const imgData = ctx.createImageData(128, 192); // 16 x 24 tiles grid
+        const imgData = ctx.createImageData(128, 192); 
         const vram = this.vdp.vRam;
         const cram = this.vdp.colorRam;
         const scale = this.vdp.analogColorScale;
 
-        for (let tileIdx = 0; tileIdx < 384; tileIdx++) { // Render first 384 tiles
+        for (let tileIdx = 0; tileIdx < 384; tileIdx++) { 
             const vramBase = tileIdx * 32;
-            
             const tileY = Math.floor(tileIdx / 16);
             const tileX = tileIdx % 16;
             const destBaseY = tileY * 8;
@@ -388,7 +400,7 @@ class EmulatorOrchestrator {
                     const bit3 = (b3 >> shift) & 1;
 
                     const cramIdx = bit0 | (bit1 << 1) | (bit2 << 2) | (bit3 << 3);
-                    const colorByte = cram[cramIdx]; // Fetch from Background Palette (First 16 entries of CRAM)
+                    const colorByte = cram[cramIdx]; 
 
                     const red = scale[colorByte & 0x03];
                     const green = scale[(colorByte & 0x0c) >> 2];
@@ -409,70 +421,56 @@ class EmulatorOrchestrator {
     }
 
     /**
-     * The core emulation loop, driven by the browser's V-Sync.
-     * Utilizes a delta-time accumulator to maintain correct internal clock speed 
-     * regardless of monitor refresh rates (60Hz, 144Hz, etc.).
-     * @param {number} currentTime - High-resolution timestamp provided by requestAnimationFrame.
+     * Primary loop synchronization method.
      */
     loop(currentTime) {
-        // Enforce total sound mute if system is paused, stopped or debugging
         if (!this.isRunning || this.isPaused || this.isDebugging) {
-            if (this.psg) {
-                this.psg.setMuted(true);
-            }
+            if (this.psg) this.psg.setMuted(true);
             if (this.isDebugging) {
-                // Keep requesting animation frames during active debugger breaks to keep the UI thread alive
                 this.lastTime = currentTime;
                 this.animationFrameId = requestAnimationFrame(this.loop);
             }
             return;
         }
 
-        // ========================================================================
-        // TEMPORAL REWIND EXECUTION BRANCH
-        // ========================================================================
+        // Handle active rewinding
         if (this.isRewinding) {
-            if (this.psg) this.psg.setMuted(true); // Enforce total mute during timeline shifts
+            if (this.psg) this.psg.setMuted(true);
             
-            if (this.rewindHistory.length > 0) {
-                // Pop and restore multiple states per frame to make rewinding feel rapid and satisfying
-                let stateToRestore = null;
+            if (this.rewindActiveCount > 0) {
+                // Shift rewind history backward by 2 steps per frame
                 for (let i = 0; i < 2; i++) {
-                    if (this.rewindHistory.length > 0) {
-                        stateToRestore = this.rewindHistory.pop();
+                    if (this.rewindActiveCount > 0) {
+                        this.rewindHistoryPointer = (this.rewindHistoryPointer - 1 + this.maxRewindStates) % this.maxRewindStates;
+                        this.rewindActiveCount--;
                     }
                 }
-                if (stateToRestore) {
-                    this.restoreRewindState(stateToRestore);
-                }
+                const state = this.rewindHistory[this.rewindHistoryPointer];
+                this.restoreRewindState(state);
                 this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
             }
-            this.lastTime = currentTime; // Prevent time delta accumulations during rewind cycles
+            this.lastTime = currentTime;
             this.animationFrameId = requestAnimationFrame(this.loop);
             return;
         }
 
         const targetFps = (this.vdpMode === 1) ? this.SMS_PAL_FPS : this.SMS_NTSC_FPS;
-        const targetFrameTime = 1000 / targetFps; // Expected milliseconds per frame
+        const targetFrameTime = 1000 / targetFps;
 
         let deltaTime = currentTime - this.lastTime;
         this.lastTime = currentTime;
 
-        // Prevent the "Spiral of Death" if the user switches browser tabs
         if (deltaTime > 100) {
             deltaTime = targetFrameTime;
         }
 
-        // Fast-Forward Mode: Ignore accurate timing and mute audio to prevent buffer pop noise
         if (this.fastForward) {
             if (this.psg) this.psg.setMuted(true);
             for (let i = 0; i < 4; i++) {
                 this.executeFrame(targetFps);
             }
             this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
-        } 
-        // Normal Mode: Accumulate real-world time and execute matching frames
-        else {
+        } else {
             if (this.psg) this.psg.setMuted(false);
             this.accumulatedTime += deltaTime;
             
@@ -484,9 +482,8 @@ class EmulatorOrchestrator {
             }
             
             if (frameExecuted) {
-                this.vdp.hyperBlit(this.videoContext, this.postProcessMode); // Render visualizer frame with active post-processing
+                this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
                 
-                // Track and save synchronous state checkpoints every 6 normal frames (approx. 100ms)
                 this.rewindFrameCount++;
                 if (this.rewindFrameCount >= 6) {
                     this.captureRewindState();
@@ -495,38 +492,27 @@ class EmulatorOrchestrator {
             }
         }
 
-        // Frame rendering statistics update
         this.framesRendered++;
-        if (deltaTime > 0 && this.framesRendered % 10 === 0) { // Update UI every 10 frames to save DOM layout thrashing
+        if (deltaTime > 0 && this.framesRendered % 10 === 0) {
             const currentFps = (1000 / deltaTime).toFixed(1);
             if (this.onFpsUpdate) this.onFpsUpdate(currentFps);
         }
 
-        // Request next frame recursively
         this.animationFrameId = requestAnimationFrame(this.loop);
     }
 
-    /**
-     * Simulates exactly one frame's worth of CPU cycles and hardware updates.
-     * Incorporates Proportional Dynamic Rate Control (DRC) to synchronize 
-     * CPU cycles execution directly with sound card playback latency.
-     * @param {number} targetFps - The signal FPS target used to calculate cycles per frame.
-     */
     executeFrame(targetFps) {
         let emulatedCycles = 0;
         let targetCycles = Math.floor(this.cpu.clockRate / targetFps);
 
-        // ========================================================================
-        // DYNAMIC RATE CONTROL (DRC) PROPORTIONAL CONTROLLER
-        // ========================================================================
+        // DRC closed-loop rate control calculation
         if (this.psg && this.psg.audioInitialized && !this.fastForward) {
             const drift = this.psg.getClockDrift();
-            const targetDrift = this.psg.multiplier * this.psg.audioBufSize * 1.5; // Ideal buffer target
+            const targetDrift = this.psg.multiplier * this.psg.audioBufSize * 1.5;
             const error = targetDrift - drift;
 
-            // Proportional feedback factor (Kp = 0.003)
             let adjustment = error * 0.003;
-            const maxAdjustment = targetCycles * 0.08; // Clamp drift adjustment bounds to ±8%
+            const maxAdjustment = targetCycles * 0.08;
             
             if (adjustment > maxAdjustment) adjustment = maxAdjustment;
             if (adjustment < -maxAdjustment) adjustment = -maxAdjustment;
@@ -535,26 +521,17 @@ class EmulatorOrchestrator {
         }
 
         while (emulatedCycles < targetCycles) {
-            // ========================================================================
-            // CPU HARDWARE BREAKPOINT TRAP INTERCEPTOR
-            // ========================================================================
             if (this.breakpointAddress !== null && this.cpu.registers.pc === this.breakpointAddress) {
                 this.isDebugging = true;
-                this.isPaused = false; // Override pause flag to prevent clock lock conflicts
-                console.warn(`EmulatorOrchestrator::Breakpoint hit at address: 0x${this.breakpointAddress.toString(16).padStart(4, '0')}`);
-                
-                // Dispatch a standard browser event to notify the UI to refresh registers/disassembly readouts
+                this.isPaused = false;
                 window.dispatchEvent(new CustomEvent('debugger-break'));
                 break;
             }
 
             const cyclesElapsed = this.cpu.executeOne();
-            
-            // Do not step audio clock during fast-forward to prevent buffer clipping noise
             if (!this.fastForward) {
                 this.psg.step(this.cpu.totCycles);
             }
-            
             this.vdp.update(this.cpu, cyclesElapsed);
             emulatedCycles += cyclesElapsed;
         }

@@ -8,8 +8,11 @@
  * within the Sega Genesis system bus. Handles three square-wave tone channels 
  * and one continuous feedback noise channel (periodic and white noise).
  * 
- * SOLID: Adheres to Single Responsibility (SRP) by isolating the raw sound 
- * chip register latch and wave cycle step logic completely from host busses.
+ * SOLID Principles:
+ * - Single Responsibility Principle (SRP): Isolates raw register latch updates, 
+ *   wave phase toggles, and noise generator clocks from general bus read/writes.
+ * - Open/Closed Principle (OCP): Designed with modular tone-generation loops 
+ *   that synthesize sound samples independently of master bus timing standards.
  */
 
 // Flattened high-speed volume lookup table (16 attenuation levels * 2 phase signs)
@@ -92,6 +95,7 @@ class GenesisPsg {
 
     /**
      * Writes an 8-bit command byte to latch registers or update state.
+     * Corrected to always interpret MSB=0 writes as frequency data, complying with SN76489 spec.
      * @param {number} command - 8-bit instruction written from the system bus.
      */
     writeCommand(command) {
@@ -99,46 +103,39 @@ class GenesisPsg {
         const isLatch = (command & 0x80) !== 0;
 
         if (isLatch) {
-            // Update the snychronously latched register target
+            // Update the synchronously latched register target
             this.latchedChannel = (command >> 5) & 3;
             this.latchedIsVolumeCommand = (command & 0x10) !== 0 ? 1 : 0;
-        }
 
-        if (this.latchedChannel < 3) {
-            // Target: Tone Channel (0, 1, or 2)
-            const ch = this.latchedChannel;
-
-            if (this.latchedIsVolumeCommand !== 0) {
-                // Volume Attenuation Command
-                this.tonesAttenuation[ch] = command & 0xF;
-            } else {
-                // Frequency Countdown Command
-                if (isLatch) {
-                    // Update low frequency bits (0-3)
-                    this.tonesCountdownMaster[ch] = (this.tonesCountdownMaster[ch] & 0xFFF0) | (command & 0xF);
+            if (this.latchedChannel < 3) {
+                const ch = this.latchedChannel;
+                if (this.latchedIsVolumeCommand !== 0) {
+                    this.tonesAttenuation[ch] = command & 0xF;
                 } else {
-                    // Update high frequency bits (4-9)
-                    this.tonesCountdownMaster[ch] = (this.tonesCountdownMaster[ch] & 0x000F) | ((command & 0x3F) << 4);
+                    // Update low frequency bits (0-3)
+                    this.tonesCountdownMaster[ch] = (this.tonesCountdownMaster[ch] & 0x3F0) | (command & 0xF);
+                }
+            } else {
+                if (this.latchedIsVolumeCommand !== 0) {
+                    this.noiseAttenuation = command & 0xF;
+                } else {
+                    this.noiseType = (command & 4) !== 0 ? GENESIS_PSG_NOISE_TYPE_WHITE : GENESIS_PSG_NOISE_TYPE_PERIODIC;
+                    this.noiseFrequencyMode = command & 3;
+
+                    // When the noise register is written, reset the 16-bit shift register state to 1
+                    this.noiseShiftRegister = 1;
                 }
             }
         } else {
-            // Target: Noise Channel (3)
-            if (this.latchedIsVolumeCommand !== 0) {
-                // Volume Attenuation Command
-                this.noiseAttenuation = command & 0xF;
-            } else {
-                // Frequency and Noise Type Command
-                this.noiseType = (command & 4) !== 0 ? GENESIS_PSG_NOISE_TYPE_WHITE : GENESIS_PSG_NOISE_TYPE_PERIODIC;
-                this.noiseFrequencyMode = command & 3;
-
-                // When the noise register is written, reset the 16-bit shift register state to 1
-                this.noiseShiftRegister = 1;
+            // Data Write (MSB = 0): Always updates frequency high bits (4-9) for the latched tone channel
+            if (this.latchedChannel < 3) {
+                this.tonesCountdownMaster[this.latchedChannel] = (this.tonesCountdownMaster[this.latchedChannel] & 0x0F) | ((command & 0x3F) << 4);
             }
         }
     }
 
     /**
-     * Steps the PSG clock generator snychronously and writes mono audio straight to the sample buffer.
+     * Steps the PSG clock generator synchronously and writes mono audio straight to the sample buffer.
      * @param {Int16Array} sampleBuffer - Interactive signed 16-bit audio block.
      * @param {number} totalFrames - Total frames to process on this step.
      */

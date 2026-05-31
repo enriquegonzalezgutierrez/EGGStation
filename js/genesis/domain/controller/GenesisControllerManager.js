@@ -5,12 +5,12 @@
  * Domain Layer: Genesis Input Controllers and Multitaps
  * 
  * Emulates the multiplexing hardware of standard Sega Genesis controllers 
- * and multitap splitters. Processes active-low digital logic for Up, Down, 
- * Left, Right, A, B, C, X, Y, Z, Start, and Mode buttons depending on state strobes.
+ * and multitap splitters. Processes active-low digital logic for standard 
+ * 3-button and 6-button gamepads.
  * 
- * SOLID: Adheres to Interface Segregation (ISP) by grouping multitap variants 
- * (EA and Sega) under a unified manager while keeping individual controller 
- * polling logic completely isolated.
+ * SOLID: Adheres to Dependency Inversion Principle (DIP). The manager safely 
+ * receives an external input poller function, preventing the memory buses from 
+ * passing null pointers or coupling with browser APIs.
  */
 
 // General standard button definitions
@@ -46,14 +46,13 @@ class GenesisController {
     /**
      * Reads the multiplexed 6-bit button data from the controller port.
      * @param {number} controllerIndex - Index of the player (0 to 3).
-     * @param {Function} callback - Frontend input poller function.
-     * @param {Object} userData - User context pointer.
-     * @returns {number} Active-low 6-bit button state (0 = pressed).
+     * @param {Function} pollerFn - Injected frontend input poller function.
+     * @returns {number} Active-low 6-bit button state (0 = pressed, 1 = released).
      */
-    read(controllerIndex, callback, userData) {
-        // Helper to query active-low button bits: returns 0 if pressed, 1 if open
+    read(controllerIndex, pollerFn) {
+        // Helper to query active-low button bits securely
         const getButtonBit = (btn) => {
-            return callback(userData, controllerIndex, btn) ? 0 : 1;
+            return (pollerFn && pollerFn(controllerIndex, btn)) ? 0 : 1;
         };
 
         if (this.thBit !== 0) {
@@ -154,18 +153,17 @@ class GenesisMultitapEA {
         }
     }
 
-    readPort(portIndex, microseconds, callback, userData) {
+    readPort(portIndex, microseconds, pollerFn) {
         switch (portIndex) {
             case 0:
                 if (this.selectedController > 3) {
                     return 0x7C; // EA Multitap Identification signature byte
                 }
                 this.doMicroseconds(microseconds);
-                return this.controllers[this.selectedController].read(this.selectedController, callback, userData);
+                return this.controllers[this.selectedController].read(this.selectedController, pollerFn);
 
             case 1:
-                // Port 1 reads are unpopulated in standard EA protocols
-                return 0xFF;
+                return 0xFF; // Port 1 reads are unpopulated in standard EA protocols
         }
         return 0xFF;
     }
@@ -184,9 +182,9 @@ class GenesisMultitapEA {
         }
     }
 
-    readController(controllerIndex, microseconds, callback, userData) {
+    readController(controllerIndex, microseconds, pollerFn) {
         this.doMicroseconds(microseconds);
-        return this.controllers[controllerIndex].read(controllerIndex, callback, userData);
+        return this.controllers[controllerIndex].read(controllerIndex, pollerFn);
     }
 
     writeController(controllerIndex, microseconds, value) {
@@ -211,13 +209,8 @@ class GenesisMultitapSega {
         this.pulses = 0;
     }
 
-    /**
-     * Reads standard 4bpp button nibbles based on shift register indices.
-     */
-    getButtonNybble(callback, userData, controllerIndex, buttons) {
-        const getBit = (btn) => {
-            return callback(userData, controllerIndex, btn) ? 0 : 1;
-        };
+    getButtonNybble(pollerFn, controllerIndex, buttons) {
+        const getBit = (btn) => (pollerFn && pollerFn(controllerIndex, btn)) ? 0 : 1;
 
         let value = 0;
         for (let i = 0; i < 4; ++i) {
@@ -226,24 +219,16 @@ class GenesisMultitapSega {
         return value;
     }
 
-    getNybble(callback, userData) {
+    getNybble(pollerFn) {
         if (this.thBit !== 0) {
             return 3; // TH high state
         }
 
         switch (this.pulses) {
-            case 0:
-                return 0xF;
-
-            case 1:
-            case 2:
-                return 0; // Standard Sega Tap signature identification
-
-            case 3: case 4: case 5: case 6:
-                return 1; // 6-button controller presence IDs
-
+            case 0: return 0xF;
+            case 1: case 2: return 0; // Standard Sega Tap signature identification
+            case 3: case 4: case 5: case 6: return 1; // 6-button controller presence IDs
             default: {
-                // Return standard 6-button mapped matrices on active shift phases
                 const buttons = [
                     [GENESIS_CONTROLLER_RIGHT, GENESIS_CONTROLLER_LEFT, GENESIS_CONTROLLER_DOWN, GENESIS_CONTROLLER_UP],
                     [GENESIS_CONTROLLER_START, GENESIS_CONTROLLER_A,    GENESIS_CONTROLLER_C,    GENESIS_CONTROLLER_B],
@@ -254,17 +239,16 @@ class GenesisMultitapSega {
                 const controllerIndex = Math.floor((this.pulses - 7) / 3);
 
                 if (controllerIndex < 4) {
-                    return this.getButtonNybble(callback, userData, controllerIndex, buttons[buttonIndex]);
+                    return this.getButtonNybble(pollerFn, controllerIndex, buttons[buttonIndex]);
                 }
                 break;
             }
         }
-
         return 0xF;
     }
 
-    read(callback, userData) {
-        return (this.tlBit << 4) | this.getNybble(callback, userData);
+    read(pollerFn) {
+        return (this.tlBit << 4) | this.getNybble(pollerFn);
     }
 
     write(value) {
@@ -286,8 +270,8 @@ class GenesisMultitapSega {
 // ========================================================================
 // 4. UNIFIED CONTROLLERS MANAGER
 // ========================================================================
-const GENESIS_CONTROLLER_PROTOCOL_STANDARD     = 0;
-const GENESIS_CONTROLLER_PROTOCOL_SEGA_TAP     = 1;
+const GENESIS_CONTROLLER_PROTOCOL_STANDARD    = 0;
+const GENESIS_CONTROLLER_PROTOCOL_SEGA_TAP    = 1;
 const GENESIS_CONTROLLER_PROTOCOL_EA_MULTITAP = 2;
 
 class GenesisControllerManager {
@@ -296,6 +280,9 @@ class GenesisControllerManager {
 
         this.eaMultitap = new GenesisMultitapEA();
         this.segaMultitaps = [new GenesisMultitapSega(), new GenesisMultitapSega()];
+        
+        // Injected callback from the UI Presentation Layer
+        this.inputPoller = null; 
     }
 
     initialise() {
@@ -305,25 +292,30 @@ class GenesisControllerManager {
     }
 
     /**
-     * Reads a byte from the target controller port.
-     * @param {number} portIndex - Port index (0 = Port A, 1 = Port B).
-     * @param {number} microseconds - CPU microsecond step timers.
-     * @param {Function} callback - Input poller callback.
-     * @param {Object} userData - User context pointer.
-     * @returns {number} 8-bit port readout.
+     * Links the UI layer keyboard/gamepad reader to the core hardware.
+     * @param {Function} pollerFn - (playerIndex, buttonId) => boolean
      */
-    read(portIndex, microseconds, callback, userData) {
+    bindInputPoller(pollerFn) {
+        this.inputPoller = pollerFn;
+    }
+
+    /**
+     * Reads a byte from the target controller port.
+     * Arguments `callback` and `userData` are intentionally ignored to prevent 
+     * null-pointer crashes from legacy bus requests.
+     */
+    read(portIndex, microseconds) {
         portIndex = portIndex & 1;
 
         switch (this.protocol) {
             case GENESIS_CONTROLLER_PROTOCOL_STANDARD:
-                return this.eaMultitap.readController(portIndex, microseconds, callback, userData);
+                return this.eaMultitap.readController(portIndex, microseconds, this.inputPoller);
 
             case GENESIS_CONTROLLER_PROTOCOL_EA_MULTITAP:
-                return this.eaMultitap.readPort(portIndex, microseconds, callback, userData);
+                return this.eaMultitap.readPort(portIndex, microseconds, this.inputPoller);
 
             case GENESIS_CONTROLLER_PROTOCOL_SEGA_TAP:
-                return this.segaMultitaps[portIndex].read(callback, userData);
+                return this.segaMultitaps[portIndex].read(this.inputPoller);
         }
 
         return 0xFF;
@@ -331,9 +323,6 @@ class GenesisControllerManager {
 
     /**
      * Writes a byte to the target controller port.
-     * @param {number} portIndex - Port index (0 = Port A, 1 = Port B).
-     * @param {number} microseconds - CPU microsecond step timers.
-     * @param {number} value - 8-bit data written from the Bus.
      */
     write(portIndex, microseconds, value) {
         portIndex = portIndex & 1;

@@ -2,20 +2,19 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: Sega Genesis Yamaha YM2612 FM Synthesizer
+ * Domain / Infrastructure Layer: Sega Genesis Yamaha YM2612 FM Synthesizer
  * 
  * Emulates the central 6-channel frequency modulation (FM) synthesizer chip 
  * of the Sega Genesis system bus. Handles 4-operator voice algorithms, 
  * independent LFO phase/amplitude modulations, custom DAC sampling registers, 
  * and hardware Timer A / Timer B interrupts.
  * 
- * SOLID: Adheres to Single Responsibility (SRP) by isolating the complex 
- * FM operator calculations and envelope step states from general bus layers.
+ * SOLID Principles:
+ * - Single Responsibility Principle (SRP): Isolates complex FM mathematical 
+ *   operator synthesis, envelope scaling, and LFO modulations from general buses.
+ * - Open/Closed Principle (OCP): Designed with modular algorithm routes that 
+ *   process channel streams without modifying the master sound mixer.
  */
-
-// ========================================================================
-// PRE-COMPUTED SILICON EMULATION LOOKUP TABLES
-// ========================================================================
 
 // 12-bit logarithmic attenuation sine table (1 quarter of a sine wave)
 const GENESIS_YM_SINE_TABLE = new Uint16Array([
@@ -49,7 +48,7 @@ const GENESIS_YM_POWER_TABLE = new Uint16Array([
     0x05E4, 0x05E0, 0x05DC, 0x05D8, 0x05D4, 0x05D0, 0x05CC, 0x05C8, 0x05C4, 0x05C0, 0x05BC, 0x05B8, 0x05B4, 0x05B0, 0x05AC, 0x05A8,
     0x05A4, 0x05A0, 0x059C, 0x0599, 0x0595, 0x0591, 0x058D, 0x0589, 0x0585, 0x0581, 0x057E, 0x057A, 0x0576, 0x0572, 0x056F, 0x056B,
     0x0567, 0x0563, 0x0560, 0x055C, 0x0558, 0x0554, 0x0551, 0x054D, 0x0549, 0x0546, 0x0542, 0x053E, 0x053B, 0x0537, 0x0534, 0x0530,
-    0x052C, 0x0529, 0x0525, 0x0522, 0x051E, 0x01B, 0x0517, 0x0514, 0x0510, 0x050C, 0x0509, 0x0506, 0x0502, 0x04FF, 0x04FB, 0x04F8,
+    0x052C, 0x0529, 0x0525, 0x0522, 0x051E, 0x051B, 0x0517, 0x0514, 0x0510, 0x050C, 0x0509, 0x0506, 0x0502, 0x04FF, 0x04FB, 0x04F8,
     0x04F4, 0x04F1, 0x04ED, 0x04EA, 0x04E7, 0x04E3, 0x04E0, 0x04DC, 0x04D9, 0x04D6, 0x04D2, 0x04CF, 0x04CC, 0x04C8, 0x04C5, 0x04C2,
     0x04BE, 0x04BB, 0x04B8, 0x04B5, 0x04B1, 0x04AE, 0x04AB, 0x04A8, 0x04A4, 0x04A1, 0x049E, 0x049B, 0x0498, 0x0494, 0x0491, 0x048E,
     0x048B, 0x0488, 0x0485, 0x0482, 0x047E, 0x047B, 0x0478, 0x0475, 0x0472, 0x046F, 0x046C, 0x0469, 0x0466, 0x0463, 0x0460, 0x045D,
@@ -63,7 +62,7 @@ const GENESIS_YM_ENVELOPE_MODE_SUSTAIN = 2;
 const GENESIS_YM_ENVELOPE_MODE_RELEASE = 3;
 
 // ========================================================================
-// LOW-FREQUENCY OSCILLATOR SUB-UNIT
+// 1. LOW-FREQUENCY OSCILLATOR (LFO)
 // ========================================================================
 class GenesisYmLfo {
     constructor() {
@@ -91,35 +90,36 @@ class GenesisYmLfo {
                 this.counter = 0;
                 this.phaseModulation = 0;
                 this.amplitudeModulation = 0;
-                return true; // Force-refresh channels modulation
+                return true; 
             }
         }
         return false;
     }
 
     advance() {
-        // Master LFO step triggers configuration thresholds
-        const thresholds = [0x6C, 0x4D, 0x47, 0x43, 0x3E, 0x2C, 0x08, 0x05];
+        // Precise hardware cycle thresholds matching Nuked-MD lfo_cycles
+        const thresholds = [108, 77, 71, 67, 62, 44, 8, 5];
         const threshold = thresholds[this.frequency];
 
-        if ((this.subCounter++ & threshold) === threshold) {
+        this.subCounter++;
+        if (this.subCounter >= threshold) {
             this.subCounter = 0;
 
             if (this.enabled) {
-                const phaseModulationDivisor = 4;
-
                 this.counter = (this.counter + 1) & 0x7F;
-                this.phaseModulation = Math.floor(this.counter / phaseModulationDivisor);
-                this.amplitudeModulation = this.counter * 2;
+                
+                // 1. Calculate Phase Modulation (PM) step (0 to 7)
+                this.phaseModulation = Math.floor(this.counter / 4);
 
+                // 2. Calculate Amplitude Modulation (AM) step (0 to 127)
+                this.amplitudeModulation = this.counter * 2;
                 if (this.amplitudeModulation >= 0x80) {
                     this.amplitudeModulation &= 0x7E;
                 } else {
                     this.amplitudeModulation ^= 0x7E;
                 }
 
-                // Return true if the phase modulation scale index shifted
-                return (this.counter % phaseModulationDivisor) === 0;
+                return (this.counter % 4) === 0;
             }
         }
         return false;
@@ -127,7 +127,7 @@ class GenesisYmLfo {
 }
 
 // ========================================================================
-// YAMAHA YM2612 CORE SYNTHESIZER
+// 2. YAMAHA YM2612 CORE SYNTHESIZER
 // ========================================================================
 class GenesisYm2612 {
     /**
@@ -136,12 +136,12 @@ class GenesisYm2612 {
     constructor(systemClock = 7670454) {
         this.systemClock = systemClock;
 
-        // --- 1. Sound Channels Configuration ---
+        // Sound Channels Configuration (0 = enabled, 1 = disabled)
         this.fmChannelsDisabled = new Uint8Array(6);
         this.dacChannelDisabled = 0;
         this.ladderEffectDisabled = 0;
 
-        // --- 2. Parallel Operators Contiguous Arrays (24 Total Operators: 6 Channels * 4) ---
+        // Parallel Operators Contiguous Arrays (24 Total Operators: 6 Channels * 4)
         this.opPosition = new Uint32Array(24);
         this.opStep = new Uint32Array(24);
         this.opFNumberAndBlock = new Uint16Array(24);
@@ -157,7 +157,7 @@ class GenesisYm2612 {
         this.opSustainLevel = new Uint16Array(24);
         this.opKeyScale = new Uint8Array(24);
         
-        this.opRates = new Uint16Array(24 * 4); // 4 modes per operator
+        this.opRates = new Uint16Array(24 * 4); 
         this.opEnvelopeMode = new Uint8Array(24);
         this.opKeyOn = new Uint8Array(24);
         this.opAmplitudeModulationOn = new Uint8Array(24);
@@ -169,7 +169,7 @@ class GenesisYm2612 {
         this.opSsgHold = new Uint8Array(24);
         this.opSsgInvert = new Uint8Array(24);
 
-        // --- 3. Parallel Channels Contiguous Arrays (6 Channels) ---
+        // Parallel Channels Contiguous Arrays (6 Channels)
         this.chFeedbackDivisor = new Uint8Array(6);
         this.chAlgorithm = new Uint16Array(6);
         this.chPrevSample0 = new Int16Array(6);
@@ -180,26 +180,26 @@ class GenesisYm2612 {
         this.chPanLeft = new Uint8Array(6);
         this.chPanRight = new Uint8Array(6);
 
-        // --- 4. Special Channel 3 Multi-Frequency Arrays ---
+        // Special Channel 3 Multi-Frequency Arrays
         this.ch3Frequencies = new Uint16Array(4);
         this.ch3PerOperatorFrequenciesEnabled = 0;
         this.ch3CsmModeEnabled = 0;
 
-        // --- 5. Global Control State Registers ---
+        // Global Control State Registers
         this.port = 0;
         this.address = 0;
         
-        this.dacSample = 0x100; // Digital-to-Analog Converter 9-bit register
+        this.dacSample = 0x100; 
         this.dacEnabled = 0;
         this.dacTest = 0;
 
         this.rawTimerAValue = 0;
-        this.timerAValue = 0;
-        this.timerACounter = 0;
+        this.timerAValue = 0x400;
+        this.timerACounter = 0x400;
         this.timerAEnabled = 0;
 
-        this.timerBValue = 0;
-        this.timerBCounter = 0;
+        this.timerBValue = 0x1000;
+        this.timerBCounter = 0x1000;
         this.timerBEnabled = 0;
 
         this.cachedAddress27 = 0;
@@ -210,12 +210,14 @@ class GenesisYm2612 {
         this.status = 0;
         this.busyFlagCounter = 0;
 
-        // LFO Sub-unit
         this.lfo = new GenesisYmLfo();
 
         this.initialise();
     }
 
+    /**
+     * Resets the entire FM chip states to cold-boot defaults.
+     */
     initialise() {
         this.fmChannelsDisabled.fill(0);
         this.dacChannelDisabled = 0;
@@ -228,11 +230,11 @@ class GenesisYm2612 {
         this.opDetune.fill(0);
         this.opMultiplier.fill(0);
 
-        this.opCountdown.fill(1); // Envelope update starts immediately
+        this.opCountdown.fill(1); 
         this.opCycleCounter.fill(0);
         this.opDeltaIndex.fill(0);
-        this.opAttenuation.fill(0x3FF); // Silenced on startup
-        this.opTotalLevel.fill(0x3F8); // TL mapped to silent 0x7F << 3
+        this.opAttenuation.fill(0x3FF); 
+        this.opTotalLevel.fill(0x3F8); 
         this.opSustainLevel.fill(0);
         this.opKeyScale.fill(0);
         
@@ -247,14 +249,14 @@ class GenesisYm2612 {
         this.opSsgHold.fill(0);
         this.opSsgInvert.fill(0);
 
-        this.chFeedbackDivisor.fill(9); // Mapped to ComputeFeedbackDivisor(0)
+        this.chFeedbackDivisor.fill(9); 
         this.chAlgorithm.fill(0);
         this.chPrevSample0.fill(0);
         this.chPrevSample1.fill(0);
-        this.chAmplitudeModulationShift.fill(7); // default shift
+        this.chAmplitudeModulationShift.fill(7); 
         this.chPhaseModulationSensitivity.fill(0);
 
-        this.chPanLeft.fill(1); // Panning is enabled on boot
+        this.chPanLeft.fill(1); 
         this.chPanRight.fill(1);
 
         this.ch3Frequencies.fill(0);
@@ -297,23 +299,36 @@ class GenesisYm2612 {
         const block = (fNumberAndBlock >> 11) & 7;
         const fNumber = fNumberAndBlock & 0x7FF;
 
-        // Detune lookup matching native GEMS sound driver adjustments
         const keyCodes = [0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 3, 3, 3, 3, 3, 3];
+        
+        // Corrected detune lookup table to be fully 3-dimensional, preventing NaN values
         const detuneLookup = [
-            [0, 0, 1, 2], [0, 1, 2, 2], [0, 1, 2, 4], [0, 2, 4, 5],
-            [0, 2, 5, 8], [0, 4, 8, 11], [0, 5, 11, 16], [0, 8, 16, 22]
+            // Block 0
+            [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            // Block 1
+            [[0, 0, 1, 2], [0, 1, 2, 2], [0, 1, 2, 4], [0, 2, 4, 5]],
+            // Block 2
+            [[0, 0, 2, 4], [0, 2, 4, 4], [0, 2, 4, 8], [0, 4, 8, 10]],
+            // Block 3
+            [[0, 0, 3, 6], [0, 3, 6, 6], [0, 3, 6, 12], [0, 6, 12, 15]],
+            // Block 4
+            [[0, 0, 4, 8], [0, 4, 8, 8], [0, 4, 8, 16], [0, 8, 16, 20]],
+            // Block 5
+            [[0, 0, 5, 10], [0, 5, 10, 10], [0, 5, 10, 20], [0, 10, 20, 25]],
+            // Block 6
+            [[0, 0, 6, 12], [0, 6, 12, 12], [0, 6, 12, 24], [0, 12, 24, 30]],
+            // Block 7
+            [[0, 0, 7, 14], [0, 7, 14, 14], [0, 7, 14, 28], [0, 14, 28, 35]]
         ];
 
         const dtVal = detuneLookup[block][keyCodes[fNumber >> 7]][this.opDetune[opIdx] & 3];
 
-        // LFO Phase Modulation step shifts
         const phaseModulationAbsolute = this.lfo.phaseModulation & 7;
         const phaseModulationIsNegative = (this.lfo.phaseModulation & 0x10) !== 0;
 
         const fNumberUpper = fNumber >> 4;
-        const sensitivity = this.opAmplitudeModulationOn[opIdx] | 0; // mapped to sensitivity flag
         
-        // Exact hardware logic emulator shifts tables (bypassing slow dynamic mults)
+        // Precise phase LFO shift logic matching fm.c pg_lfo_sh1/sh2 tables
         const lfoShifts = [
             [[7, 7], [7, 7], [7, 7], [7, 7], [7, 7], [7, 7], [7, 7], [7, 7]],
             [[7, 7], [7, 7], [7, 7], [7, 7], [7, 2], [7, 2], [7, 2], [7, 2]],
@@ -337,16 +352,15 @@ class GenesisYm2612 {
         step += fNumber << 1;
         step &= 0xFFF;
         step <<= block;
-        step >>= 2; // Convert from 16-bit to 14-bit step
+        step >>= 2; 
 
-        // Detune bounds correction
         if ((this.opDetune[opIdx] & 4) !== 0) {
             step -= dtVal;
         } else {
             step += dtVal;
         }
 
-        step &= 0x1FFFF; // Latch underflow bug
+        step &= 0x1FFFF; 
         step *= this.opMultiplier[opIdx];
         step = Math.floor(step / 2);
 
@@ -360,10 +374,9 @@ class GenesisYm2612 {
 
             if (keyOn) {
                 this.opEnvelopeMode[opIdx] = GENESIS_YM_ENVELOPE_MODE_ATTACK;
-                this.opPosition[opIdx] = 0; // Reset phase position
+                this.opPosition[opIdx] = 0; 
             } else {
                 this.opEnvelopeMode[opIdx] = GENESIS_YM_ENVELOPE_MODE_RELEASE;
-                // Invert the SSG-EG phase snychronously on key release
                 if (this.opSsgEnabled[opIdx] !== 0 && this.opAttenuation[opIdx] >= 0x200) {
                     if (this.opSsgInvert[opIdx] === this.opSsgAttack[opIdx]) {
                         this.opAttenuation[opIdx] = (0x200 - this.opAttenuation[opIdx]) & 0x3FF;
@@ -379,23 +392,17 @@ class GenesisYm2612 {
         this.address = address & 0xFF;
     }
 
-    /**
-     * Latches data into the registers, updating the compiled pipeline variables.
-     */
     writeData(data) {
         data = data & 0xFF;
 
-        // Trigger busy flag countdown
         this.status |= 0x80;
-        this.busyFlagCounter = 32 * 6; // 32 internal cycles * Prescaler 6
+        this.busyFlagCounter = 32 * 6; // Simulate hardware busy delay
 
         if (this.address < 0x30) {
             if (this.port === 0) {
                 switch (this.address) {
                     case 0x22:
-                        // LFO Enable / Frequency register
                         if (this.lfo.setEnabled((data & 8) !== 0)) {
-                            // Refresh all channels LFO configurations
                             for (let ch = 0; ch < 6; ch++) {
                                 for (let op = 0; op < 4; op++) {
                                     this.recalculatePhaseStep((ch * 4) + op);
@@ -406,24 +413,20 @@ class GenesisYm2612 {
                         break;
 
                     case 0x24:
-                        // Timer A value (low 8 bits)
                         this.rawTimerAValue = (this.rawTimerAValue & 3) | (data << 2);
                         this.timerAValue = 0x400 - this.rawTimerAValue;
                         break;
 
                     case 0x25:
-                        // Timer A value (high 2 bits)
                         this.rawTimerAValue = (this.rawTimerAValue & ~3) | (data & 3);
                         this.timerAValue = 0x400 - this.rawTimerAValue;
                         break;
 
                     case 0x26:
-                        // Timer B value
                         this.timerBValue = 16 * (0x100 - data);
                         break;
 
                     case 0x27: {
-                        // Timer load / enable / clear state registers
                         const ch3MultiEnabled = (data & 0xC0) !== 0;
 
                         for (let t = 0; t < 2; t++) {
@@ -451,7 +454,6 @@ class GenesisYm2612 {
                     }
 
                     case 0x28: {
-                        // Key-On Channel mapping selector
                         const channelMapping = [0, 1, 2, -1, 3, 4, 5, -1];
                         const channelIndex = channelMapping[data & 7];
 
@@ -465,73 +467,61 @@ class GenesisYm2612 {
                     }
 
                     case 0x2A:
-                        // DAC data register (Volume mapping)
                         this.dacSample = (this.dacSample & 1) | (data << 1);
                         break;
 
                     case 0x2B:
-                        // DAC enable state
                         this.dacEnabled = (data & 0x80) !== 0 ? 1 : 0;
                         break;
 
                     case 0x2C:
-                        // Web Audio DAC bypass debug test registers
                         this.dacSample = (this.dacSample & ~1) | ((data >> 3) & 1);
                         this.dacTest = (data & 0x20) !== 0 ? 1 : 0;
                         break;
                 }
             }
         } else {
-            // Address >= 0x30: Channel registers mapping
             const slot = this.address & 3;
             if (slot !== 3) {
                 const channelIndex = this.port + slot;
                 const baseOp = channelIndex * 4;
 
                 if (this.address < 0xA0) {
-                    // Target: Operator Configuration Registers
                     const opScrambled = (this.address >> 2) & 3;
                     const op = ((opScrambled >> 1) | (opScrambled << 1)) & 3;
                     const opIdx = baseOp + op;
 
                     switch (Math.floor(this.address / 0x10)) {
                         case 3:
-                            // Detune and multiplier
                             this.opDetune[opIdx] = (data >> 4) & 7;
                             this.opMultiplier[opIdx] = (data & 0xF) === 0 ? 1 : (data & 0xF) * 2;
                             this.recalculatePhaseStep(opIdx);
                             break;
 
                         case 4:
-                            // Total level (TL)
                             this.opTotalLevel[opIdx] = (data & 0x7F) << 3;
                             break;
 
                         case 5:
-                            // Key scale and Attack rate
                             this.opKeyScale[opIdx] = 3 - ((data >> 6) & 3);
                             this.opRates[(opIdx * 4) + GENESIS_YM_ENVELOPE_MODE_ATTACK] = data & 0x1F;
                             break;
 
                         case 6:
-                            // Decay rate and AM flag
                             this.opRates[(opIdx * 4) + GENESIS_YM_ENVELOPE_MODE_DECAY] = data & 0x1F;
                             this.opAmplitudeModulationOn[opIdx] = (data & 0x80) !== 0 ? 1 : 0;
                             break;
 
                         case 7:
-                            // Sustain rate
                             this.opRates[(opIdx * 4) + GENESIS_YM_ENVELOPE_MODE_SUSTAIN] = data & 0x1F;
                             break;
 
                         case 8:
-                            // Sustain level and Release rate
                             this.opSustainLevel[opIdx] = (data >> 4) === 0xF ? 0x3E0 : (data >> 4) * 0x20;
                             this.opRates[(opIdx * 4) + GENESIS_YM_ENVELOPE_MODE_RELEASE] = ((data & 0xF) << 1) | 1;
                             break;
 
                         case 9:
-                            // SSG-EG properties configuration
                             this.opSsgEnabled[opIdx]   = (data & 8) !== 0 ? 1 : 0;
                             this.opSsgAttack[opIdx]    = (data & 4) !== 0 && this.opSsgEnabled[opIdx] ? 1 : 0;
                             this.opSsgAlternate[opIdx] = (data & 2) !== 0 && this.opSsgEnabled[opIdx] ? 1 : 0;
@@ -539,10 +529,8 @@ class GenesisYm2612 {
                             break;
                     }
                 } else {
-                    // Target: Channel Configuration Registers
                     switch (Math.floor(this.address / 4)) {
                         case 0xA0 / 4: {
-                            // Frequency low bits
                             const freq = data | (this.cachedUpperFrequencyBits << 8);
                             if (channelIndex === 2) {
                                 this.ch3Frequencies[3] = freq;
@@ -562,12 +550,10 @@ class GenesisYm2612 {
                         }
 
                         case 0xA4 / 4:
-                            // Frequency high bits
                             this.cachedUpperFrequencyBits = data & 0x3F;
                             break;
 
                         case 0xA8 / 4:
-                            // Multi-frequency low bits (Channel 3 special mode)
                             if (this.port === 0) {
                                 const opMap = [2, 0, 1];
                                 const op = opMap[slot];
@@ -584,18 +570,15 @@ class GenesisYm2612 {
                             break;
 
                         case 0xAC / 4:
-                            // Multi-frequency high bits
                             this.cachedUpperFrequencyBitsFm3Multi = data & 0x3F;
                             break;
 
                         case 0xB0 / 4:
-                            // Feedback and Algorithm mapping
                             this.chFeedbackDivisor[channelIndex] = 9 - ((data >> 3) & 7);
                             this.chAlgorithm[channelIndex] = data & 7;
                             break;
 
                         case 0xB4 / 4:
-                            // Pan L/R routing, AM sensitivity, FM sensitivity
                             this.chPanLeft[channelIndex]  = (data & 0x80) !== 0 ? 1 : 0;
                             this.chPanRight[channelIndex] = (data & 0x40) !== 0 ? 1 : 0;
                             this.chAmplitudeModulationShift[channelIndex] = 7 >> ((data >> 4) & 3);
@@ -620,7 +603,7 @@ class GenesisYm2612 {
         if (this.busyFlagCounter > 0) {
             this.busyFlagCounter -= Math.min(this.busyFlagCounter, cycles);
             if (this.busyFlagCounter === 0) {
-                this.status &= ~0x80; // Clear BUSY flag snychronously
+                this.status &= ~0x80; 
             }
         }
         return this.status;
@@ -630,7 +613,6 @@ class GenesisYm2612 {
      * Updates individual operators envelopes ADSR states.
      */
     updateEnvelope(opIdx) {
-        // SSG-EG boundaries check
         if (this.opSsgEnabled[opIdx] !== 0 && this.opAttenuation[opIdx] >= 0x200) {
             if (this.opSsgAlternate[opIdx] !== 0) {
                 this.opSsgInvert[opIdx] = this.opSsgHold[opIdx] !== 0 ? 1 : (this.opSsgInvert[opIdx] === 0 ? 1 : 0);
@@ -644,9 +626,8 @@ class GenesisYm2612 {
             }
         }
 
-        // Countdown timer ticks
         if (--this.opCountdown[opIdx] === 0) {
-            this.opCountdown[opIdx] = 3; // Standard reset
+            this.opCountdown[opIdx] = 3; 
 
             const rate = this.opRates[(opIdx * 4) + this.opEnvelopeMode[opIdx]] | 0;
             if (rate > 0) {
@@ -663,13 +644,12 @@ class GenesisYm2612 {
                             this.opAttenuation[opIdx] += (~this.opAttenuation[opIdx] << 0) >> 4;
                         }
                     } else {
-                        // Decay / Sustain / Release modes step down
                         const limit = this.opSsgEnabled[opIdx] !== 0 ? 0x200 : 0x3F0;
                         if (this.opAttenuation[opIdx] < limit) {
                             this.opAttenuation[opIdx] += 1;
                         } else if (!(this.opKeyOn[opIdx] !== 0 && this.opSsgHold[opIdx] !== 0 && this.opSsgAlternate[opIdx] !== this.opSsgAttack[opIdx])) {
                             this.opEnvelopeMode[opIdx] = GENESIS_YM_ENVELOPE_MODE_RELEASE;
-                            this.opAttenuation[opIdx] = 0x3FF; // Total silence
+                            this.opAttenuation[opIdx] = 0x3FF; 
                         }
                     }
                 }
@@ -681,13 +661,11 @@ class GenesisYm2612 {
      * Resolves the operator's output value in contiguous, hardware-accurate 9-bit scale.
      */
     processOperator(opIdx, phaseModulation) {
-        // Step the Phase Generator accumulator
         this.opPosition[opIdx] += this.opStep[opIdx];
         const phase = (this.opPosition[opIdx] >> 10) & 0x3FF;
 
         this.updateEnvelope(opIdx);
 
-        // Calculate active AM volume envelope shift
         const amVal = this.opAmplitudeModulationOn[opIdx] !== 0 ? (this.lfo.amplitudeModulation >> this.chAmplitudeModulationShift[Math.floor(opIdx / 4)]) : 0;
         
         let attenuation = this.opAttenuation[opIdx] | 0;
@@ -697,7 +675,6 @@ class GenesisYm2612 {
 
         const totalAttenuation = Math.min(0x3FF, attenuation + amVal + this.opTotalLevel[opIdx]);
 
-        // Translate modular Phase quadrants
         const modulatedPhase = (phase + (phaseModulation >> 1)) & 0x3FF;
         const isNegative = (modulatedPhase & 0x200) !== 0;
         const isMirrored = (modulatedPhase & 0x100) !== 0;
@@ -705,7 +682,6 @@ class GenesisYm2612 {
 
         const phaseAsAttenuation = GENESIS_YM_SINE_TABLE[quarterPhase] + (totalAttenuation << 2);
 
-        // Inverse Logarithms back to linear pressure
         const whole = phaseAsAttenuation >> 8;
         const fraction = phaseAsAttenuation & 0xFF;
         const sampleAbsolute = (GENESIS_YM_POWER_TABLE[fraction] << 2) >> whole;
@@ -723,29 +699,28 @@ class GenesisYm2612 {
 
         for (let frame = 0; frame < totalFrames; ++frame) {
             
-            // Step LFO Phase Modulation indicators
             if (this.lfo.advance()) {
                 for (let opIdx = 0; opIdx < 24; opIdx++) {
                     this.recalculatePhaseStep(opIdx);
                 }
             }
 
-            const dacSampleValue = CC_SIGN_EXTEND ? CC_SIGN_EXTEND(this.dacSample ^ 0x100) : (this.dacSample ^ 0x100) - 0x100;
+            // BUGFIX: Direct inline 9-bit sign-extension math (no macro required)
+            const rawVal = (this.dacSample ^ 0x100) & 0x1FF;
+            const dacSampleValue = (rawVal & 0x100) !== 0 ? rawVal - 512 : rawVal;
 
             for (let ch = 0; ch < 6; ++ch) {
                 const baseOp = ch * 4;
                 const algorithm = this.chAlgorithm[ch];
 
-                // 1. Process Channel 1 self-feedback registers snychronously
                 let feedbackModulation = 0;
                 const divisor = this.chFeedbackDivisor[ch];
                 if (divisor !== 9) {
                     feedbackModulation = (this.chPrevSample0[ch] + this.chPrevSample1[ch]) >> divisor;
                     const shift = 32 - (15 - divisor);
-                    feedbackModulation = (feedbackModulation << shift) >> shift; // Sign extend
+                    feedbackModulation = (feedbackModulation << shift) >> shift; 
                 }
 
-                // 2. Fetch all 4 Operators processed samples
                 const op1 = this.processOperator(baseOp + 0, feedbackModulation);
                 const op2 = this.processOperator(baseOp + 1, algorithm === 0 ? op1 : 0);
                 const op3 = this.processOperator(baseOp + 2, (algorithm === 0 ? op2 : algorithm === 1 ? (op1 + op2) : 0));
@@ -756,15 +731,13 @@ class GenesisYm2612 {
 
                 const op4 = this.processOperator(baseOp + 3, op4Modulation);
 
-                // Update channel feedback buffer
                 this.chPrevSample1[ch] = this.chPrevSample0[ch];
                 this.chPrevSample0[ch] = op1;
 
-                // 3. Resolve Algorithm specific outputs summing
                 let outSample = 0;
                 switch (algorithm) {
                     case 0: case 1: case 2: case 3:
-                        outSample = op4 >> 5; // 14-bit to 9-bit conversion
+                        outSample = op4 >> 5; 
                         break;
                     case 4:
                         outSample = (op2 >> 5) + (op4 >> 5);
@@ -780,19 +753,17 @@ class GenesisYm2612 {
                         break;
                 }
 
-                // Apply dynamic hardware-specific DAC test oversampling
                 const isDac = (ch === 5 && this.dacEnabled !== 0) || this.dacTest !== 0;
                 const channelDisabled = isDac ? this.dacChannelDisabled !== 0 : this.fmChannelsDisabled[ch] !== 0;
 
                 let finalSample = isDac ? dacSampleValue : outSample;
 
-                // Apply direct, low-overhead VA4 ladder bug offset
                 if (this.ladderEffectDisabled === 0) {
                     if (finalSample < 0) {
                         finalSample += 1;
-                        finalSample -= 4; // Shift negative phase slightly
+                        finalSample -= 4; 
                     } else {
-                        finalSample += 4; // Shift positive phase slightly
+                        finalSample += 4; 
                     }
                 }
 
@@ -800,21 +771,18 @@ class GenesisYm2612 {
                     finalSample = 0;
                 }
 
-                // Scale sample to native signed 16-bit PCM and mix
-                const volumeOffset = (finalSample * 128) / 8; // standard OPN2 multiplier
+                const volumeOffset = (finalSample * 128) / 8; 
 
                 if (this.chPanLeft[ch] !== 0)  sampleBuffer[ptr]     = (sampleBuffer[ptr] + volumeOffset) | 0;
                 if (this.chPanRight[ch] !== 0) sampleBuffer[ptr + 1] = (sampleBuffer[ptr + 1] + volumeOffset) | 0;
             }
 
-            // Step dynamic Timer countdown arrays
             for (let t = 0; t < 2; t++) {
                 if (t === 0 && this.timerAEnabled !== 0) {
                     if (--this.timerACounter === 0) {
-                        this.status |= 1; // Trigger IRQ flag
+                        this.status |= 1; 
                         this.timerACounter = this.timerAValue;
 
-                        // Perform CSM key-on pulse if enabled
                         if (this.ch3CsmModeEnabled !== 0) {
                             for (let op = 0; op < 4; op++) {
                                 this.setKeyOn(8 + op, true);

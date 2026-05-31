@@ -8,18 +8,24 @@
  * on the Genesis motherboard. Manages direction control registers (mask/control) 
  * and bidirectional data registers (data).
  * 
- * SOLID: Adheres to Single Responsibility (SRP) by isolating the pin-out direction 
- * multiplexing math from both system buses and standard gamepads.
+ * SOLID: Adheres to the Single Responsibility Principle (SRP) by isolating the 
+ * pin-out direction multiplexing math completely from standard gamepads and 
+ * system memory buses.
  */
 
 class GenesisIoPort {
     constructor() {
-        this.mask = 0;         // Direction control register (0 = Input, 1 = Output)
-        this.cachedWrite = 0;  // Holds the last written byte to the data register
+        // Direction control register (0 = Input pin, 1 = Output pin)
+        this.mask = 0;         
+        // Holds the last written byte to the data register
+        this.cachedWrite = 0;  
     }
 
+    /**
+     * Resets the port to cold-boot states.
+     * Sega standard SDK bootcode explicitly checks if the control value defaults to 0.
+     */
     initialise() {
-        // Zeros out on reset. Sega standard SDK bootcode checks if control value is 0.
         this.mask = 0;
         this.cachedWrite = 0;
     }
@@ -42,18 +48,19 @@ class GenesisIoPort {
 
     /**
      * Reads multiplexed data from the port (Data Port).
-     * @param {number} cycles - Clock cycles passed.
-     * @param {Function} readCallback - Bidirectional pin read callback.
+     * @param {number} cycles - Clock cycles elapsed.
+     * @param {Function} readCallback - Bidirectional pin read callback from the hardware Controller.
      * @param {Object} userData - User context pointer.
      * @returns {number} 8-bit data register readout.
      */
     readData(cycles, readCallback, userData) {
-        if (readCallback === null || readCallback === undefined) {
+        if (!readCallback) {
             return 0;
         }
 
-        // Multiplexing formula: bits set as inputs (0) in mask are read from the controller line,
-        // while bits set as outputs (1) are read directly from the cached written value.
+        // Multiplexing formula: bits set as inputs (0) in the mask are read from the 
+        // physical controller lines. Bits set as outputs (1) are read directly from 
+        // the locally cached written value.
         const inputLines = readCallback(userData, cycles) & 0xFF;
         const inputMask = (~this.mask) & 0xFF;
 
@@ -63,16 +70,16 @@ class GenesisIoPort {
     /**
      * Writes 8-bit data to the port (Data Port).
      * @param {number} value - 8-bit data byte.
-     * @param {number} cycles - Clock cycles passed.
-     * @param {Function} writeCallback - Bidirectional pin write callback.
+     * @param {number} cycles - Clock cycles elapsed.
+     * @param {Function} writeCallback - Bidirectional pin write callback to the hardware Controller.
      * @param {Object} userData - User context pointer.
      */
     writeData(value, cycles, writeCallback, userData) {
-        if (writeCallback === null || writeCallback === undefined) {
+        if (!writeCallback) {
             return;
         }
 
-        // Store only the bits mapped as active outputs
+        // Store only the bits mapped as active outputs by the direction mask
         this.cachedWrite = value & this.mask;
         writeCallback(userData, this.cachedWrite, cycles);
     }

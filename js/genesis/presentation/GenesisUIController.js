@@ -7,23 +7,12 @@
  * Maps DOM interactions (buttons, file inputs, selects), keyboard/touch events, 
  * and physical input registers directly to the Sega Genesis Orchestrator.
  * 
- * SOLID: Adheres to Single Responsibility (SRP) by isolating the primary 68K/Z80 
- * input polling callbacks completely from system bus memory spaces.
+ * SOLID Principles:
+ * - Single Responsibility Principle (SRP): Isolates UI event bindings and keyboard 
+ *   layouts from the core execution clocks and system memory buses.
+ * - Dependency Inversion Principle (DIP): Injects the frontend input poller 
+ *   directly into the core's input manager, keeping the domain agnostic of the DOM.
  */
-
-// Mapped button ID constants matching clownmdemu.h
-const GENESIS_BUTTON_UP     = 0;
-const GENESIS_BUTTON_DOWN   = 1;
-const GENESIS_BUTTON_LEFT   = 2;
-const GENESIS_BUTTON_RIGHT  = 3;
-const GENESIS_BUTTON_A      = 4;
-const GENESIS_BUTTON_B      = 5;
-const GENESIS_BUTTON_C      = 6;
-const GENESIS_BUTTON_X      = 7;
-const GENESIS_BUTTON_Y      = 8;
-const GENESIS_BUTTON_Z      = 9;
-const GENESIS_BUTTON_START  = 10;
-const GENESIS_BUTTON_MODE   = 11;
 
 class GenesisUIController {
     /**
@@ -33,7 +22,7 @@ class GenesisUIController {
     constructor(orchestrator) {
         this.orchestrator = orchestrator;
         
-        // Dynamic key states dictionary (stores snychronous active states: true/false)
+        // Dynamic key states dictionary (stores synchronous active states: true/false)
         this.keysActive = {};
 
         this.bindEvents();
@@ -68,36 +57,46 @@ class GenesisUIController {
         // 3. Keyboard Mappings for Controller and Emulator functions
         document.addEventListener('keydown', (e) => this.handleKeyDown(e));
         document.addEventListener('keyup', (e) => this.handleKeyUp(e));
+
+        // 4. Inject the keyboard poller into the hardware Controller Manager (DIP)
+        // This guarantees the hardware domain never queries the DOM directly.
+        if (this.orchestrator && this.orchestrator.controllerManager) {
+            this.orchestrator.controllerManager.bindInputPoller((playerId, buttonId) => {
+                return this.inputRequested(playerId, buttonId);
+            });
+        }
     }
 
     /**
      * Reads the current keyboard states and returns true if pressed.
      * Invoked automatically as a callback by the active Controller Manager.
+     * Note: Uses GENESIS_CONTROLLER_* constants defined in GenesisControllerManager.js
+     * 
      * @param {number} playerId - Player index (0 = P1, 1 = P2).
      * @param {number} buttonId - Mapped button ID constant.
      * @returns {boolean} True if pressed.
      */
     inputRequested(playerId, buttonId) {
         if (playerId !== 0) {
-            return false; // Port 1 only mapped for keyboard input
+            return false; // Port 1 only mapped for standard keyboard input
         }
 
         switch (buttonId) {
-            case GENESIS_BUTTON_UP:     return this.keysActive['ArrowUp'] === true;
-            case GENESIS_BUTTON_DOWN:   return this.keysActive['ArrowDown'] === true;
-            case GENESIS_BUTTON_LEFT:   return this.keysActive['ArrowLeft'] === true;
-            case GENESIS_BUTTON_RIGHT:  return this.keysActive['ArrowRight'] === true;
+            case GENESIS_CONTROLLER_UP:     return this.keysActive['ArrowUp'] === true;
+            case GENESIS_CONTROLLER_DOWN:   return this.keysActive['ArrowDown'] === true;
+            case GENESIS_CONTROLLER_LEFT:   return this.keysActive['ArrowLeft'] === true;
+            case GENESIS_CONTROLLER_RIGHT:  return this.keysActive['ArrowRight'] === true;
             
-            case GENESIS_BUTTON_A:      return this.keysActive['z'] === true; // Key Z
-            case GENESIS_BUTTON_B:      return this.keysActive['x'] === true; // Key X
-            case GENESIS_BUTTON_C:      return this.keysActive['c'] === true; // Key C
+            case GENESIS_CONTROLLER_A:      return this.keysActive['z'] === true || this.keysActive['Z'] === true; 
+            case GENESIS_CONTROLLER_B:      return this.keysActive['x'] === true || this.keysActive['X'] === true; 
+            case GENESIS_CONTROLLER_C:      return this.keysActive['c'] === true || this.keysActive['C'] === true; 
             
-            case GENESIS_BUTTON_X:      return this.keysActive['a'] === true; // Key A
-            case GENESIS_BUTTON_Y:      return this.keysActive['s'] === true; // Key S
-            case GENESIS_BUTTON_Z:      return this.keysActive['d'] === true; // Key D
+            case GENESIS_CONTROLLER_X:      return this.keysActive['a'] === true || this.keysActive['A'] === true; 
+            case GENESIS_CONTROLLER_Y:      return this.keysActive['s'] === true || this.keysActive['S'] === true; 
+            case GENESIS_CONTROLLER_Z:      return this.keysActive['d'] === true || this.keysActive['D'] === true; 
             
-            case GENESIS_BUTTON_START:  return this.keysActive['Enter'] === true;
-            case GENESIS_BUTTON_MODE:   return this.keysActive['Space'] === true;
+            case GENESIS_CONTROLLER_START:  return this.keysActive['Enter'] === true;
+            case GENESIS_CONTROLLER_MODE:   return this.keysActive[' '] === true; // Spacebar
         }
 
         return false;
@@ -113,9 +112,9 @@ class GenesisUIController {
         const file = files[0];
         const fname = file.name.toLowerCase();
 
-        // Validate supported extensions (.md, .gen, .bin)
-        if (!fname.endsWith('.sms') && !fname.endsWith('.sg') && !fname.endsWith('.md') && !fname.endsWith('.gen') && !fname.endsWith('.bin')) {
-            alert("EGGStation::Error: Unsupported ROM file format.");
+        // Validate supported Genesis / Mega Drive extensions
+        if (!fname.endsWith('.md') && !fname.endsWith('.gen') && !fname.endsWith('.bin') && !fname.endsWith('.smd')) {
+            alert("EGGStation::Error: Unsupported Sega Genesis ROM file format. Please use .md, .gen, or .bin");
             return;
         }
 
@@ -136,17 +135,18 @@ class GenesisUIController {
         this.keysActive[e.key] = true;
 
         switch(e.key) {
-            // Prevent browser scroll on arrow keys
+            // Prevent browser scroll on arrow keys and spacebar
             case "ArrowUp":
             case "ArrowDown":
             case "ArrowLeft":
             case "ArrowRight":
-            case "Space":
+            case " ":
                 e.preventDefault();
                 break;
 
             // Emulator control shortcuts
             case "p": 
+            case "P":
                 this.orchestrator.togglePause(); 
                 break;
             case "\\": 
@@ -171,7 +171,7 @@ class GenesisUIController {
     }
 
     /**
-     * Cleans up the screen by hiding only the file loading button once gameplay starts.
+     * Cleans up the screen by hiding the file loading button once gameplay starts.
      */
     hideUIForGameplay() {
         const fileSelector = document.getElementById("fileselector");

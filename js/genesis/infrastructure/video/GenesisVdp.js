@@ -7,19 +7,46 @@
  * Emulates the custom Sega Genesis VDP chip. Handles plane mapping grids, 
  * sprite caching/sorting lists, window boundary locks, H32 / H40 resolution modes, 
  * and advanced hardware-level pixel priorities (Shadow / Highlight).
+ * Aligned with MDTracer reference standards to ensure proper H-Blank status 
+ * toggling and non-blocking register set commands.
  * 
- * SOLID: Adheres to Single Responsibility (SRP) by isolating the complex 
- * 2D CRT scanline rendering logic completely from system memory busses.
+ * SOLID Principles:
+ * - Single Responsibility Principle (SRP): Isolates the complex 2D scanline compositing 
+ *   and priority-testing arithmetic from host system memory buses and timings.
+ * - Open/Closed Principle (OCP): Supports custom screen sizing multipliers and 
+ *   arbitrary resolution layers without altering the core tile rasterizer logic.
  */
 
 // ========================================================================
-// PRE-COMPUTED DEPTH-TEST & ALPHA-TEST LOOKUP TABLES
+// SEGA GENESIS VDP LOW-LEVEL UTILITY PORTED HELPER FUNCTIONS
 // ========================================================================
+
+function GetSpriteTableAddress(state) {
+    const mask = ~(0x1FF) << (state.h40Enabled ? 1 : 0);
+    return (state.spriteTableAddress & mask) >>> 0;
+}
+
+function GetWindowPlaneTableAddress(state) {
+    const mask = ~(0x7FF) << (state.h40Enabled ? 1 : 0);
+    return (state.windowAddress & mask) >>> 0;
+}
+
+function VDP_GetCachedSprite(state, spriteIndex) {
+    const cacheOffset = spriteIndex * 4;
+    const bytes = state.spriteTableCache;
+
+    const y = (bytes[cacheOffset] | ((bytes[cacheOffset + 1] & 3) << 8)) & (state.doubleResolutionEnabled ? 0x3FF : 0x1FF);
+    const link = bytes[cacheOffset + 2] & 0x7F;
+    const width = ((bytes[cacheOffset + 3] >> 2) & 3) + 1;
+    const height = (bytes[cacheOffset + 3] & 3) + 1;
+
+    return { y, link, width, height };
+}
+
 const GENESIS_VDP_BLIT_NORMAL           = new Uint8Array(128 * 128);
 const GENESIS_VDP_BLIT_SHADOW_HIGHLIGHT = new Uint8Array(128 * 128);
 const GENESIS_VDP_BLIT_FORCED_LAYER     = new Uint8Array(128 * 128);
 
-// Static Pre-calculator: Runs once during class loading to construct O(1) blit lookup maps
 (function precomputeDepthTestTables() {
     for (let newPixel = 0; newPixel < 128; ++newPixel) {
         for (let oldPixel = 0; oldPixel < 128; ++oldPixel) {
@@ -35,25 +62,23 @@ const GENESIS_VDP_BLIT_FORCED_LAYER     = new Uint8Array(128 * 128);
 
             const drawNewPixel = newPaletteLine !== 0 && (oldPaletteLine === 0 || !oldPriority || newPriority);
 
-            // --- 1. Generate Normal Depth / Priority Map ---
             let outputNormal = drawNewPixel ? newPixel : oldPixel;
             if (oldNotShadowed || newNotShadowed) {
-                outputNormal |= 0x80; // Enforce non-shadowed flag bit
+                outputNormal |= 0x80; 
             }
             GENESIS_VDP_BLIT_NORMAL[(newPixel * 128) + oldPixel] = outputNormal;
 
-            // --- 2. Generate Shadow/Highlight Blitting Map ---
             let outputSh = 0;
             if (drawNewPixel) {
                 switch (newColourIdx) {
                     case 0x0E: case 0x1E: case 0x2E:
-                        outputSh = newColourIdx | 0x00; // Always normal pixel
+                        outputSh = newColourIdx | 0x00; 
                         break;
                     case 0x3E:
-                        outputSh = oldColourIdx | (oldNotShadowed ? 0x80 : 0x00); // Highlight
+                        outputSh = oldColourIdx | (oldNotShadowed ? 0x80 : 0x00); 
                         break;
                     case 0x3F:
-                        outputSh = oldColourIdx | 0x40; // Shadow
+                        outputSh = oldColourIdx | 0x40; 
                         break;
                     default:
                         outputSh = newColourIdx | (newNotShadowed || oldNotShadowed ? 0x00 : 0x40);
@@ -63,29 +88,20 @@ const GENESIS_VDP_BLIT_FORCED_LAYER     = new Uint8Array(128 * 128);
                 outputSh = oldColourIdx | (oldNotShadowed ? 0x00 : 0x40);
             }
             GENESIS_VDP_BLIT_SHADOW_HIGHLIGHT[(newPixel * 128) + oldPixel] = outputSh;
-
-            // --- 3. Generate Debug Forced Layers Blitting Map ---
             GENESIS_VDP_BLIT_FORCED_LAYER[(newPixel * 128) + oldPixel] = oldPixel & (newColourIdx | ~0x3F);
         }
     }
 })();
 
-// ========================================================================
-// SEGA GENESIS VDP SYNCHRONOUS CONTROLLER
-// ========================================================================
 class GenesisVdp {
     constructor() {
-        // --- 1. Hardware Buffers (WebGL contiguous Typed Arrays) ---
-        this.vRam = new Uint8Array(0x10000); // 64KB video memory
-        this.cram = new Uint16Array(64);     // Color RAM (64 words)
-        this.vsram = new Uint16Array(64);    // Vertical Scroll RAM (64 words)
+        this.vRam = new Uint8Array(0x10000); 
+        this.cram = new Uint16Array(64);     
+        this.vsram = new Uint16Array(64);    
         this.vsramCache = new Uint16Array(2);
 
-        // Raw Sprite Attribute Table (SAT) pre-cached to prevent random VRAM de-referencing
-        this.spriteTableCache = new Uint8Array(128 * 4); // 64 slots * 8 bytes
+        this.spriteTableCache = new Uint8Array(128 * 4); 
 
-        // Contiguous Row Cache for fast scanning of active scanline sprites list
-        // Row cache footprint: 256 scanlines maximum height * 20 sprite entries maximum
         this.spriteRowCacheTotal = new Uint8Array(256);
         this.spriteRowCacheTableIdx = new Uint8Array(256 * 20);
         this.spriteRowCacheYInSprite = new Uint8Array(256 * 20);
@@ -94,28 +110,24 @@ class GenesisVdp {
 
         this.spriteRowCacheNeedsUpdating = true;
 
-        // --- 2. VDP Internal Interface Registers ---
         this.accessWritePending = false;
         this.accessAddressRegister = 0;
         this.accessCodeRegister = 0;
-        this.accessSelectedBuffer = 0; // 0 = VRAM, 1 = CRAM, 2 = VSRAM, 3 = VRAM_8BIT
+        this.accessSelectedBuffer = 0; 
         this.accessIncrement = 0;
 
-        // DMA engine registers
         this.dmaEnabled = false;
-        this.dmaMode = 0; // 0 = MemToVRAM, 1 = Fill, 2 = Copy
+        this.dmaMode = 0; 
         this.dmaSourceAddressHigh = 0;
         this.dmaSourceAddressLow = 0;
         this.dmaLength = 0;
 
-        // Plane base table addresses
         this.planeAAddress = 0;
         this.planeBAddress = 0;
         this.windowAddress = 0;
         this.spriteTableAddress = 0;
         this.hscrollAddress = 0;
 
-        // Window plane viewport boundaries
         this.windowAlignedRight = false;
         this.windowAlignedBottom = false;
         this.windowHorizontalBoundary = 0;
@@ -124,7 +136,6 @@ class GenesisVdp {
         this.planeWidthShift = 5;
         this.planeHeightBitmask = 0x1F;
 
-        // Display configuration flags
         this.extendedVramEnabled = false;
         this.displayEnabled = false;
         this.vIntEnabled = false;
@@ -141,12 +152,12 @@ class GenesisVdp {
         this.backgroundColour = 0;
         this.hIntInterval = 0;
         this.currentlyInVblank = true;
+        this.hblankToggle = false; // Added to prevent infinite CPU wait loops
         this.allowSpriteMasking = false;
 
         this.hscrollMask = 0;
-        this.vscrollMode = 0; // 0 = FULL, 1 = 2CELL
+        this.vscrollMode = 0; 
 
-        // Debug diagnostic registers (Gens KMod support)
         this.debugSelectedRegister = 0;
         this.debugHideLayers = false;
         this.debugForcedLayer = 0;
@@ -154,10 +165,8 @@ class GenesisVdp {
         this.kdebugBufferIndex = 0;
         this.kdebugBuffer = new Uint8Array(256);
 
-        // Previous FIFO data writes cache
         this.previousDataWrites = new Uint16Array(4);
 
-        // Configuration bindings
         this.configSpritesDisabled = false;
         this.configWindowDisabled = false;
         this.configPlanesDisabled = new Uint8Array(2);
@@ -223,6 +232,7 @@ class GenesisVdp {
         this.backgroundColour = 0;
         this.hIntInterval = 0;
         this.currentlyInVblank = true;
+        this.hblankToggle = false;
         this.allowSpriteMasking = false;
 
         this.hscrollMask = 0;
@@ -243,61 +253,32 @@ class GenesisVdp {
         this.configWidescreenTiles = 0;
     }
 
-    // ========================================================================
-    // GENERAL METADATA RESOLVERS
-    // ========================================================================
-    getScreenWidthInTilePairs() {
-        return this.h40Enabled ? 20 : 16; // H40 = 20 pairs (40 tiles), H32 = 16 pairs (32 tiles)
-    }
-
-    getScreenWidthInTiles() {
-        return this.getScreenWidthInTilePairs() * 2;
-    }
-
-    getScreenWidthInPixels() {
-        return this.getScreenWidthInTiles() * 8;
-    }
-
-    getScreenHeightInTiles() {
-        return this.v30Enabled ? 30 : 28; // PAL extended V30 = 30 tiles, NTSC V28 = 28 tiles
-    }
-
+    getScreenWidthInTilePairs() { return this.h40Enabled ? 20 : 16; }
+    getScreenWidthInTiles() { return this.getScreenWidthInTilePairs() * 2; }
+    getScreenWidthInPixels() { return this.getScreenWidthInTiles() * 8; }
+    getScreenHeightInTiles() { return this.v30Enabled ? 30 : 28; }
     getExtendedScreenWidthInTilePairs() {
-        // Safe CEIL division equivalent: Math.ceil(tiles / 2)
         const widescreenOffsetPairs = Math.ceil(this.configWidescreenTiles / 2);
         return this.getScreenWidthInTilePairs() + widescreenOffsetPairs * 2;
     }
+    getExtendedScreenWidthInTiles() { return this.getExtendedScreenWidthInTilePairs() * 2; }
+    getExtendedScreenWidthInPixels() { return this.getExtendedScreenWidthInTiles() * 8; }
 
-    getExtendedScreenWidthInTiles() {
-        return this.getExtendedScreenWidthInTilePairs() * 2;
-    }
-
-    getExtendedScreenWidthInPixels() {
-        return this.getExtendedScreenWidthInTiles() * 8;
-    }
-
-    // ========================================================================
-    // MEMORY CONTROLLERS & DMA TRANSFERS
-    // ========================================================================
     decodeVramAddress(address) {
         if (this.extendedVramEnabled) {
-            // Emulate 128KB address multiplexing logic
             return (((address & 0x1F802) >> 1) | ((address & 0x400) >> 9) | (address & 0x3FC) | ((address & 1) << 16)) ^ 1;
         }
-        return (address & 0xFFFF) ^ 1; // Standard byte-swap VRAM offset
+        return (address & 0xFFFF) ^ 1; 
     }
 
-    readVRAM(address) {
-        return this.vRam[this.decodeVramAddress(address)];
-    }
+    readVRAM(address) { return this.vRam[this.decodeVramAddress(address)]; }
 
     writeVRAM(address, value) {
         const decoded = this.decodeVramAddress(address);
-        
-        // Update Sprite Cache if we write within active SAT registers boundaries
-        const spriteTableIndex = address - this.spriteTableAddress;
+        const spriteTableIndex = address - GetSpriteTableAddress(this);
         const maxTiles = this.getExtendedScreenWidthInTiles();
-        if (spriteTableIndex < maxTiles * 16 && (spriteTableIndex & 4) === 0) {
+        
+        if (spriteTableIndex >= 0 && spriteTableIndex < maxTiles * 16 && (spriteTableIndex & 4) === 0) {
             const cacheOffset = Math.floor(spriteTableIndex / 8) * 4;
             const subByteIdx = spriteTableIndex & 3;
             this.spriteTableCache[cacheOffset + subByteIdx] = value & 0xFF;
@@ -319,17 +300,16 @@ class GenesisVdp {
 
     writeAndIncrement(value, colorUpdatedCallback, callbackUserData) {
         switch (this.accessSelectedBuffer) {
-            case 0: // VDP_ACCESS_VRAM
+            case 0: 
                 this.writeVRAM(this.accessAddressRegister ^ 0, value & 0xFF);
                 this.writeVRAM(this.accessAddressRegister ^ 1, (value >> 8) & 0xFF);
                 break;
 
-            case 1: { // VDP_ACCESS_CRAM
+            case 1: { 
                 const color = value & 0xEEE;
                 const cramIdx = Math.floor(this.accessAddressRegister / 2) % 64;
                 this.cram[cramIdx] = color;
 
-                // Propagate color update back to the presentation layer viewports
                 const normalColor = color | ((color & 0x888) >> 3);
                 const shadowColor = color >> 1;
                 const highlightColor = 0x888 + (color >> 1);
@@ -340,7 +320,7 @@ class GenesisVdp {
                 break;
             }
 
-            case 2: { // VDP_ACCESS_VSRAM
+            case 2: { 
                 const vsramIdx = Math.floor(this.accessAddressRegister / 2) % 64;
                 if (vsramIdx < 40) {
                     const vscroll = value & 0x7FF;
@@ -362,19 +342,19 @@ class GenesisVdp {
         let value = this.previousDataWrites[0] | 0;
 
         switch (this.accessSelectedBuffer) {
-            case 0: // VDP_ACCESS_VRAM
+            case 0: 
                 value = this.readVRAMWord(wordAddress * 2);
                 break;
 
-            case 1: // VDP_ACCESS_CRAM
+            case 1: 
                 value = (value & ~0xEEE) | this.cram[wordAddress % 64];
                 break;
 
-            case 2: // VDP_ACCESS_VSRAM
+            case 2: 
                 value = (value & ~0x7FF) | this.vsram[wordAddress % 64];
                 break;
 
-            case 3: // VDP_ACCESS_VRAM_8BIT
+            case 3: 
                 value = (value & ~0xFF) | this.readVRAM(this.accessAddressRegister);
                 break;
         }
@@ -387,11 +367,20 @@ class GenesisVdp {
         return this.readAndIncrement();
     }
 
+    /**
+     * Reads the VDP Status Register.
+     * Aligned with MDTracer to dynamically toggle H-Blank to prevent infinite CPU wait loops.
+     */
     readControl() {
         this.accessWritePending = false;
         const fifoEmpty = 1;
         const vblankFlag = this.currentlyInVblank ? 1 : 0;
-        return 0x3400 | (fifoEmpty << 9) | (vblankFlag << 3);
+        
+        // Active H-Blank Handshake Toggling (Guarantees infinite loop exits)
+        this.hblankToggle = !this.hblankToggle;
+        const hblankFlag = (this.currentlyInVblank || this.hblankToggle) ? 1 : 0;
+        
+        return 0x3400 | (fifoEmpty << 9) | (vblankFlag << 3) | (hblankFlag << 2);
     }
 
     updateFakeFIFO(value) {
@@ -405,14 +394,13 @@ class GenesisVdp {
         this.accessWritePending = false;
         this.updateFakeFIFO(value);
 
-        if (this.accessSelectedBuffer === 4) { // ReadMode active
+        if (this.accessSelectedBuffer === 4) { 
             this.incrementAccessAddressRegister();
         } else {
             this.writeAndIncrement(value, colorUpdatedCallback, callbackUserData);
 
-            // Handle DMA Fill operations
             if ((this.accessCodeRegister & 0x20) !== 0) {
-                this.accessCodeRegister &= ~0x20; // Clear DMA Pending
+                this.accessCodeRegister &= ~0x20; 
 
                 do {
                     if (this.accessSelectedBuffer === 0) {
@@ -432,31 +420,28 @@ class GenesisVdp {
     writeControl(value, colorUpdatedCallback, callbackUserData, dmaTransferBeginCallback, readCallback, readCallbackUserData, kdebugCallback, kdebugCallbackUserData, targetCycle) {
         if (this.accessWritePending || (value & 0xC000) !== 0x8000) {
             if (this.accessWritePending) {
-                // Address Set command (Part 2)
                 const codeBitmask = this.dmaEnabled ? 0x3C : 0x1C;
                 this.accessWritePending = false;
                 this.accessAddressRegister = (this.accessAddressRegister & 0x3FFF) | ((value & 7) << 14);
                 this.accessCodeRegister = (this.accessCodeRegister & ~codeBitmask) | ((value >> 2) & codeBitmask);
             } else {
-                // Address Set command (Part 1)
                 this.accessWritePending = true;
                 this.accessAddressRegister = (value & 0x3FFF) | (this.accessAddressRegister & (3 << 14));
                 this.accessCodeRegister = ((value >> 14) & 3) | (this.accessCodeRegister & 0x3C);
             }
 
             switch ((this.accessCodeRegister >> 1) & 7) {
-                case 0: this.accessSelectedBuffer = 0; break; // VRAM
-                case 1: case 4: this.accessSelectedBuffer = 1; break; // CRAM
-                case 2: this.accessSelectedBuffer = 2; break; // VSRAM
-                case 6: this.accessSelectedBuffer = 3; break; // VRAM_8BIT
-                default: this.accessSelectedBuffer = 4; break; // INVALID
+                case 0: this.accessSelectedBuffer = 0; break; 
+                case 1: case 4: this.accessSelectedBuffer = 1; break; 
+                case 2: this.accessSelectedBuffer = 2; break; 
+                case 6: this.accessSelectedBuffer = 3; break; 
+                default: this.accessSelectedBuffer = 4; break; 
             }
         } else {
-            // Register Set command
             const reg = (value >> 8) & 0x1F;
             const data = value & 0xFF;
 
-            this.accessSelectedBuffer = 4; // Force invalid on direct register writes
+            this.accessSelectedBuffer = 4; 
 
             if (reg <= 10 || this.megaDriveModeEnabled) {
                 switch (reg) {
@@ -509,8 +494,6 @@ class GenesisVdp {
                     case 12:
                         this.h40Enabled = (data & 0x81) !== 0;
                         this.shadowHighlightEnabled = (data & 0x08) !== 0;
-                        
-                        // Parse interlace configuration bits
                         this.doubleResolutionEnabled = ((data >> 1) & 3) === 3;
                         break;
 
@@ -578,43 +561,29 @@ class GenesisVdp {
                     case 23:
                         if ((data & 0x80) !== 0) {
                             this.dmaSourceAddressHigh = data & 0x3F;
-                            this.dmaMode = (data & 0x40) !== 0 ? 2 : 1; // Copy vs Fill
+                            this.dmaMode = (data & 0x40) !== 0 ? 2 : 1; 
                         } else {
                             this.dmaSourceAddressHigh = data & 0x7F;
-                            this.dmaMode = 0; // MemToVRAM
+                            this.dmaMode = 0; 
                         }
                         break;
-
-                    case 30: {
-                        // Gens KMod debug logger terminal registers
-                        const charCode = data & 0x7F;
-                        if (charCode >= 0x20) {
-                            this.kdebugBuffer[this.kdebugBufferIndex++] = charCode;
-                            if (charCode === 0 || this.kdebugBufferIndex === 255) {
-                                this.kdebugBufferIndex = 0;
-                                kdebugCallback(kdebugCallbackUserData, String.fromCharCode(...this.kdebugBuffer));
-                            }
-                        }
-                        break;
-                    }
                 }
             }
         }
 
-        // Trigger active DMA transfer
         if (((this.accessCodeRegister & 0x20) !== 0) && this.dmaMode !== 1) {
-            this.accessCodeRegister &= ~0x20; // Clear DMA Pending
+            this.accessCodeRegister &= ~0x20; 
 
             const totalReads = this.dmaLength === 0 ? 0x10000 : this.dmaLength;
             dmaTransferBeginCallback(readCallbackUserData, totalReads, targetCycle);
 
             do {
-                if (this.dmaMode === 0) { // MemToVRAM
+                if (this.dmaMode === 0) { 
                     const addressWord = ((this.dmaSourceAddressHigh << 17) | (this.dmaSourceAddressLow << 1)) >>> 0;
                     const value = readCallback(readCallbackUserData, addressWord, targetCycle);
                     this.updateFakeFIFO(value);
                     this.writeAndIncrement(value, colorUpdatedCallback, callbackUserData);
-                } else { // Copy
+                } else { 
                     this.writeVRAM(this.accessAddressRegister, this.readVRAM(this.dmaSourceAddressLow));
                     this.incrementAccessAddressRegister();
                 }
@@ -629,7 +598,6 @@ class GenesisVdp {
     // SCANLINE RASTERIZER SEQUENCERS
     // ========================================================================
     beginScanline() {
-        // Latch scroll parameters before raster cycles start
         this.vsramCache[0] = this.vsram[0];
         this.vsramCache[1] = this.vsram[1];
     }
@@ -648,15 +616,11 @@ class GenesisVdp {
         let spritesRemaining = maxSprites;
 
         do {
-            const cacheOffset = spriteIndex * 4;
-            const spriteY = (this.spriteTableCache[cacheOffset] | ((this.spriteTableCache[cacheOffset + 1] & 3) << 8)) & (this.doubleResolutionEnabled ? 0x3FF : 0x1FF);
-            const link = this.spriteTableCache[cacheOffset + 2] & 0x7F;
-            const width = ((this.spriteTableCache[cacheOffset + 3] >> 2) & 3) + 1;
-            const height = (this.spriteTableCache[cacheOffset + 3] & 3) + 1;
+            const cached_sprite = VDP_GetCachedSprite(this, spriteIndex);
 
             const blankLines = 128 << this.doubleResolutionEnabled;
-            const startY = Math.max(blankLines, spriteY);
-            const endY = Math.min(blankLines + (screenHeightTiles << tileHeightShift), spriteY + (height << tileHeightShift));
+            const startY = Math.max(blankLines, cached_sprite.y);
+            const endY = Math.min(blankLines + (screenHeightTiles << tileHeightShift), cached_sprite.y + (cached_sprite.height << tileHeightShift));
 
             for (let i = startY; i < endY; i++) {
                 const rowIdx = i - blankLines;
@@ -666,23 +630,20 @@ class GenesisVdp {
                     const cacheIndex = (rowIdx * 20) + rowTotal;
                     
                     this.spriteRowCacheTableIdx[cacheIndex] = spriteIndex;
-                    this.spriteRowCacheWidth[cacheIndex] = width;
-                    this.spriteRowCacheHeight[cacheIndex] = height;
-                    this.spriteRowCacheYInSprite[cacheIndex] = i - spriteY;
+                    this.spriteRowCacheWidth[cacheIndex] = cached_sprite.width;
+                    this.spriteRowCacheHeight[cacheIndex] = cached_sprite.height;
+                    this.spriteRowCacheYInSprite[cacheIndex] = i - cached_sprite.y;
 
                     this.spriteRowCacheTotal[rowIdx]++;
                 }
             }
 
-            if (link >= maxSprites) break;
-            spriteIndex = link;
+            if (cached_sprite.link >= maxSprites) break;
+            spriteIndex = cached_sprite.link;
         } while (spriteIndex !== 0 && --spritesRemaining !== 0);
     }
 
-    /**
-     * Renders a single 8px tile pair on the horizontal grid.
-     */
-    renderTilePair(pixelY, vramAddress, baseTileAddress, destBuffer, destPtr, blitLookupLower) {
+    renderTilePair(pixelY, vramAddress, baseTileAddress, destBuffer, destPtr, blitTable) {
         const tileHeightShift = 3 + this.doubleResolutionEnabled;
         const tileHeightMask = (1 << tileHeightShift) - 1;
         const pixelYInTileUnflipped = pixelY & tileHeightMask;
@@ -695,21 +656,27 @@ class GenesisVdp {
             const pixelYInTile = yFlip ? pixelYInTileUnflipped ^ tileHeightMask : pixelYInTileUnflipped;
             const tileIdx = word & 0x7FF;
 
-            // Mapped byte offset inside standard 4bpp tile row
             const tileRowAddress = baseTileAddress + (((tileIdx << tileHeightShift) + pixelYInTile) << 2);
 
             const byteIndexXor = 1 ^ (xFlip ? 3 : 0);
             const shift1 = xFlip ? 0 : 4;
             const shift2 = 4 ^ shift1;
 
-            const lookup = blitLookupLower[(word >> 9) & 0x70];
+            const paletteLine = (word >> 13) & 3;
+            const priority = (word >> 15) & 1;
+            const basePixel = (priority << 6) | (paletteLine << 4);
 
             for (let j = 0; j < 4; j++) {
                 const byte = this.vRam[(tileRowAddress + j) ^ byteIndexXor];
 
-                destBuffer[destPtr] = lookup[(byte >> shift1) & 0xF].pixels[destBuffer[destPtr]];
+                const col1 = (byte >> shift1) & 0xF;
+                const newPixel1 = basePixel | col1;
+                destBuffer[destPtr] = blitTable[(newPixel1 * 128) + destBuffer[destPtr]];
                 destPtr++;
-                destBuffer[destPtr] = lookup[(byte >> shift2) & 0xF].pixels[destBuffer[destPtr]];
+
+                const col2 = (byte >> shift2) & 0xF;
+                const newPixel2 = basePixel | col2;
+                destBuffer[destPtr] = blitTable[(newPixel2 * 128) + destBuffer[destPtr]];
                 destPtr++;
             }
         }
@@ -727,11 +694,10 @@ class GenesisVdp {
         const widescreenOffset = Math.ceil(this.configWidescreenTiles / 2);
 
         for (let i = start; i <= end && i < this.getExtendedScreenWidthInTilePairs() + 1; ++i) {
-            // Retrieve dynamic vertical scroll parameters
             let vscroll = 0;
-            if (this.vscrollMode === 0) { // FULL
+            if (this.vscrollMode === 0) { 
                 vscroll = this.vsramCache[planeIndex];
-            } else { // 2CELL
+            } else { 
                 vscroll = this.vsram[planeIndex + ((i - 1 - widescreenOffset) * 2) % 64];
             }
 
@@ -753,7 +719,7 @@ class GenesisVdp {
         const pitchShift = 5 + this.h40Enabled;
         const widthMask = (1 << pitchShift) - 1;
 
-        const tableAddressBase = GetWindowPlaneTableAddress ? GetWindowPlaneTableAddress(this) : this.windowAddress;
+        const tableAddressBase = GetWindowPlaneTableAddress(this); 
         const vramAddressBase = tableAddressBase + (tileY << pitchShift) * 2;
         
         const widescreenOffset = Math.ceil(this.configWidescreenTiles / 2) * 2;
@@ -778,15 +744,15 @@ class GenesisVdp {
         let masked = false;
 
         for (let i = 0; i < rowTotal; i++) {
-            const spriteIndex = this.spriteRowCacheTableIdx[rowOffset + i];
-            const width = this.spriteRowCacheWidth[rowOffset + i];
-            const height = this.spriteRowCacheHeight[rowOffset + i];
+            const spriteRowCacheEntryIdx = rowOffset + i;
+            const tableIndex = this.spriteRowCacheTableIdx[spriteRowCacheEntryIdx];
+            const width = this.spriteRowCacheWidth[spriteRowCacheEntryIdx];
+            const height = this.spriteRowCacheHeight[spriteRowCacheEntryIdx];
 
-            const tableOffset = GetSpriteTableAddress ? GetSpriteTableAddress(this) : this.spriteTableAddress;
-            const spriteTableBase = tableOffset + spriteIndex * 8;
+            const tableOffset = GetSpriteTableAddress(this); 
+            const spriteTableBase = tableOffset + tableIndex * 8;
 
             const rawX = this.readVRAMWord(spriteTableBase + 6) & 0x1FF;
-            // Align horizontal coordinate including widescreen pads offset
             const widescreenOffsetPixels = Math.ceil(this.configWidescreenTiles / 2) * 16;
             const x = rawX + widescreenOffsetPixels;
 
@@ -808,7 +774,7 @@ class GenesisVdp {
                 const paletteLineMask = (word >> 9) & 0x70;
                 const byteIndexXor = 1 ^ (xFlip ? 3 : 0);
 
-                const yInSpriteNonFlipped = this.spriteRowCacheYInSprite[rowOffset + i];
+                const yInSpriteNonFlipped = this.spriteRowCacheYInSprite[spriteRowCacheEntryIdx];
                 const yInSprite = yFlip ? (height << tileHeightShift) - yInSpriteNonFlipped - 1 : yInSpriteNonFlipped;
                 const pixelYInTile = yInSprite & tileHeightMask;
 
@@ -840,6 +806,8 @@ class GenesisVdp {
                     }
                 }
             }
+
+            if (--pixelLimit === 0) return;
         }
         this.allowSpriteMasking = false;
     }
@@ -896,7 +864,6 @@ class GenesisVdp {
             }
         }
 
-        // Output rasterized pixel buffer row to presentation callback
         const inputExtraTilesInPixels = widescreenOffsetPairs * 16;
         const outputExtraTilesInPixels = this.configWidescreenTiles * 8;
         const xOffset = Math.floor((inputExtraTilesInPixels - outputExtraTilesInPixels) / 2);
@@ -913,7 +880,6 @@ class GenesisVdp {
     endScanline(scanline, scanlineRenderedCallback, callbackUserData) {
         const bufferWidth = (2 + this.getExtendedScreenWidthInTilePairs()) * 16;
         
-        // Zero-allocation localized row pixel array buffers
         const planeBuffer = new Uint8Array(bufferWidth);
         const spriteBuffer = new Uint8Array(bufferWidth);
 
@@ -923,14 +889,12 @@ class GenesisVdp {
             this.renderSprites(spriteBuffer, scanline);
         }
 
-        // Fill background layer with active color index
         planeBuffer.fill(this.debugForcedLayer === 0 ? this.backgroundColour : 0x3F);
 
         if (this.displayEnabled && !this.debugHideLayers) {
             this.renderScrollPlane(0, this.getExtendedScreenWidthInTilePairs(), scanline, planeBuffer, 1);
         }
 
-        // Composite Foreground and Sprite layers
         this.renderForegroundAndSpritePlanes(scanline, planeBuffer, spriteBuffer, true, scanlineRenderedCallback, callbackUserData);
         this.renderForegroundAndSpritePlanes(scanline, planeBuffer, spriteBuffer, false, scanlineRenderedCallback, callbackUserData);
     }

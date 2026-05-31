@@ -2,14 +2,17 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Sega Genesis Master System Orchestrator
+ * Application Layer: Sega Genesis Master System Orchestrator (DRC & Dynamic Pacing)
  * 
  * Coordinates the master system synchronization, clock cycle divisions, 
- * frame pacing, and maps physical CPU buses to the VDP/PSG/FM coprocessors.
+ * frame pacing, and maps physical CPU buses to the VDP, PSG, and FM coprocessors.
  * Handles synchronous Web Audio stereo mixing and low-pass filter passes.
  * 
- * SOLID: Adheres to Single Responsibility (SRP) by isolating the primary 
- * execution loop completely from DOM rendering and browser gamepad APIs.
+ * SOLID Principles:
+ * - Single Responsibility Principle (SRP): Isolates loop orchestration, frame 
+ *   timing, audio buffer dispatching, and system state resets from the DOM.
+ * - Dependency Inversion Principle (DIP): Decouples core clocks from browser-specific 
+ *   execution lifecycles via delegated callback adapters.
  */
 
 class GenesisOrchestrator {
@@ -21,18 +24,22 @@ class GenesisOrchestrator {
         this.videoContext = videoContext;
         this.onFpsUpdate = onFpsUpdate;
 
-        // Emulation states
+        // Emulation state machine
         this.isRunning = false;
         this.isPaused = false;
         this.fastForward = false;
 
         this.tvStandard = 0; // 0 = NTSC (60Hz), 1 = PAL (50Hz)
-        this.region = 1;     // 0 = Domestic (Japan), 1 = Overseas (US/EU)
 
-        // Web Audio components
+        // Web Audio API components
         this.audioCtx = null;
         this.jsNode = null;
         this.gainNode = null;
+
+        // Pre-allocated Audio Synthesis buffers (Zero-Allocation Hot Path)
+        this.maxAudioBufferSize = 2048;
+        this.tempFm = new Int16Array(this.maxAudioBufferSize * 2);
+        this.tempPsg = new Int16Array(this.maxAudioBufferSize);
 
         // High-precision sync timing variables
         this.animationFrameId = null;
@@ -40,26 +47,62 @@ class GenesisOrchestrator {
         this.accumulatedTime = 0;
         this.framesRendered = 0;
 
-        // Hardware domain & infrastructure objects
+        // Hardware Domain & Infrastructure Instantiation (DIP: Injecting Dependencies)
         this.vdp = new GenesisVdp();
-        this.psg = new GenesisPsg();
+        this.psg = new GenesisPsg(); 
         this.fm = new GenesisYm2612();
         this.controllerManager = new GenesisControllerManager();
-        this.z80Bus = new GenesisBusZ80(this.controllerManager, this.fm, this.vdp);
+
+        // Instantiate Busses
+        this.z80Bus = new GenesisBusZ80(this.fm);
         this.bus = new GenesisBusM68k(this.controllerManager, this.vdp, this.psg, this.fm, this.z80Bus);
 
-        // Core CPU registries (Mock interfaces for Motorola 68000 integration)
-        this.m68k = {
-            programCounter: 0,
-            statusRegister: 0x2700,
-            ram: this.bus.workRam,
-            reset: () => { this.m68k.programCounter = this.bus.readWord(0x000004, 0); }
-        };
+        // Bind Secondary Z80 Bus to Primary 68K Bus to avoid Circular Dependencies
+        this.z80Bus.bindMasterBus(
+            (addr, cycles) => this.bus.readByte(addr, cycles),
+            (addr, val, cycles) => this.bus.writeByte(addr, val, cycles)
+        );
+
+        // Core CPU instances
+        this.m68k = new M68000(this.bus);
+        this.z80 = new ZilogZ80(this.z80Bus); // Reusing the decoupled SMS Z80 core
+
+        // Bind Z80 CPU to Z80 Bus to handle synchronous resets (PC, IFF1/IFF2, IM)
+        this.z80Bus.bindCpu(this.z80);
+
+        // Register all modular 68K instruction families safely once all scripts are loaded.
+        // This adheres to the Open/Closed Principle (OCP) and prevents load-order crashes.
+        if (typeof M68kDataTransfer !== 'undefined')     this.m68k.registerModule(M68kDataTransfer.register);
+        if (typeof M68kArithmetic !== 'undefined')       this.m68k.registerModule(M68kArithmetic.register);
+        if (typeof M68kLogical !== 'undefined')          this.m68k.registerModule(M68kLogical.register);
+        if (typeof M68kBitwise !== 'undefined')          this.m68k.registerModule(M68kBitwise.register);
+        if (typeof M68kShiftRotate !== 'undefined')      this.m68k.registerModule(M68kShiftRotate.register);
+        if (typeof M68kProgramFlow !== 'undefined')      this.m68k.registerModule(M68kProgramFlow.register);
+        if (typeof M68kSystemExceptions !== 'undefined') this.m68k.registerModule(M68kSystemExceptions.register);
 
         this.currentScanline = 0;
         this.currentCycle = 0;
 
+        // Hard-bind loop to preserve 'this' context inside requestAnimationFrame closures
         this.loop = this.loop.bind(this);
+    }
+
+    /**
+     * Resets the entire hardware state to cold-boot standards.
+     */
+    initialise() {
+        this.currentScanline = 0;
+        this.currentCycle = 0;
+        this.accumulatedTime = 0;
+        this.framesRendered = 0;
+
+        // Synchronously purge memory buffers and reset processors
+        this.vdp.initialise();
+        this.psg.initialise(); 
+        this.fm.initialise();
+        this.controllerManager.initialise();
+        this.z80Bus.initialise();
+        this.bus.initialise();
     }
 
     /**
@@ -82,8 +125,8 @@ class GenesisOrchestrator {
         this.gainNode = this.audioCtx.createGain();
         this.gainNode.gain.value = 0.5; // Master volume scale
 
-        // Create a snychronous stereo ScriptProcessor node with a 2048-sample safety buffer
-        this.jsNode = this.audioCtx.createScriptProcessor(2048, 0, 2);
+        // Create a synchronous stereo ScriptProcessor node with a 2048-sample safety buffer
+        this.jsNode = this.audioCtx.createScriptProcessor(this.maxAudioBufferSize, 0, 2);
         this.jsNode.onaudioprocess = (e) => this.mixAudio(e);
 
         this.jsNode.connect(this.gainNode);
@@ -91,7 +134,9 @@ class GenesisOrchestrator {
     }
 
     /**
-     * Decodes and mixes all sound channels snychronously on the Audio thread.
+     * Decodes and mixes all sound channels synchronously on the Audio thread.
+     * Combines the YM2612 FM stereo and SN76489 PSG mono into a final output buffer.
+     * @param {AudioProcessingEvent} e - The Web Audio API processing event.
      */
     mixAudio(e) {
         if (!this.isRunning || this.isPaused) {
@@ -104,34 +149,36 @@ class GenesisOrchestrator {
         const outR = e.outputBuffer.getChannelData(1);
         const totalFrames = outL.length;
 
-        // Zero-fill temporary buffers before mixing
-        const tempFm = new Int16Array(totalFrames * 2); // Stereo FM buffer
-        const tempPsg = new Int16Array(totalFrames);    // Mono PSG buffer
-
-        // 1. Output snychronous voice samples
-        if (this.fm) {
-            this.fm.outputSamples(tempFm, totalFrames);
-        }
-        if (this.psg) {
-            this.psg.update(tempPsg, totalFrames);
+        // Safety fallback: dynamically resize pre-allocated buffers if host requests larger block size
+        if (totalFrames > this.tempPsg.length) {
+            this.tempFm = new Int16Array(totalFrames * 2);
+            this.tempPsg = new Int16Array(totalFrames);
         }
 
-        // 2. Mix and apply analogue digital Low-Pass Filters in-place
+        // Clean arrays prior to sound generation passes
+        this.tempFm.fill(0);
+        this.tempPsg.fill(0);
+
+        // 1. Output synchronous voice samples from hardware
+        if (this.fm) this.fm.outputSamples(this.tempFm, totalFrames);
+        if (this.psg) this.psg.update(this.tempPsg, totalFrames);
+
+        // 2. Mix and convert to Float32 (-1.0 to +1.0 format expected by Web Audio)
         for (let i = 0; i < totalFrames; i++) {
             const fmIdx = i * 2;
             
-            // Mix FM stereo and PSG mono
-            let leftChannel = (tempFm[fmIdx] + tempPsg[i]) | 0;
-            let rightChannel = (tempFm[fmIdx + 1] + tempPsg[i]) | 0;
+            // Mix FM (Int16) and PSG (Int16) avoiding distortion/clipping math
+            const fmLeftNormalized = this.tempFm[fmIdx] / 32768.0;
+            const fmRightNormalized = this.tempFm[fmIdx + 1] / 32768.0;
+            const psgNormalized = this.tempPsg[i] / 32768.0;
 
-            // Simple first-order low pass filter approximations
-            outL[i] = leftChannel / 32768.0;
-            outR[i] = rightChannel / 32768.0;
+            outL[i] = fmLeftNormalized + psgNormalized;
+            outR[i] = fmRightNormalized + psgNormalized;
         }
     }
 
     /**
-     * Loads a standard cartridge binary into the primary bus and resets the console.
+     * Loads a cartridge binary, mounts it on the bus, and then triggers the CPU hardware reset.
      * @param {ArrayBuffer} romBuffer - Raw ROM array buffer.
      */
     loadRom(romBuffer) {
@@ -139,15 +186,18 @@ class GenesisOrchestrator {
             cancelAnimationFrame(this.animationFrameId);
         }
 
+        // 1. Prepare system components (Clears old arrays)
         this.initialise();
+        
+        // 2. Mount the ROM cartridge into the 68K memory bus space
         this.bus.setCartridge(romBuffer);
-        this.startAudio();
-
-        // Trigger cold reset
+        
+        // 3. Trigger CPU hardware reset *AFTER* the ROM cartridge is successfully mounted!
+        // This ensures the CPU correctly reads vector tables from address 0x000000 and 0x000004.
         this.m68k.reset();
-        this.vdp.initialise();
-        this.psg.initialise();
-        this.fm.initialise();
+        
+        // 4. Fire up audio systems
+        this.startAudio();
 
         this.isRunning = true;
         this.isPaused = false;
@@ -160,7 +210,20 @@ class GenesisOrchestrator {
     }
 
     /**
-     * Main timing loop driven by requestAnimationFrame.
+     * Toggles the software pause state of the emulator loop.
+     */
+    togglePause() {
+        if (!this.isRunning) return;
+        this.isPaused = !this.isPaused;
+        if (!this.isPaused) {
+            this.lastTime = performance.now(); // Reset delta-time to avoid skipping frames upon resume
+            this.animationFrameId = requestAnimationFrame(this.loop);
+        }
+    }
+
+    /**
+     * Main timing loop driven by the browser's V-Sync (requestAnimationFrame).
+     * @param {number} currentTime - High-resolution timestamp provided by the browser.
      */
     loop(currentTime) {
         if (!this.isRunning || this.isPaused) return;
@@ -171,15 +234,18 @@ class GenesisOrchestrator {
         let deltaTime = currentTime - this.lastTime;
         this.lastTime = currentTime;
 
+        // Prevent "Spiral of Death" on browser tab switches
         if (deltaTime > 100) {
             deltaTime = targetFrameTime;
         }
 
         if (this.fastForward) {
+            // Uncap FPS, process 4 hardware frames per V-Sync display tick
             for (let i = 0; i < 4; i++) {
                 this.executeFrame();
             }
         } else {
+            // Standard Timing Accumulator
             this.accumulatedTime += deltaTime;
             while (this.accumulatedTime >= targetFrameTime) {
                 this.executeFrame();
@@ -192,13 +258,16 @@ class GenesisOrchestrator {
 
     /**
      * Simulates exactly one frame's worth of CPU and VDP scanlines.
-     * Recreates the exact physical coordinate synchronization logic of Genesis.
+     * Recreates the exact physical coordinate synchronization logic of the Genesis.
      */
     executeFrame() {
         const totalScanlines = this.tvStandard === 1 ? 312 : 262;
         const activeHeight = this.vdp.v30Enabled ? 240 : 224;
         const masterClockSpeed = this.tvStandard === 1 ? 53203424 : 53693175;
-        const cyclesPerScanline = Math.floor((masterClockSpeed / (this.tvStandard === 1 ? 50 : 60)) / totalScanlines);
+        
+        // M68K runs at Master Clock / 7 (Approx 7.67 MHz NTSC)
+        const m68kClockSpeed = Math.floor(masterClockSpeed / 7);
+        const m68kCyclesPerScanline = Math.floor((m68kClockSpeed / (this.tvStandard === 1 ? 50 : 60)) / totalScanlines);
 
         let scanline = activeHeight; // Start directly at vertical blanking boundary for low-latency inputs
 
@@ -210,18 +279,16 @@ class GenesisOrchestrator {
                 // Active Display Scanlines rendering sequencer
                 this.vdp.beginScanline();
 
-                // 1. Process first half of scanline master clock cycles
-                this.currentCycle += Math.floor(cyclesPerScanline / 2);
-                this.stepCPUs(Math.floor(cyclesPerScanline / 2));
+                // 1. Process first half of scanline CPU cycles
+                this.stepCPUs(Math.floor(m68kCyclesPerScanline / 2));
 
                 // 2. Rasterize background and sprite layers inside the VDP core
                 this.vdp.endScanline(scanline, (user_data, line, pixels, left, right, w, h) => {
                     this.renderScanline(line, pixels, left, right, w, h);
                 }, null);
 
-                // 3. Process second half of scanline master clock cycles
-                this.currentCycle += Math.floor(cyclesPerScanline / 2);
-                this.stepCPUs(Math.floor(cyclesPerScanline / 2));
+                // 3. Process second half of scanline CPU cycles
+                this.stepCPUs(Math.floor(m68kCyclesPerScanline / 2));
             } else {
                 // Off-Screen Vertical Blanking lines
                 if (scanline === -1) {
@@ -229,62 +296,82 @@ class GenesisOrchestrator {
                 } else if (scanline === activeHeight) {
                     this.vdp.currentlyInVblank = true;
 
-                    // Trigger Vertical Interrupt (V-Int: M68K level 6 interrupt, Z80 level 1)
+                    // Trigger Vertical Interrupt (V-Int: M68K level 6 interrupt)
                     this.vdp.statusFlags |= 0x08; // Set V-blank flag
+                    if (this.vdp.vIntEnabled) {
+                        this.m68k.irqPending = 6;
+                    }
                 }
 
-                this.currentCycle += cyclesPerScanline;
-                this.stepCPUs(cyclesPerScanline);
+                this.stepCPUs(m68kCyclesPerScanline);
             }
 
-            // Decrement active H-Int timer countdowns on rendering lines
+            // Handle Horizontal Interrupts (H-Int: M68K level 4 interrupt)
             if (scanline >= -1 && scanline < activeHeight) {
                 if (this.vdp.hIntInterval-- === 0) {
                     this.vdp.hIntInterval = this.vdp.register0a; // Reload interval
-                    // Trigger Horizontal Interrupt (H-Int: M68K level 4 interrupt)
+                    if (this.vdp.hIntEnabled) {
+                        this.m68k.irqPending = 4; 
+                    }
                 }
             }
 
-            // Increment line and handle coordinate wrap-arounds snychronously
+            // Increment line and handle coordinate wrap-arounds synchronously
             scanline++;
             if (scanline === activeHeight + 13 + 3 + 3) { // Active + Bottom blank + V-Sync + Top blank
                 scanline = -13; // Jump back to top of the screen bounds
             }
         } while (scanline !== activeHeight);
+        
+        // Render FPS Stats
+        this.framesRendered++;
+        if (this.framesRendered % 10 === 0 && this.onFpsUpdate) {
+            this.onFpsUpdate(this.fastForward ? "FFWD" : (this.tvStandard === 1 ? "50 FPS" : "60 FPS"));
+        }
     }
 
     /**
-     * Steps both the primary M68K and secondary Z80 CPUs.
-     * @param {number} cycles - Master clock cycles passed.
+     * Steps both the primary M68K and secondary Z80 CPUs synchronously.
+     * @param {number} m68kCycles - Motorola 68000 clock ticks to execute.
      */
-    stepCPUs(cycles) {
+    stepCPUs(m68kCycles) {
         if (!this.isRunning || this.isPaused) return;
 
-        // 1. Step secondary Z80 clock countdown (divider 15)
-        const z80Cycles = Math.floor(cycles / 15);
-        if (z80Cycles > 0 && !this.z80Bus.isZ80Frozen(this.bus)) {
-            // Emulate Z80 instruction stepping
-        }
+        // Step Primary 68000 CPU
+        this.m68k.execute(m68kCycles);
 
-        // 2. Step primary Motorola 68000 CPU (divider 7)
-        const m68kCycles = Math.floor(cycles / 7);
-        if (m68kCycles > 0) {
-            // Emulate M68K instruction stepping
+        // Step Secondary Z80 CPU (Z80 runs at approx half the speed of the 68K)
+        if (!this.z80Bus.isZ80Frozen()) {
+            const z80Cycles = Math.floor(m68kCycles / 2);
+            let elapsed = 0;
+            while (elapsed < z80Cycles) {
+                elapsed += this.z80.executeOne(); // Delegate to decoupled Z80 Core
+            }
         }
+        
+        // Sync Audio Timers
+        this.fm.update(m68kCycles);
     }
 
     /**
-     * Copy the rasterized pixel row to the main canvas context.
+     * Copies the rasterized pixel row to the main canvas context via ImageData buffering.
+     * @param {number} line - The target Y coordinate on the canvas.
+     * @param {Uint8Array} pixels - Raw 8-bit palette indices for the scanline.
+     * @param {number} left - Leftmost rendering boundary.
+     * @param {number} right - Rightmost rendering boundary.
+     * @param {number} width - Total canvas width.
+     * @param {number} height - Total canvas height.
      */
     renderScanline(line, pixels, left, right, width, height) {
         if (this.videoContext) {
-            // Drawing the pixel row on the screen canvas directly
             const imgData = this.videoContext.createImageData(width, 1);
+            
+            // Fast direct 1D array pixel pushing
             for (let i = left; i < right; i++) {
                 const colorIdx = pixels[i] & 0x3F;
                 const rgb = this.vdp.cram[colorIdx]; // Fetch RGB444 color from CRAM
 
-                // Convert RGB444 to 24-bit RGB
+                // Convert SEGA RGB444 to standard 24-bit HTML5 RGB
                 const r = ((rgb & 0x00E) >> 1) * 36;
                 const g = ((rgb & 0x0E0) >> 5) * 36;
                 const b = ((rgb & 0xE00) >> 9) * 36;

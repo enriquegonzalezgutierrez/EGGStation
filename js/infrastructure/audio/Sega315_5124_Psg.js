@@ -2,13 +2,11 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: Sega 315-5124 custom PSG (DRC Optimized)
+ * Infrastructure Layer: Sega 315-5124 custom PSG (DRC & Cache Optimized)
  * 
  * Emulates the custom sound generator chip integrated within the standard system.
- * 
- * OPTIMIZED FOR PHASE 1 (DRC): Exposes high-precision clock drift error signals 
- * and handles temporal transience clamping to prevent audio popping and pitch-bend 
- * anomalies during emulator pauses, fast-forwards, or frame skips.
+ * Optimized with cached frequency phase steps to eliminate expensive floating-point
+ * divisions inside the high-frequency audio synthesis hot path.
  */
 
 class Sega315_5124_Psg {
@@ -21,6 +19,9 @@ class Sega315_5124_Psg {
         this.what2latch = 0;     
         this.latch = 0;
 
+        // Hot Path Cache: Pre-calculated phase step sizes to eliminate divisions inside synthesis loop
+        this.cachedStepSize = new Float32Array(4);
+
         this.eventsQueue = [];
         this.internalClock = 0;
         this.internalClockPos = 0;
@@ -28,7 +29,7 @@ class Sega315_5124_Psg {
         this.isMuted = false;
         this.audioInitialized = false;
 
-        // Zero-allocation noise buffer
+        // Pre-calculated pseudo-random noise buffer
         this.squareWaveLen = 8192;
         this.randDim = 65536;
         this.randBuffer = new Float32Array(this.randDim);
@@ -37,21 +38,23 @@ class Sega315_5124_Psg {
         }
         this.randPos = 0;
 
-        // Web Audio API standard context and native dsp nodes
+        // Constant derived from SMS Master Clock (3579545.0 / 0.37)
+        this.PSG_CLOCK_CONSTANT = 9674445.945945946;
+
+        // Web Audio components
         this.context = null;
         this.jsNode = null;
         this.gainNode = null;
         
-        // Hardware-Accelerated DSP Nodes
-        this.biquadFilterNode = null; // Native Low-Pass Filter
-        this.convolverNode = null;    // Native Convolution Reverb
-        this.delayNode = null;        // Native Delay Node (for Haas Stereo)
-        this.panLeft = null;          // Native Stereo Panner
-        this.panRight = null;         // Native Stereo Panner
+        this.biquadFilterNode = null; 
+        this.convolverNode = null;    
+        this.delayNode = null;        
+        this.panLeft = null;          
+        this.panRight = null;         
         
-        this.wetGain = null;          // Reverb volume mixer
-        this.dryGain = null;          // Clean volume mixer
-        this.haasGain = null;         // Haas Stereo volume mixer
+        this.wetGain = null;          
+        this.dryGain = null;          
+        this.haasGain = null;         
 
         this.audioBufSize = 2048;     
         this.multiplier = 0;
@@ -68,9 +71,8 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Mathematically synthesizes the Acoustic Impulse Response (IR) of an 80s 
-     * wood arcade cabinet, bypassing local CORS file loading blocks.
-     * @returns {AudioBuffer} The synthesized stereo cabinet impulse response.
+     * Pre-calculates acoustic impulse response data to bypass network fetches.
+     * @returns {AudioBuffer}
      */
     synthesizeCabinetImpulseResponse() {
         const rate = this.context.sampleRate;
@@ -92,39 +94,38 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Dynamic routing changer. Adjusts parameters of native C++ Web Audio nodes 
-     * on the fly, avoiding structural re-connections and pop noises.
-     * @param {number} mode - Selected filter
+     * Changes active audio DSP paths dynamically.
+     * @param {number} mode - Selected filter index.
      */
     setAudioFilter(mode) {
         this.audioFilterMode = mode;
         if (!this.audioInitialized) return;
 
         switch (mode) {
-            case 1: // Arcade Warmth (Low-pass Mono)
+            case 1:
                 this.biquadFilterNode.frequency.value = 3500; 
                 this.dryGain.gain.value = 1.0;
                 this.haasGain.gain.value = 0.0;
                 this.wetGain.gain.value = 0.0; 
                 break;
                 
-            case 2: // Lush 3D Stereo (Haas spatializer)
+            case 2:
                 this.biquadFilterNode.frequency.value = 5500; 
                 this.dryGain.gain.value = 0.7;
-                this.delayNode.delayTime.value = 0.02; // 20ms delay on right channel
+                this.delayNode.delayTime.value = 0.02; 
                 this.haasGain.gain.value = 0.7;
                 this.wetGain.gain.value = 0.0; 
                 break;
 
-            case 3: // 2026 Spatial Atmos (Atmos Convolution + Haas Stereo)
+            case 3:
                 this.biquadFilterNode.frequency.value = 6500; 
                 this.dryGain.gain.value = 0.65; 
-                this.delayNode.delayTime.value = 0.025; // 25ms wide delay
+                this.delayNode.delayTime.value = 0.025; 
                 this.haasGain.gain.value = 0.65;
-                this.wetGain.gain.value = 0.80; // Activate physical room reflections
+                this.wetGain.gain.value = 0.80; 
                 break;
 
-            case 0: // Original Mono (Sharp & Dry)
+            case 0:
             default:
                 this.biquadFilterNode.frequency.value = 20000; 
                 this.dryGain.gain.value = 1.0;
@@ -135,8 +136,8 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Initializes the host Web Audio API context and builds the parallel DSP node graph.
-     * @param {ZilogZ80} cpu - System CPU reference used to sync internal clock steps.
+     * Initializes the Web Audio API context and structures the parallel node graph.
+     * @param {ZilogZ80} cpu - System CPU instance.
      */
     async startMix(cpu) {
         try {
@@ -146,55 +147,40 @@ class Sega315_5124_Psg {
             
             this.multiplier = Math.floor(cpu.clockRate / this.context.sampleRate);
             
-            // Generate mono audio from JS, spatialization is handled by C++ nodes
             this.jsNode = this.context.createScriptProcessor(this.audioBufSize, 0, 1);
             this.jsNode.onaudioprocess = (e) => this.mixFunction(e);
 
             this.gainNode = this.context.createGain();
-            this.gainNode.gain.value = 0.5; // Master volume scale
+            this.gainNode.gain.value = 0.5; 
     
-            // ========================================================================
-            // NATIVE WEB AUDIO DSP NODE GRAPH WITH CONVOLUTION
-            // ========================================================================
-            
-            // 1. Create BiquadFilter (Hardware-accelerated Low-Pass)
             this.biquadFilterNode = this.context.createBiquadFilter();
             this.biquadFilterNode.type = 'lowpass';
 
-            // 2. Create Convolver (Hardware-accelerated Reverb)
             this.convolverNode = this.context.createConvolver();
             this.convolverNode.buffer = this.synthesizeCabinetImpulseResponse(); 
 
-            // 3. Create Haas Delay Nodes (Stereo widening)
             this.delayNode = this.context.createDelay();
             this.panLeft = this.context.createStereoPanner();
             this.panRight = this.context.createStereoPanner();
             this.panLeft.pan.value = -0.8;
             this.panRight.pan.value = 0.8;
 
-            // 4. Create Parallel Gain Mixers (Wet/Dry/Haas balance)
             this.dryGain = this.context.createGain();
             this.haasGain = this.context.createGain();
             this.wetGain = this.context.createGain();
 
-            // Connect Generator to Filter
             this.jsNode.connect(this.biquadFilterNode);
 
-            // Split into 3 parallel paths
-            // Path A: Dry Left Channel
             this.biquadFilterNode.connect(this.panLeft);
             this.panLeft.connect(this.dryGain);
 
-            // Path B: Haas Delayed Right Channel
             this.biquadFilterNode.connect(this.delayNode);
             this.delayNode.connect(this.panRight);
             this.panRight.connect(this.haasGain);
 
-            // Path C: Wet Convolution Reverb path
             this.biquadFilterNode.connect(this.convolverNode);
             this.convolverNode.connect(this.wetGain);
 
-            // Merge paths back to the master Gain output
             this.dryGain.connect(this.gainNode);
             this.haasGain.connect(this.gainNode);
             this.wetGain.connect(this.gainNode);
@@ -218,13 +204,26 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Sends an 8-bit command byte matching a specific CPU cycle timestamp to the queue.
-     * @param {number} eventByte - Sound register parameter byte.
+     * Recalculates and caches the phase step size of a voice.
+     * Crucial optimization: eliminates divisions inside the active mix loop.
+     * @param {number} voiceIndex - Target channel (0 to 3).
+     */
+    recalculateVoiceStep(voiceIndex) {
+        const toneVal = this.toneregister[voiceIndex];
+        if (toneVal === 0) {
+            this.cachedStepSize[voiceIndex] = 0;
+        } else {
+            this.cachedStepSize[voiceIndex] = this.PSG_CLOCK_CONSTANT / (32 * toneVal);
+        }
+    }
+
+    /**
+     * Decodes 8-bit bus writes and enqueues events.
+     * @param {number} eventByte - Value written to port.
      */
     writeByte(eventByte) {
         this.eventsQueue.push([eventByte, this.internalClock]);
         
-        // Shadow copy for savestates consistency
         if (eventByte & 0x80) {
             this.chan2belatched = (eventByte >> 5) & 0x03;
             this.what2latch = ((eventByte & 0x10) === 0x10) ? 1 : 0;
@@ -232,9 +231,37 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Returns the current Clock Drift of the audio engine.
-     * High-precision feedback error signal utilized by the Orchestrator's DRC closed loop.
-     * @returns {number} The difference between the simulated CPU clock and audio reproduction cursor.
+     * Processes enqueued hardware writes up to a target clock.
+     * @param {number} targetClock - Sync clock limit.
+     */
+    processEvents(targetClock) {
+        while (this.eventsQueue.length > 0 && this.eventsQueue[0][1] <= targetClock) {
+            const curEvent = this.eventsQueue.shift();
+            const eventByte = curEvent[0];
+
+            if (eventByte & 0x80) {
+                this.chan2belatched = (eventByte >> 5) & 0x03;
+                this.what2latch = ((eventByte & 0x10) === 0x10) ? 1 : 0;
+                if (this.what2latch === 1) {
+                    this.volregister[this.chan2belatched] = eventByte & 0x0f;
+                } else {
+                    this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff00) | ((eventByte << 4) & 0x00FF);
+                    this.recalculateVoiceStep(this.chan2belatched);
+                }
+            } else {
+                if (this.what2latch === 1) {
+                    this.volregister[this.chan2belatched] = eventByte & 0xf;
+                } else {
+                    this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff) | ((eventByte << 8) & 0x3F00);
+                    this.recalculateVoiceStep(this.chan2belatched);
+                }
+            }
+        }
+    }
+
+    /**
+     * Evaluates clock drift between physical audio output and emulated CPU cycles.
+     * @returns {number}
      */
     getClockDrift() {
         if (!this.audioInitialized) return 0;
@@ -242,97 +269,79 @@ class Sega315_5124_Psg {
     }
 
     /**
-     * Audio Processor Callback. Consumes queued register updates on a timeline-accurate basis.
-     * OPTIMIZED: Evaluates synthesis phase changes consolidated per audio sample.
+     * Synthesizes audio samples synchronously.
+     * Optimized to achieve O(1) step updates via pre-calculated phase step caching.
+     * @param {AudioProcessingEvent} e
      */
     mixFunction(e) {
         if (!this.audioEnabled || !this.audioInitialized) return;
 
-        const data = e.outputBuffer.getChannelData(0); // Mono processing
+        const data = e.outputBuffer.getChannelData(0);
+        const dataLength = data.length;
 
         if (this.isMuted) {
-            for (let i = 0; i < data.length; i++) data[i] = 0;
+            data.fill(0);
             return;
         }
 
         let numClocksToCover = this.internalClock - this.internalClockPos;
 
-        // DRC TRANSIENT CLAMPING:
-        // If the CPU is way too far ahead or behind (e.g. paused, fast-forward, or system stutter),
-        // snap the audio cursor directly to the CPU timeline to prevent audio popping or pitch-bend distortion.
-        const maxAllowedDrift = this.multiplier * this.audioBufSize * 4; // Allow 4 audio buffer blocks of leeway
+        // DRC Transient protection: snap timeline immediately if drift crosses buffer thresholds
+        const maxAllowedDrift = this.multiplier * this.audioBufSize * 4;
         if (Math.abs(numClocksToCover) > maxAllowedDrift) {
             this.internalClockPos = this.internalClock;
             numClocksToCover = 0;
         }
 
         if (numClocksToCover <= 0) {
-            for (let i = 0; i < data.length; i++) data[i] = 0;
+            data.fill(0);
             return;
         }
         
-        let realStep = numClocksToCover / (this.multiplier * data.length);
+        const realStep = numClocksToCover / (this.multiplier * dataLength);
 
-        for (let sampleIndex = 0; sampleIndex < data.length; sampleIndex++) {
-            
-            // Calculate current CPU clock limit matching this specific audio sample
-            let sampleClock = this.internalClockPos + (sampleIndex * realStep * this.multiplier);
+        for (let sampleIndex = 0; sampleIndex < dataLength; sampleIndex++) {
+            const sampleClock = this.internalClockPos + (sampleIndex * realStep * this.multiplier);
 
-            // Process any written hardware registers up to this sample's clock timing
-            while (this.eventsQueue.length > 0 && this.eventsQueue[0][1] <= sampleClock) {
-                let curEvent = this.eventsQueue.shift();
-                let eventByte = curEvent[0];
+            // Execute register updates synced to this exact sample
+            this.processEvents(sampleClock);
 
-                if (eventByte & 0x80) {
-                    this.chan2belatched = (eventByte >> 5) & 0x03;
-                    this.what2latch = ((eventByte & 0x10) === 0x10) ? 1 : 0;
-                    if (this.what2latch === 1) {
-                        this.volregister[this.chan2belatched] = eventByte & 0x0f;
-                    } else {
-                        this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff00) | ((eventByte << 4) & 0x00FF);
-                    }
-                } else {
-                    if (this.what2latch === 1) {
-                        this.volregister[this.chan2belatched] = eventByte & 0xf;
-                    } else {
-                        this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff) | ((eventByte << 8) & 0x3F00);
-                    }
-                }
-            }
-
-            // Synthesize active physical square/noise channels ONCE per audio sample
             let finalSample = 0.0;
-            for (let voiceIndex = 0; voiceIndex < 4; voiceIndex++) {
-                let curSamp = 0.0;
-                if (this.volregister[voiceIndex] !== 0xf) {
-                    if (this.toneregister[voiceIndex] !== 0) {
-                        if (voiceIndex < 3) {
-                            let wavePhaseOffset = Math.floor(this.wavePos[voiceIndex] % this.squareWaveLen);
-                            if (wavePhaseOffset < (this.squareWaveLen >> 1)) curSamp = 1.0;
-                            
-                            // Consolidated frequency phase sum per single sample index
-                            let vBlankFreqAdjust = (3579545.0 / (32 * this.toneregister[voiceIndex])) / 0.37;
-                            this.wavePos[voiceIndex] += vBlankFreqAdjust;
-                            this.wavePos[voiceIndex] %= this.squareWaveLen;
-                        } else {
-                            curSamp = this.randBuffer[this.randPos] * 2.0;
-                            this.randPos = (this.randPos + 1) % this.randDim;
-                        }
+
+            // Synthesize Tone Channels (Voices 0 to 2)
+            for (let voiceIndex = 0; voiceIndex < 3; voiceIndex++) {
+                const vol = this.volregister[voiceIndex];
+                if (vol !== 0xf && this.toneregister[voiceIndex] !== 0) {
+                    const wavePhase = this.wavePos[voiceIndex] % this.squareWaveLen;
+                    const curSamp = (wavePhase < (this.squareWaveLen >> 1)) ? 1.0 : 0.0;
+                    
+                    finalSample += curSamp * (15 - vol) * 0.066666666;
+
+                    // Apply cached, pre-calculated step size increment
+                    this.wavePos[voiceIndex] += this.cachedStepSize[voiceIndex];
+                    if (this.wavePos[voiceIndex] >= this.squareWaveLen) {
+                        this.wavePos[voiceIndex] %= this.squareWaveLen;
                     }
-                    curSamp = (curSamp * (15 - this.volregister[voiceIndex])) * 0.066666666; 
-                    finalSample += curSamp;
                 }
             }
-            data[sampleIndex] = (finalSample * 0.25);
+
+            // Synthesize Noise Channel (Voice 3)
+            const noiseVol = this.volregister[3];
+            if (noiseVol !== 0xf) {
+                const curSamp = this.randBuffer[this.randPos] * 2.0;
+                finalSample += curSamp * (15 - noiseVol) * 0.066666666;
+
+                this.randPos = (this.randPos + 1) % this.randDim;
+            }
+
+            data[sampleIndex] = finalSample * 0.25;
         }
 
         this.internalClockPos += numClocksToCover;
     }
 
     /**
-     * Fallback stub required by EmulatorOrchestrator integration.
+     * Fallback interface for abstract orchestrator implementations.
      */
-    syncWorkletState() {
-        // No operation needed. Running synchronously.
-    }
+    syncWorkletState() {}
 }
