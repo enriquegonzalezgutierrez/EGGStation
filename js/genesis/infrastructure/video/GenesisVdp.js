@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -8,7 +8,7 @@
  * sprite caching/sorting lists, window boundary locks, H32 / H40 resolution modes, 
  * and advanced hardware-level pixel priorities (Shadow / Highlight).
  * Aligned with MDTracer reference standards to ensure proper H-Blank status 
- * toggling and non-blocking register set commands.
+ * toggling, V-Interrupt flag clearing, and non-blocking register set commands.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates the complex 2D scanline compositing 
@@ -150,9 +150,12 @@ class GenesisVdp {
         this.planeBTileIndexRebase = false;
 
         this.backgroundColour = 0;
+        this.register0a = 0; // Backup reload register for H-Blank Interrupts
         this.hIntInterval = 0;
+        
         this.currentlyInVblank = true;
-        this.hblankToggle = false; // Added to prevent infinite CPU wait loops
+        this.vIntPending = false;  // Aligned with MDTracer's V-Interrupt occurred/pending flag (Bit 7)
+        this.hblankToggle = false; // Prevents infinite CPU execution wait loops
         this.allowSpriteMasking = false;
 
         this.hscrollMask = 0;
@@ -230,8 +233,11 @@ class GenesisVdp {
         this.planeBTileIndexRebase = false;
 
         this.backgroundColour = 0;
+        this.register0a = 0; // Reset reload interval state
         this.hIntInterval = 0;
+        
         this.currentlyInVblank = true;
+        this.vIntPending = false;  // Reset V-Int pending status
         this.hblankToggle = false;
         this.allowSpriteMasking = false;
 
@@ -369,7 +375,7 @@ class GenesisVdp {
 
     /**
      * Reads the VDP Status Register.
-     * Aligned with MDTracer to dynamically toggle H-Blank to prevent infinite CPU wait loops.
+     * Aligned with MDTracer to handle V-Int pending status (Bit 7) and H-Blank handshake.
      */
     readControl() {
         this.accessWritePending = false;
@@ -380,7 +386,12 @@ class GenesisVdp {
         this.hblankToggle = !this.hblankToggle;
         const hblankFlag = (this.currentlyInVblank || this.hblankToggle) ? 1 : 0;
         
-        return 0x3400 | (fifoEmpty << 9) | (vblankFlag << 3) | (hblankFlag << 2);
+        // FIX: Read and clear V-Int Pending flag (Bit 7). 
+        // Reading the status register on Sega hardware always clears the pending V-Int signal!
+        const vIntFlag = this.vIntPending ? 1 : 0;
+        this.vIntPending = false; 
+        
+        return 0x3400 | (vIntFlag << 7) | (fifoEmpty << 9) | (vblankFlag << 3) | (hblankFlag << 2);
     }
 
     updateFakeFIFO(value) {
@@ -484,6 +495,7 @@ class GenesisVdp {
 
                     case 10:
                         this.hIntInterval = data;
+                        this.register0a = data; // Keep reload backup synced with written interval data
                         break;
 
                     case 11:

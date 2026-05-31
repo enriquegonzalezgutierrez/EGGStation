@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -44,7 +44,7 @@ class M68kShiftRotate {
 
                     opcodeTable[opcode] = () => {
                         const ea = cpu.resolveEA(mode, reg, 2);
-                        let val = cpu.readEA(ea, 2);
+                        let val = cpu.readEA(ea, 2) & 0xFFFF;
                         let lastBit = 0;
                         let overflow = 0;
 
@@ -68,27 +68,27 @@ class M68kShiftRotate {
                             
                             if (memOpType === 0) { // ASR
                                 const sign = val & 0x8000;
-                                val = (val >> 1) | sign; // Replicate sign bit
+                                val = ((val >>> 1) | sign) & 0xFFFF; // Explicit logical right shift
                             } else if (memOpType === 1) { // LSR
-                                val = val >> 1; // Zero fill
+                                val = (val >>> 1) & 0xFFFF; // Logical shift right (zero fill)
                             } else if (memOpType === 2) { // ROXR
                                 const oldX = cpu.fX;
-                                val = (val >> 1) | (oldX << 15);
+                                val = ((val >>> 1) | (oldX << 15)) & 0xFFFF;
                             } else if (memOpType === 3) { // ROR
-                                val = (val >> 1) | (lastBit << 15);
+                                val = ((val >>> 1) | (lastBit << 15)) & 0xFFFF;
                             }
                         }
 
                         cpu.writeEA(ea, val, 2);
 
-                        // Update CCR
+                        // Update CCR Status Register Flags
                         cpu.fZ = val === 0 ? 1 : 0;
                         cpu.fN = (val & 0x8000) !== 0 ? 1 : 0;
                         cpu.fV = overflow;
                         cpu.fC = lastBit;
-                        if (memOpType !== 3) cpu.fX = lastBit; // ROL/ROR do not touch X
+                        if (memOpType !== 3) cpu.fX = lastBit; // ROL/ROR do not update the X (Extend) flag
 
-                        return 16; // Memory shifts usually take around 16 cycles
+                        return 16; // Memory shifts consume 16 cycles
                     };
                     continue;
                 }
@@ -107,7 +107,7 @@ class M68kShiftRotate {
                     if (isReg) {
                         shiftCount = cpu.d[countReg] & 63; // Modulo 64
                     } else {
-                        shiftCount = countReg === 0 ? 8 : countReg; // Immediate 0 means 8
+                        shiftCount = countReg === 0 ? 8 : countReg; // Immediate 0 maps to 8
                     }
                     
                     const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);

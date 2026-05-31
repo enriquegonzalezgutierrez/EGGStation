@@ -1,12 +1,18 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
  * Domain Layer: M68K CPU System Exceptions & Peripherals Registry
  * 
  * Implements hardware exceptions (TRAP, CHK, ILLEGAL, TRAPV), system halts (STOP),
- * atomic synchronization (TAS), peripheral memory dumps (MOVEP), and remaining
- * math edge-cases (NBCD) adhering strictly to the Single Responsibility Principle.
+ * atomic synchronization (TAS), peripheral memory dumps (MOVEP), and the privileged 
+ * hardware RESET instruction, adhering strictly to the Single Responsibility Principle.
+ * 
+ * SOLID Principles:
+ * - Single Responsibility Principle (SRP): Isolates CPU exception triggers, privilege 
+ *   checks, and hardware reset delegations cleanly into its own domain file.
+ * - Open/Closed Principle (OCP): Dynamically populates the CPU's opcode dispatch 
+ *   table on startup without modifying core CPU execution code.
  */
 
 class M68kSystemExceptions {
@@ -21,7 +27,23 @@ class M68kSystemExceptions {
         opcodeTable[0x4AFC] = () => { cpu.triggerException(4); return 34; }; // ILLEGAL Instruction
         opcodeTable[0x4E76] = () => { if (cpu.fV) { cpu.triggerException(7); return 34; } return 4; }; // TRAPV
 
-        // --- 2. STOP (Load SR and Stop - Static Opcode) ---
+        // --- 2. RESET (Assert Peripheral Reset Line - Static Opcode) ---
+        // Format: [0100][1110][0111][0000] -> 0x4E70
+        opcodeTable[0x4E70] = () => {
+            if ((cpu.sr & 0x2000) === 0) { // Privilege check (RESET is a privileged instruction)
+                cpu.triggerException(8); // Privilege Violation
+                return 34;
+            }
+            // Aligned with authentic hardware: resets external co-processors and buses,
+            // but does NOT reset the M68K registers or PC itself.
+            if (cpu.bus) {
+                cpu.bus.initialise(); 
+            }
+            return 132; // Standard M68000 RESET instruction execution penalty cycles
+        };
+
+        // --- 3. STOP (Load SR and Stop - Static Opcode) ---
+        // Format: [0100][1110][0111][0010] -> 0x4E72
         opcodeTable[0x4E72] = () => {
             if ((cpu.sr & 0x2000) === 0) { // Privilege check
                 cpu.triggerException(8);
@@ -36,7 +58,7 @@ class M68kSystemExceptions {
 
         for (let opcode = 0; opcode < 65536; opcode++) {
             
-            // --- 3. TRAP (Software Exception Vector) ---
+            // --- 4. TRAP (Software Exception Vector) ---
             // Format: [0100][1110][0100][vector:4]
             if ((opcode & 0xFFF0) === 0x4E40) {
                 const trapVector = opcode & 0xF;
@@ -47,7 +69,7 @@ class M68kSystemExceptions {
                 continue;
             }
 
-            // --- 4. CHK (Check Register Against Bounds) ---
+            // --- 5. CHK (Check Register Against Bounds) ---
             // Format: [0100][reg:3][110][mode:3][reg:3]
             if ((opcode & 0xF1C0) === 0x4180) {
                 const reg = (opcode >> 9) & 7;
@@ -69,7 +91,7 @@ class M68kSystemExceptions {
                 continue;
             }
 
-            // --- 5. TAS (Test and Set) ---
+            // --- 6. TAS (Test and Set) ---
             // Format: [0100][1010][11][mode:3][reg:3]
             if ((opcode & 0xFFC0) === 0x4AC0) {
                 const mode = (opcode >> 3) & 7;
@@ -91,7 +113,7 @@ class M68kSystemExceptions {
                 continue;
             }
 
-            // --- 6. NBCD (Negate Decimal with Extend) ---
+            // --- 7. NBCD (Negate Decimal with Extend) ---
             // Format: [0100][1000][00][mode:3][reg:3]
             if ((opcode & 0xFFC0) === 0x4800) {
                 const mode = (opcode >> 3) & 7;
@@ -125,7 +147,7 @@ class M68kSystemExceptions {
                 continue;
             }
 
-            // --- 7. MOVEP (Move Peripheral Data) ---
+            // --- 8. MOVEP (Move Peripheral Data) ---
             // Format: [0000][dReg:3][opmode:3][001][aReg:3]
             if ((opcode & 0xF138) === 0x0108) {
                 const dReg = (opcode >> 9) & 7;

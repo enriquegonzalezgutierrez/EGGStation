@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -41,7 +41,7 @@ const GENESIS_PSG_NOISE_TYPE_WHITE    = 1;
 class GenesisPsg {
     constructor() {
         // --- 1. Channel Disable Configurations ---
-        this.toneDisabled = new Uint8Array(3); // Boolean states mapped to integers (0 = enabled, 1 = disabled)
+        this.toneDisabled = new Uint8Array(3); // 0 = enabled, 1 = disabled
         this.noiseDisabled = 0;
 
         // --- 2. Tone Channels Contiguous Memory Buffers ---
@@ -54,10 +54,9 @@ class GenesisPsg {
         this.noiseCountdown = 0;
         this.noiseAttenuation = 0xF; // Muted on startup
         this.noiseFakeOutputBit = 0;
-        this.noiseRealOutputBit = 0;
         this.noiseFrequencyMode = 0;
         this.noiseType = GENESIS_PSG_NOISE_TYPE_PERIODIC;
-        this.noiseShiftRegister = 0;
+        this.noiseShiftRegister = 0x8000; // Reset state initialized to MSB set (Nuked-MD & MDTracer specs)
 
         // --- 4. Latched Command Status ---
         this.latchedChannel = 0;
@@ -72,7 +71,7 @@ class GenesisPsg {
     initialise() {
         // Reset Tone registers (all silenced on boot)
         this.tonesCountdown.fill(0);
-        this.tonesCountdownMaster.fill(0);
+        this.tonesCountdownMaster.fill(1); // Safely default to 1 to prevent division/timer lockouts
         this.tonesAttenuation.fill(0xF);
         this.tonesOutputBit.fill(0);
 
@@ -80,10 +79,9 @@ class GenesisPsg {
         this.noiseCountdown = 0;
         this.noiseAttenuation = 0xF;
         this.noiseFakeOutputBit = 0;
-        this.noiseRealOutputBit = 0;
         this.noiseFrequencyMode = 0;
         this.noiseType = GENESIS_PSG_NOISE_TYPE_PERIODIC;
-        this.noiseShiftRegister = 0;
+        this.noiseShiftRegister = 0x8000;
 
         // Reset Latched state
         this.latchedChannel = 0;
@@ -95,7 +93,7 @@ class GenesisPsg {
 
     /**
      * Writes an 8-bit command byte to latch registers or update state.
-     * Corrected to always interpret MSB=0 writes as frequency data, complying with SN76489 spec.
+     * Aligned with MDTracer's zero-frequency protection guards.
      * @param {number} command - 8-bit instruction written from the system bus.
      */
     writeCommand(command) {
@@ -113,7 +111,9 @@ class GenesisPsg {
                     this.tonesAttenuation[ch] = command & 0xF;
                 } else {
                     // Update low frequency bits (0-3)
-                    this.tonesCountdownMaster[ch] = (this.tonesCountdownMaster[ch] & 0x3F0) | (command & 0xF);
+                    let freq = (this.tonesCountdownMaster[ch] & 0x3F0) | (command & 0xF);
+                    if (freq === 0) freq = 1; // FIX: Prevent infinite loop or zero-frequency freeze
+                    this.tonesCountdownMaster[ch] = freq;
                 }
             } else {
                 if (this.latchedIsVolumeCommand !== 0) {
@@ -122,14 +122,16 @@ class GenesisPsg {
                     this.noiseType = (command & 4) !== 0 ? GENESIS_PSG_NOISE_TYPE_WHITE : GENESIS_PSG_NOISE_TYPE_PERIODIC;
                     this.noiseFrequencyMode = command & 3;
 
-                    // When the noise register is written, reset the 16-bit shift register state to 1
-                    this.noiseShiftRegister = 1;
+                    // When the noise register is written, reset the 16-bit shift register state to 0x8000
+                    this.noiseShiftRegister = 0x8000;
                 }
             }
         } else {
             // Data Write (MSB = 0): Always updates frequency high bits (4-9) for the latched tone channel
             if (this.latchedChannel < 3) {
-                this.tonesCountdownMaster[this.latchedChannel] = (this.tonesCountdownMaster[this.latchedChannel] & 0x0F) | ((command & 0x3F) << 4);
+                let freq = (this.tonesCountdownMaster[this.latchedChannel] & 0x0F) | ((command & 0x3F) << 4);
+                if (freq === 0) freq = 1; // FIX: Safety guard
+                this.tonesCountdownMaster[this.latchedChannel] = freq;
             }
         }
     }
@@ -179,7 +181,6 @@ class GenesisPsg {
             let countdown = this.noiseCountdown | 0;
             const frequencyMode = this.noiseFrequencyMode | 0;
             let fakeOutputBit = this.noiseFakeOutputBit | 0;
-            let realOutputBit = this.noiseRealOutputBit | 0;
             let shiftRegister = this.noiseShiftRegister | 0;
             const isWhiteNoise = this.noiseType === GENESIS_PSG_NOISE_TYPE_WHITE;
 
@@ -204,27 +205,31 @@ class GenesisPsg {
                     fakeOutputBit = fakeOutputBit === 0 ? 1 : 0;
 
                     if (fakeOutputBit !== 0) {
-                        // Shift register is rotated when fake output transitions from low to high
-                        realOutputBit = (shiftRegister & 0x8000) >> 15;
-
-                        shiftRegister = (shiftRegister << 1) & 0xFFFF;
-                        shiftRegister = shiftRegister | realOutputBit;
-
+                        // FIX: Shift register is rotated right on fake output transition (0 to 1)
+                        // This matches standard Texas Instruments SN76489 silicon behavior.
+                        let feedbackBit = 0;
                         if (isWhiteNoise) {
-                            // XOR taps at bit 15 (MSB) and bit 13 to create pseudorandom noise sequences
-                            shiftRegister = shiftRegister ^ ((shiftRegister & 0x2000) >> 13);
+                            // XOR taps at bit 0 and bit 3 for custom white noise generation
+                            feedbackBit = (shiftRegister & 1) ^ ((shiftRegister >> 3) & 1);
+                        } else {
+                            // Periodic noise feeds back the LSB (bit 0) directly
+                            feedbackBit = shiftRegister & 1;
                         }
+                        
+                        shiftRegister = (shiftRegister >> 1) | (feedbackBit << 15);
                     }
                 }
 
+                // Noise channel output level depends on the LSB of the LFSR shift register
+                const outputValue = (shiftRegister & 1);
+
                 // Direct 1D offset addition (extremely fast)
-                sampleBuffer[ptr] = (sampleBuffer[ptr] + GENESIS_PSG_VOLUMES[(attenuation * 2) + realOutputBit]) | 0;
+                sampleBuffer[ptr] = (sampleBuffer[ptr] + GENESIS_PSG_VOLUMES[(attenuation * 2) + outputValue]) | 0;
                 ptr++;
             }
 
             this.noiseCountdown = countdown;
             this.noiseFakeOutputBit = fakeOutputBit;
-            this.noiseRealOutputBit = realOutputBit;
             this.noiseShiftRegister = shiftRegister;
         }
     }

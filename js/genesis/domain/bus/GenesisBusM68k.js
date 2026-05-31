@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -7,7 +7,7 @@
  * Emulates the central physical memory bus of the Motorola 68000 processor. 
  * Decodes 24-bit physical address lines and routes synchronous data cycles 
  * to Cartridge ROM, 64KB Work RAM, VDP coprocessors, and secondary Z80 subsystems.
- * Fully aligned with MDTracer reference standards to ensure accurate memory 
+ * Aligned with MDTracer reference standards to ensure accurate memory 
  * mapping and non-blocking VDP DMA transfers.
  * 
  * SOLID Principles:
@@ -45,9 +45,9 @@ class GenesisBusM68k {
         this.cartridgeRom = null;
         this.cartridgeLength = 0;
 
-        // TradeMark Security System (TMSS) Registers (Nuked-MD hardware-aligned)
+        // TradeMark Security System (TMSS) Registers (Aligned with early Model 1 hardware by default)
         this.tmssString = new Uint16Array(2); // Stores words written to 0xA14000 and 0xA14002
-        this.tmssEnabled = true;
+        this.tmssEnabled = false; // Disabled by default to prevent false-positive lockouts on custom ROMs
 
         // Sega CD presence flag
         this.megaCdEnabled = false;
@@ -84,7 +84,7 @@ class GenesisBusM68k {
     setCartridge(romBuffer) {
         if (romBuffer) {
             // Sega Genesis ROMs are stored in Big-Endian. 
-            // We must byte-swap the data to read correct 16-bit words on little-endian host systems.
+            // Byte-swap is required to read correct 16-bit words on little-endian host systems.
             const rawBytes = new Uint8Array(romBuffer);
             for (let i = 0; i < rawBytes.length; i += 2) {
                 const temp = rawBytes[i];
@@ -170,7 +170,7 @@ class GenesisBusM68k {
                 } else if (ioSubChunk === 0x10) { // 0xA10000 - 0xA10FFF: I/O Ports
                     const offset = address & 0x00FF;
                     switch (offset) {
-                        case 0: case 1: { // Version Register (D7-D0, physically on address odd 0xA10001)
+                        case 0: case 1: { // Version Register (physically on address odd 0xA10001)
                             const overseas = 1; 
                             const pal = 0;      
                             const noCD = this.megaCdEnabled ? 0 : 1;
@@ -197,7 +197,7 @@ class GenesisBusM68k {
                     }
                 } else if (ioSubChunk === 0x11) { // 0xA11100 - 0xA11200: System Control
                     if ((address & 0xFF00) === 0xA11100) {
-                        // Z80 BUSREQ status register (Nuked-MD arbitration)
+                        // Z80 BUSREQ status register
                         const busObtained = this.z80Bus.busRequested ? 0 : 1; // 0 = bus free to Z80
                         return (0xFF ^ busObtained) << 8;
                     }
@@ -240,6 +240,9 @@ class GenesisBusM68k {
 
     /**
      * Reads an 8-bit byte synchronously from the 68K bus.
+     * @param {number} address - 24-bit physical address.
+     * @param {number} targetCycle - System clock cycle timestamp.
+     * @returns {number} 8-bit byte data.
      */
     readByte(address, targetCycle) {
         const isOdd = (address & 1) !== 0;
@@ -253,6 +256,10 @@ class GenesisBusM68k {
 
     /**
      * Writes a 16-bit word synchronously to the 68K bus.
+     * @param {number} address - 24-bit physical address.
+     * @param {number} value - Data word to write.
+     * @param {number} mask - 16-bit operation mask.
+     * @param {number} targetCycle - System clock cycle timestamp.
      */
     writeWord(address, value, mask, targetCycle) {
         address = address & 0xFFFFFF;
@@ -341,8 +348,19 @@ class GenesisBusM68k {
                         break;
 
                     case 2: case 3:
-                        // CRITICAL HARDWARE FIX: Injected 'this.readWord.bind(this)' as the primary DMA memory-fetcher!
-                        this.vdp.writeControl(value, () => {}, null, () => {}, this.readWord.bind(this), null, () => {}, null, targetCycle);
+                        // FIX: Corrected callback invocation parameters. Wraps standard writeControl parameters 
+                        // ensuring that the bound readCallback properly maps (userData, addr, cycle) inputs.
+                        this.vdp.writeControl(
+                            value, 
+                            () => {}, 
+                            null, 
+                            () => {}, 
+                            (userData, addr, cycle) => this.readWord(addr, cycle), 
+                            null, 
+                            () => {}, 
+                            null, 
+                            targetCycle
+                        );
                         break;
 
                     case 8: case 9: case 10: case 11:
@@ -363,6 +381,9 @@ class GenesisBusM68k {
 
     /**
      * Writes an 8-bit byte synchronously to the 68K bus.
+     * @param {number} address - 24-bit physical address.
+     * @param {number} value - Data byte to write.
+     * @param {number} targetCycle - System clock cycle timestamp.
      */
     writeByte(address, value, targetCycle) {
         const isOdd = (address & 1) !== 0;

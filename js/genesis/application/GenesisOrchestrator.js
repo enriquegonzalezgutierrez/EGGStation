@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -49,7 +49,7 @@ class GenesisOrchestrator {
 
         // Hardware Domain & Infrastructure Instantiation (DIP: Injecting Dependencies)
         this.vdp = new GenesisVdp();
-        this.psg = new GenesisPsg(); 
+        this.psg = new GenesisPsg();
         this.fm = new GenesisYm2612();
         this.controllerManager = new GenesisControllerManager();
 
@@ -72,12 +72,12 @@ class GenesisOrchestrator {
 
         // Register all modular 68K instruction families safely once all scripts are loaded.
         // This adheres to the Open/Closed Principle (OCP) and prevents load-order crashes.
-        if (typeof M68kDataTransfer !== 'undefined')     this.m68k.registerModule(M68kDataTransfer.register);
-        if (typeof M68kArithmetic !== 'undefined')       this.m68k.registerModule(M68kArithmetic.register);
-        if (typeof M68kLogical !== 'undefined')          this.m68k.registerModule(M68kLogical.register);
-        if (typeof M68kBitwise !== 'undefined')          this.m68k.registerModule(M68kBitwise.register);
-        if (typeof M68kShiftRotate !== 'undefined')      this.m68k.registerModule(M68kShiftRotate.register);
-        if (typeof M68kProgramFlow !== 'undefined')      this.m68k.registerModule(M68kProgramFlow.register);
+        if (typeof M68kDataTransfer !== 'undefined') this.m68k.registerModule(M68kDataTransfer.register);
+        if (typeof M68kArithmetic !== 'undefined') this.m68k.registerModule(M68kArithmetic.register);
+        if (typeof M68kLogical !== 'undefined') this.m68k.registerModule(M68kLogical.register);
+        if (typeof M68kBitwise !== 'undefined') this.m68k.registerModule(M68kBitwise.register);
+        if (typeof M68kShiftRotate !== 'undefined') this.m68k.registerModule(M68kShiftRotate.register);
+        if (typeof M68kProgramFlow !== 'undefined') this.m68k.registerModule(M68kProgramFlow.register);
         if (typeof M68kSystemExceptions !== 'undefined') this.m68k.registerModule(M68kSystemExceptions.register);
 
         this.currentScanline = 0;
@@ -98,7 +98,7 @@ class GenesisOrchestrator {
 
         // Synchronously purge memory buffers and reset processors
         this.vdp.initialise();
-        this.psg.initialise(); 
+        this.psg.initialise();
         this.fm.initialise();
         this.controllerManager.initialise();
         this.z80Bus.initialise();
@@ -258,7 +258,7 @@ class GenesisOrchestrator {
 
     /**
      * Simulates exactly one frame's worth of CPU and VDP scanlines.
-     * Recreates the exact physical coordinate synchronization logic of the Genesis.
+     * Aligned with MDTracer's linear scanline processing for stable timings.
      */
     executeFrame() {
         const totalScanlines = this.tvStandard === 1 ? 312 : 262;
@@ -269,14 +269,14 @@ class GenesisOrchestrator {
         const m68kClockSpeed = Math.floor(masterClockSpeed / 7);
         const m68kCyclesPerScanline = Math.floor((m68kClockSpeed / (this.tvStandard === 1 ? 50 : 60)) / totalScanlines);
 
-        let scanline = activeHeight; // Start directly at vertical blanking boundary for low-latency inputs
-
-        do {
+        // Linear frame loop, identical to MDTracer's stable model
+        for (let scanline = 0; scanline < totalScanlines; scanline++) {
             this.currentScanline = scanline;
-            this.vdp.currentScanlineIndex = scanline >= 0 && scanline < activeHeight ? scanline : 0;
+            this.vdp.currentScanlineIndex = scanline < activeHeight ? scanline : 0;
 
-            if (scanline >= 0 && scanline < activeHeight) {
-                // Active Display Scanlines rendering sequencer
+            if (scanline < activeHeight) {
+                // --- Active Display Scanlines ---
+                this.vdp.currentlyInVblank = false;
                 this.vdp.beginScanline();
 
                 // 1. Process first half of scanline CPU cycles
@@ -290,40 +290,32 @@ class GenesisOrchestrator {
                 // 3. Process second half of scanline CPU cycles
                 this.stepCPUs(Math.floor(m68kCyclesPerScanline / 2));
             } else {
-                // Off-Screen Vertical Blanking lines
-                if (scanline === -1) {
-                    this.vdp.currentlyInVblank = false;
-                } else if (scanline === activeHeight) {
+                // --- Off-Screen Vertical Blanking lines ---
+                if (scanline === activeHeight) {
                     this.vdp.currentlyInVblank = true;
 
-                    // Trigger Vertical Interrupt (V-Int: M68K level 6 interrupt)
-                    this.vdp.statusFlags |= 0x08; // Set V-blank flag
+                    // Trigger Vertical Interrupt (V-Int: M68K level 6 interrupt) if enabled
                     if (this.vdp.vIntEnabled) {
                         this.m68k.irqPending = 6;
                     }
                 }
-
+                
+                // Process full scanline's worth of CPU cycles for blanking period
                 this.stepCPUs(m68kCyclesPerScanline);
             }
 
             // Handle Horizontal Interrupts (H-Int: M68K level 4 interrupt)
-            if (scanline >= -1 && scanline < activeHeight) {
+            if (scanline < activeHeight) {
                 if (this.vdp.hIntInterval-- === 0) {
                     this.vdp.hIntInterval = this.vdp.register0a; // Reload interval
                     if (this.vdp.hIntEnabled) {
-                        this.m68k.irqPending = 4; 
+                        this.m68k.irqPending = 4;
                     }
                 }
             }
-
-            // Increment line and handle coordinate wrap-arounds synchronously
-            scanline++;
-            if (scanline === activeHeight + 13 + 3 + 3) { // Active + Bottom blank + V-Sync + Top blank
-                scanline = -13; // Jump back to top of the screen bounds
-            }
-        } while (scanline !== activeHeight);
+        }
         
-        // Render FPS Stats
+        // Update FPS Stats
         this.framesRendered++;
         if (this.framesRendered % 10 === 0 && this.onFpsUpdate) {
             this.onFpsUpdate(this.fastForward ? "FFWD" : (this.tvStandard === 1 ? "50 FPS" : "60 FPS"));

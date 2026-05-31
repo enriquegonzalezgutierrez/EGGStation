@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -11,7 +11,8 @@
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates complex FM mathematical 
- *   operator synthesis, envelope scaling, and LFO modulations from general buses.
+ *   operator synthesis, envelope scaling, and LFO modulations from general buses,
+ *   moving synchronous timing updates out of asynchronous audio synthesizers.
  * - Open/Closed Principle (OCP): Designed with modular algorithm routes that 
  *   process channel streams without modifying the master sound mixer.
  */
@@ -46,14 +47,14 @@ const GENESIS_YM_POWER_TABLE = new Uint16Array([
     0x066D, 0x0668, 0x0664, 0x065F, 0x065B, 0x0657, 0x0652, 0x064E, 0x0649, 0x0645, 0x0641, 0x063C, 0x0638, 0x0634, 0x0630, 0x062B,
     0x0627, 0x0623, 0x061E, 0x061A, 0x0616, 0x0612, 0x060E, 0x0609, 0x0605, 0x0601, 0x05FD, 0x05F9, 0x05F5, 0x05F0, 0x05EC, 0x05E8,
     0x05E4, 0x05E0, 0x05DC, 0x05D8, 0x05D4, 0x05D0, 0x05CC, 0x05C8, 0x05C4, 0x05C0, 0x05BC, 0x05B8, 0x05B4, 0x05B0, 0x05AC, 0x05A8,
-    0x05A4, 0x05A0, 0x059C, 0x0599, 0x0595, 0x0591, 0x058D, 0x0589, 0x0585, 0x0581, 0x057E, 0x057A, 0x0576, 0x0572, 0x056F, 0x056B,
-    0x0567, 0x0563, 0x0560, 0x055C, 0x0558, 0x0554, 0x0551, 0x054D, 0x0549, 0x0546, 0x0542, 0x053E, 0x053B, 0x0537, 0x0534, 0x0530,
-    0x052C, 0x0529, 0x0525, 0x0522, 0x051E, 0x051B, 0x0517, 0x0514, 0x0510, 0x050C, 0x0509, 0x0506, 0x0502, 0x04FF, 0x04FB, 0x04F8,
-    0x04F4, 0x04F1, 0x04ED, 0x04EA, 0x04E7, 0x04E3, 0x04E0, 0x04DC, 0x04D9, 0x04D6, 0x04D2, 0x04CF, 0x04CC, 0x04C8, 0x04C5, 0x04C2,
-    0x04BE, 0x04BB, 0x04B8, 0x04B5, 0x04B1, 0x04AE, 0x04AB, 0x04A8, 0x04A4, 0x04A1, 0x049E, 0x049B, 0x0498, 0x0494, 0x0491, 0x048E,
-    0x048B, 0x0488, 0x0485, 0x0482, 0x047E, 0x047B, 0x0478, 0x0475, 0x0472, 0x046F, 0x046C, 0x0469, 0x0466, 0x0463, 0x0460, 0x045D,
-    0x045A, 0x0457, 0x0454, 0x0451, 0x044E, 0x044B, 0x0448, 0x0445, 0x0442, 0x043F, 0x043C, 0x0439, 0x0436, 0x0433, 0x0430, 0x042D,
-    0x042A, 0x0428, 0x0425, 0x0422, 0x041F, 0x041C, 0x0419, 0x0416, 0x0414, 0x0411, 0x040E, 0x040B, 0x0408, 0x0406, 0x0403, 0x0400
+    0x05A4, 0x05A0, 0x059C, 0x0599, 0x0595, 0x0591, 0x058D, 0x0589, 0x0585, 0x0581, 0x057E, 0x057A, 0x0572, 0x056F, 0x056B, 0x0567,
+    0x0563, 0x0560, 0x055C, 0x0558, 0x0554, 0x0551, 0x054D, 0x0549, 0x0546, 0x0542, 0x053E, 0x053B, 0x0537, 0x0534, 0x0530, 0x052C,
+    0x0529, 0x0525, 0x0522, 0x051E, 0x051B, 0x0517, 0x0514, 0x0510, 0x050C, 0x0509, 0x0506, 0x0502, 0x04FF, 0x04FB, 0x04F8, 0x04F4,
+    0x04F1, 0x04ED, 0x04EA, 0x04E7, 0x04E3, 0x04E0, 0x04DC, 0x04D9, 0x04D6, 0x04D2, 0x04CF, 0x04CC, 0x04C8, 0x04C5, 0x04C2, 0x04BE,
+    0x04BB, 0x04B8, 0x04B5, 0x04B1, 0x04AE, 0x04AB, 0x04A8, 0x04A4, 0x04A1, 0x049E, 0x049B, 0x0498, 0x0494, 0x0491, 0x048E, 0x048B,
+    0x0488, 0x0485, 0x0482, 0x047E, 0x047B, 0x0478, 0x0475, 0x0472, 0x046F, 0x046C, 0x0469, 0x0466, 0x0463, 0x0460, 0x045D, 0x045A,
+    0x0457, 0x0454, 0x0451, 0x044E, 0x044B, 0x0448, 0x0445, 0x0442, 0x043F, 0x043C, 0x0439, 0x0436, 0x0433, 0x0430, 0x042D, 0x042A,
+    0x0428, 0x0425, 0x0422, 0x041F, 0x041C, 0x0419, 0x0416, 0x0414, 0x0411, 0x040E, 0x040B, 0x0408, 0x0406, 0x0403, 0x0400
 ]);
 
 const GENESIS_YM_ENVELOPE_MODE_ATTACK  = 0;
@@ -210,6 +211,9 @@ class GenesisYm2612 {
         this.status = 0;
         this.busyFlagCounter = 0;
 
+        this.timerCycleAccumulator = 0; // Synchronous clock cycle accumulator for Timer A & B
+        this.timerBAccumulator = 0;     // Sub-scaler for Timer B ticks
+
         this.lfo = new GenesisYmLfo();
 
         this.initialise();
@@ -286,6 +290,9 @@ class GenesisYm2612 {
         this.leftoverCycles = 0;
         this.status = 0;
         this.busyFlagCounter = 0;
+
+        this.timerCycleAccumulator = 0;
+        this.timerBAccumulator = 0;
 
         this.lfo.reset();
     }
@@ -595,7 +602,8 @@ class GenesisYm2612 {
     }
 
     /**
-     * Steps the physical Z80/M68K timers and returns the chip's interrupt status.
+     * Steps the physical Z80/M68K timers on the CPU execution thread.
+     * Aligned with MDTracer's stable timer_control tick model.
      * @param {number} cycles - Clock cycles passed.
      * @returns {number} YM2612 Status Register (IRQ flags).
      */
@@ -606,6 +614,44 @@ class GenesisYm2612 {
                 this.status &= ~0x80; 
             }
         }
+
+        // FIX: Step Timer A and Timer B synchronously on the CPU execution thread.
+        // This ensures the timers decrement while the CPU is executing tight polling wait loops!
+        // YM2612 internal clock is the Master CPU clock / 2.
+        // Timer A decrements every 72 internal YM clocks (144 CPU cycles).
+        // Timer B decrements every 1152 internal YM clocks (2304 CPU cycles).
+        this.timerCycleAccumulator += cycles;
+
+        while (this.timerCycleAccumulator >= 144) {
+            this.timerCycleAccumulator -= 144;
+
+            if (this.timerAEnabled !== 0) {
+                if (--this.timerACounter === 0) {
+                    this.status |= 1; // Assert Timer A overflow flag (Bit 0)
+                    this.timerACounter = this.timerAValue;
+
+                    if (this.ch3CsmModeEnabled !== 0) {
+                        for (let op = 0; op < 4; op++) {
+                            this.setKeyOn(8 + op, true);
+                            this.setKeyOn(8 + op, false);
+                        }
+                    }
+                }
+            }
+
+            this.timerBAccumulator++;
+            if (this.timerBAccumulator >= 16) { // Timer B is 16 times slower than Timer A
+                this.timerBAccumulator = 0;
+
+                if (this.timerBEnabled !== 0) {
+                    if (--this.timerBCounter === 0) {
+                        this.status |= 2; // Assert Timer B overflow flag (Bit 1)
+                        this.timerBCounter = this.timerBValue;
+                    }
+                }
+            }
+        }
+
         return this.status;
     }
 
@@ -705,7 +751,6 @@ class GenesisYm2612 {
                 }
             }
 
-            // BUGFIX: Direct inline 9-bit sign-extension math (no macro required)
             const rawVal = (this.dacSample ^ 0x100) & 0x1FF;
             const dacSampleValue = (rawVal & 0x100) !== 0 ? rawVal - 512 : rawVal;
 
@@ -777,26 +822,7 @@ class GenesisYm2612 {
                 if (this.chPanRight[ch] !== 0) sampleBuffer[ptr + 1] = (sampleBuffer[ptr + 1] + volumeOffset) | 0;
             }
 
-            for (let t = 0; t < 2; t++) {
-                if (t === 0 && this.timerAEnabled !== 0) {
-                    if (--this.timerACounter === 0) {
-                        this.status |= 1; 
-                        this.timerACounter = this.timerAValue;
-
-                        if (this.ch3CsmModeEnabled !== 0) {
-                            for (let op = 0; op < 4; op++) {
-                                this.setKeyOn(8 + op, true);
-                                this.setKeyOn(8 + op, false);
-                            }
-                        }
-                    }
-                } else if (t === 1 && this.timerBEnabled !== 0) {
-                    if (--this.timerBCounter === 0) {
-                        this.status |= 2;
-                        this.timerBCounter = this.timerBValue;
-                    }
-                }
-            }
+            // Note: Timers are now processed synchronously inside update() to match hardware execution lines.
 
             ptr += 2;
         }

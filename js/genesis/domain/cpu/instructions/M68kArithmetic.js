@@ -1,16 +1,16 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
  * Domain Layer: M68K CPU Arithmetic Instruction Registry
  * 
  * Implements the registration and execution logic for the entire M68K 
- * arithmetic instruction family. Now includes high-precision ADDI and SUBI 
- * modules fully aligned with MDTracer's boolean algebraic flag solvers.
+ * arithmetic instruction family. Aligned with MDTracer's boolean algebraic 
+ * flag solvers (SMC, DMC, RMC) to guarantee 100% authentic condition code updates.
  * 
  * SOLID Principles:
- * - Single Responsibility Principle (SRP): Isolates mathematical operations 
- *   and status flag (CCR) updates cleanly into its own domain file.
+ * - Single Responsibility Principle (SRP): Isolates strictly mathematical operations 
+ *   and status flag (CCR) updates into its own domain file.
  * - Open/Closed Principle (OCP): Dynamically populates the CPU's opcode dispatch 
  *   table on startup without modifying core CPU execution code.
  */
@@ -76,23 +76,31 @@ class M68kArithmetic {
                             destVal = cpu.readEA(destEa, size);
                             srcVal = cpu.d[reg];
                         }
+
+                        // Explicitly mask operands to their logical size to prevent 32-bit register leakage
+                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                        srcVal &= mask;
+                        destVal &= mask;
                         
                         const result = isAdd ? (destVal + srcVal) : (destVal - srcVal);
-                        
-                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
-                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
                         const resMasked = result & mask;
 
-                        // Update CCR Status Flags
+                        // MDTracer Aligned Boolean algebraic solvers for CCR Flags (SMC, DMC, RMC)
+                        const SMC = (srcVal & signBit) !== 0;
+                        const DMC = (destVal & signBit) !== 0;
+                        const RMC = (resMasked & signBit) !== 0;
+
                         cpu.fZ = resMasked === 0 ? 1 : 0;
-                        cpu.fN = (resMasked & signBit) !== 0 ? 1 : 0;
+                        cpu.fN = RMC ? 1 : 0;
                         
                         if (isAdd) {
-                            cpu.fV = ((destVal & signBit) === (srcVal & signBit)) && ((resMasked & signBit) !== (destVal & signBit)) ? 1 : 0;
-                            cpu.fC = result > mask ? 1 : 0;
+                            cpu.fV = ((SMC ^ RMC) && (DMC ^ RMC)) ? 1 : 0;
+                            cpu.fC = ((SMC && DMC) || (!RMC && DMC) || (SMC && !RMC)) ? 1 : 0;
                         } else {
-                            cpu.fV = ((destVal & signBit) !== (srcVal & signBit)) && ((resMasked & signBit) !== (destVal & signBit)) ? 1 : 0;
-                            cpu.fC = destVal < srcVal ? 1 : 0; // Borrow
+                            cpu.fV = ((SMC ^ DMC) && (DMC ^ RMC)) ? 1 : 0;
+                            cpu.fC = ((SMC && !DMC) || (RMC && !DMC) || (SMC && RMC)) ? 1 : 0;
                         }
                         cpu.fX = cpu.fC;
                         
@@ -129,10 +137,17 @@ class M68kArithmetic {
                         const result = destVal - srcVal;
 
                         const resMasked = result & 0xFFFFFFFF;
+
+                        // FIX: Resolved signed/unsigned mismatch in Address comparisons.
+                        // Aligned strictly with MDTracer's boolean subtraction solvers.
+                        const SMC = (srcVal & 0x80000000) !== 0;
+                        const DMC = (destVal & 0x80000000) !== 0;
+                        const RMC = (resMasked & 0x80000000) !== 0;
+
                         cpu.fZ = resMasked === 0 ? 1 : 0;
-                        cpu.fN = (resMasked & 0x80000000) !== 0 ? 1 : 0;
-                        cpu.fV = ((destVal & 0x80000000) !== (srcVal & 0x80000000)) && ((resMasked & 0x80000000) !== (destVal & 0x80000000)) ? 1 : 0;
-                        cpu.fC = destVal < srcVal ? 1 : 0;
+                        cpu.fN = RMC ? 1 : 0;
+                        cpu.fV = ((SMC ^ DMC) && (DMC ^ RMC)) ? 1 : 0;
+                        cpu.fC = ((SMC && !DMC) || (RMC && !DMC) || (SMC && RMC)) ? 1 : 0;
                         
                         return 6;
                     };
@@ -145,18 +160,26 @@ class M68kArithmetic {
                         opcodeTable[opcode] = () => {
                             const srcEa = cpu.resolveEA(3, srcReg, size); 
                             const destEa = cpu.resolveEA(3, reg, size);
-                            const srcVal = cpu.readEA(srcEa, size);
-                            const destVal = cpu.readEA(destEa, size);
-                            const result = destVal - srcVal;
+                            let srcVal = cpu.readEA(srcEa, size);
+                            let destVal = cpu.readEA(destEa, size);
 
-                            const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
                             const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                            const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                            srcVal &= mask;
+                            destVal &= mask;
+
+                            const result = destVal - srcVal;
                             const resMasked = result & mask;
 
+                            const SMC = (srcVal & signBit) !== 0;
+                            const DMC = (destVal & signBit) !== 0;
+                            const RMC = (resMasked & signBit) !== 0;
+
                             cpu.fZ = resMasked === 0 ? 1 : 0;
-                            cpu.fN = (resMasked & signBit) !== 0 ? 1 : 0;
-                            cpu.fV = ((destVal & signBit) !== (srcVal & signBit)) && ((resMasked & signBit) !== (destVal & signBit)) ? 1 : 0;
-                            cpu.fC = destVal < srcVal ? 1 : 0;
+                            cpu.fN = RMC ? 1 : 0;
+                            cpu.fV = ((SMC ^ DMC) && (DMC ^ RMC)) ? 1 : 0;
+                            cpu.fC = ((SMC && !DMC) || (RMC && !DMC) || (SMC && RMC)) ? 1 : 0;
 
                             return size === 3 ? 20 : 12;
                         };
@@ -167,18 +190,26 @@ class M68kArithmetic {
                     const size = opMode === 0 ? 1 : (opMode === 1 ? 2 : 3);
                     opcodeTable[opcode] = () => {
                         const srcEa = cpu.resolveEA(srcMode, srcReg, size);
-                        const srcVal = cpu.readEA(srcEa, size);
-                        const destVal = cpu.d[reg] & (size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF));
-                        const result = destVal - srcVal;
+                        let srcVal = cpu.readEA(srcEa, size);
+                        let destVal = cpu.d[reg];
 
-                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
                         const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                        srcVal &= mask;
+                        destVal &= mask;
+
+                        const result = destVal - srcVal;
                         const resMasked = result & mask;
 
+                        const SMC = (srcVal & signBit) !== 0;
+                        const DMC = (destVal & signBit) !== 0;
+                        const RMC = (resMasked & signBit) !== 0;
+
                         cpu.fZ = resMasked === 0 ? 1 : 0;
-                        cpu.fN = (resMasked & signBit) !== 0 ? 1 : 0;
-                        cpu.fV = ((destVal & signBit) !== (srcVal & signBit)) && ((resMasked & signBit) !== (destVal & signBit)) ? 1 : 0;
-                        cpu.fC = destVal < srcVal ? 1 : 0;
+                        cpu.fN = RMC ? 1 : 0;
+                        cpu.fV = ((SMC ^ DMC) && (DMC ^ RMC)) ? 1 : 0;
+                        cpu.fC = ((SMC && !DMC) || (RMC && !DMC) || (SMC && RMC)) ? 1 : 0;
 
                         return size === 3 ? 6 : 4;
                     };
@@ -196,21 +227,28 @@ class M68kArithmetic {
 
                     opcodeTable[opcode] = () => {
                         const immEa = cpu.resolveEA(7, 4, size);
-                        const srcVal = cpu.readEA(immEa, size);
+                        let srcVal = cpu.readEA(immEa, size);
                         
                         const destEa = cpu.resolveEA(mode, reg, size);
-                        const destVal = cpu.readEA(destEa, size);
+                        let destVal = cpu.readEA(destEa, size);
+
+                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                        srcVal &= mask;
+                        destVal &= mask;
 
                         const result = destVal - srcVal;
-
-                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
-                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
                         const resMasked = result & mask;
 
+                        const SMC = (srcVal & signBit) !== 0;
+                        const DMC = (destVal & signBit) !== 0;
+                        const RMC = (resMasked & signBit) !== 0;
+
                         cpu.fZ = resMasked === 0 ? 1 : 0;
-                        cpu.fN = (resMasked & signBit) !== 0 ? 1 : 0;
-                        cpu.fV = ((destVal & signBit) !== (srcVal & signBit)) && ((resMasked & signBit) !== (destVal & signBit)) ? 1 : 0;
-                        cpu.fC = destVal < srcVal ? 1 : 0;
+                        cpu.fN = RMC ? 1 : 0;
+                        cpu.fV = ((SMC ^ DMC) && (DMC ^ RMC)) ? 1 : 0;
+                        cpu.fC = ((SMC && !DMC) || (RMC && !DMC) || (SMC && RMC)) ? 1 : 0;
 
                         return size === 3 ? 14 : 8;
                     };
@@ -235,25 +273,31 @@ class M68kArithmetic {
                         const eaSize = destIsAddressReg ? 3 : size;
                         
                         const destEa = cpu.resolveEA(mode, reg, eaSize);
-                        const destVal = cpu.readEA(destEa, eaSize);
+                        let destVal = cpu.readEA(destEa, eaSize);
+
+                        const mask = eaSize === 1 ? 0xFF : (eaSize === 2 ? 0xFFFF : 0xFFFFFFFF);
+                        destVal &= mask;
                         
                         const result = isSub ? (destVal - value) : (destVal + value);
-                        cpu.writeEA(destEa, result, eaSize);
+                        const resMasked = result & mask;
+                        
+                        cpu.writeEA(destEa, resMasked, eaSize);
                         
                         if (!destIsAddressReg) {
                             const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
-                            const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
-                            const resMasked = result & mask;
+                            const SMC = (value & signBit) !== 0; // Quick value is unsigned, but flags act as SMC
+                            const DMC = (destVal & signBit) !== 0;
+                            const RMC = (resMasked & signBit) !== 0;
 
                             cpu.fZ = resMasked === 0 ? 1 : 0;
-                            cpu.fN = (resMasked & signBit) !== 0 ? 1 : 0;
+                            cpu.fN = RMC ? 1 : 0;
                             
                             if (isSub) {
-                                cpu.fV = ((destVal & signBit) !== 0) && ((resMasked & signBit) === 0) ? 1 : 0;
-                                cpu.fC = destVal < value ? 1 : 0;
+                                cpu.fV = ((SMC ^ DMC) && (DMC ^ RMC)) ? 1 : 0;
+                                cpu.fC = ((SMC && !DMC) || (RMC && !DMC) || (SMC && RMC)) ? 1 : 0;
                             } else {
-                                cpu.fV = ((destVal & signBit) === 0) && ((resMasked & signBit) !== 0) ? 1 : 0;
-                                cpu.fC = result > mask ? 1 : 0;
+                                cpu.fV = ((SMC ^ RMC) && (DMC ^ RMC)) ? 1 : 0;
+                                cpu.fC = ((SMC && DMC) || (!RMC && DMC) || (SMC && !RMC)) ? 1 : 0;
                             }
                             cpu.fX = cpu.fC;
                         }
@@ -282,24 +326,33 @@ class M68kArithmetic {
                             srcVal = cpu.readEA(srcEa, size);
                             destVal = cpu.readEA(destEa, size);
                         } else {
-                            srcVal = cpu.d[ry] & (size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF));
-                            destVal = cpu.d[rx] & (size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF));
+                            srcVal = cpu.d[ry];
+                            destVal = cpu.d[rx];
                         }
 
-                        const result = isSub ? (destVal - srcVal - cpu.fX) : (destVal + srcVal + cpu.fX);
                         const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
                         const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                        srcVal &= mask;
+                        destVal &= mask;
+
+                        const result = isSub ? (destVal - srcVal - cpu.fX) : (destVal + srcVal + cpu.fX);
                         const resMasked = result & mask;
 
+                        // BCD/Extend addition does not overwrite Zero flag if result is 0
                         if (resMasked !== 0) cpu.fZ = 0; 
                         cpu.fN = (resMasked & signBit) !== 0 ? 1 : 0;
 
+                        const SMC = (srcVal & signBit) !== 0;
+                        const DMC = (destVal & signBit) !== 0;
+                        const RMC = (resMasked & signBit) !== 0;
+
                         if (isSub) {
-                            cpu.fC = result < 0 ? 1 : 0;
-                            cpu.fV = ((destVal & signBit) !== (srcVal & signBit)) && ((resMasked & signBit) !== (destVal & signBit)) ? 1 : 0;
+                            cpu.fV = ((SMC ^ DMC) && (DMC ^ RMC)) ? 1 : 0;
+                            cpu.fC = ((SMC && !DMC) || (RMC && !DMC) || (SMC && RMC)) ? 1 : 0;
                         } else {
-                            cpu.fC = result > mask ? 1 : 0;
-                            cpu.fV = ((destVal & signBit) === (srcVal & signBit)) && ((resMasked & signBit) !== (destVal & signBit)) ? 1 : 0;
+                            cpu.fV = ((SMC ^ RMC) && (DMC ^ RMC)) ? 1 : 0;
+                            cpu.fC = ((SMC && DMC) || (!RMC && DMC) || (SMC && !RMC)) ? 1 : 0;
                         }
                         cpu.fX = cpu.fC;
 
@@ -520,10 +573,8 @@ class M68kArithmetic {
             }
 
             // --- 10. ADDI / SUBI (Add/Subtract Immediate) Group ---
-            // Format ADDI: [0000][0110][size:2][mode:3][reg:3] -> 0x0600
-            // Format SUBI: [0000][0100][size:2][mode:3][reg:3] -> 0x0400
             if ((opcode & 0xFF00) === 0x0600 || (opcode & 0xFF00) === 0x0400) {
-                const isSub = (opcode & 0x0200) === 0; // Bit 9 is 1 for ADDI, 0 for SUBI
+                const isSub = (opcode & 0x0200) === 0;
                 const sizeRaw = (opcode >> 6) & 3;
                 
                 if (sizeRaw !== 3) {
@@ -532,22 +583,21 @@ class M68kArithmetic {
                     const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
 
                     opcodeTable[opcode] = () => {
-                        // 1. Fetch immediate value (Source)
                         const immEa = cpu.resolveEA(7, 4, size);
-                        const srcVal = cpu.readEA(immEa, size);
+                        let srcVal = cpu.readEA(immEa, size);
 
-                        // 2. Fetch destination value
                         const destEa = cpu.resolveEA(mode, reg, size);
-                        const destVal = cpu.readEA(destEa, size);
+                        let destVal = cpu.readEA(destEa, size);
 
-                        // 3. Perform addition/subtraction
-                        const result = isSub ? (destVal - srcVal) : (destVal + srcVal);
-
-                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
                         const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                        srcVal &= mask;
+                        destVal &= mask;
+
+                        const result = isSub ? (destVal - srcVal) : (destVal + srcVal);
                         const resMasked = result & mask;
 
-                        // 4. Update Flags using MDTracer's verified Boolean logic (SMC, DMC, RMC)
                         const SMC = (srcVal & signBit) !== 0;
                         const DMC = (destVal & signBit) !== 0;
                         const RMC = (resMasked & signBit) !== 0;
@@ -564,10 +614,9 @@ class M68kArithmetic {
                         }
                         cpu.fX = cpu.fC;
 
-                        // 5. Write back to destination
                         cpu.writeEA(destEa, resMasked, size);
 
-                        return size === 3 ? 16 : 8; // Cycle count matching MDTracer
+                        return size === 3 ? 16 : 8;
                     };
                     continue;
                 }

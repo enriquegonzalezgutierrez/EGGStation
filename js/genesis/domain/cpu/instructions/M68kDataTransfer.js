@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -42,12 +42,15 @@ class M68kDataTransfer {
                     continue;
                 }
 
-                // Map the specific instruction to its execution closure
                 opcodeTable[opcode] = () => {
                     // Size mapping: 1 = Byte, 3 = Word, 2 = Long
                     const size = moveSize === 3 ? 2 : (moveSize === 2 ? 3 : 1);
                     const srcEa = cpu.resolveEA(srcMode, srcReg, size);
                     let value = cpu.readEA(srcEa, size);
+
+                    // Ensure value is properly masked to its logical size before operating
+                    const sizeMask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                    value &= sizeMask;
 
                     if (destMode === 1) {
                         // MOVEA: Destination is Address Register Direct
@@ -64,8 +67,10 @@ class M68kDataTransfer {
                         // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
-                        cpu.fZ = (value & (size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF))) === 0 ? 1 : 0;
-                        cpu.fN = size === 1 ? ((value & 0x80) !== 0 ? 1 : 0) : (size === 2 ? ((value & 0x8000) !== 0 ? 1 : 0) : ((value & 0x80000000) !== 0 ? 1 : 0));
+                        cpu.fZ = value === 0 ? 1 : 0;
+                        cpu.fN = size === 1 ? ((value & 0x80) !== 0 ? 1 : 0) : 
+                                 (size === 2 ? ((value & 0x8000) !== 0 ? 1 : 0) : 
+                                 ((value & 0x80000000) !== 0 ? 1 : 0));
                     }
 
                     return size === 3 ? 12 : 8; // Return baseline execution cycles
@@ -107,33 +112,60 @@ class M68kDataTransfer {
                     const regMask = cpu.bus.readWord(cpu.pc, cpu.pc) & 0xFFFF;
                     cpu.pc = (cpu.pc + 2) & 0xFFFFFF;
 
-                    let ea = cpu.resolveEA(mode, reg, size);
+                    // Calculate total number of registers to transfer
+                    let count = 0;
+                    for (let i = 0; i < 16; i++) {
+                        if (regMask & (1 << i)) count++;
+                    }
+
+                    const step = size === 2 ? 2 : 4;
+                    let ea = 0;
                     let cycles = 12;
 
-                    if (toMemory) {
-                        // Pre-decrement mode (mode === 4) registers are stored in reverse order
-                        const reverseOrder = (mode === 4);
+                    // FIX: Direct alignment with MDTracer's verified memory sequencing
+                    if (mode === 4) { // Pre-decrement -(An)
+                        let currentEa = cpu.a[reg];
                         for (let i = 0; i < 16; i++) {
-                            const regIdx = reverseOrder ? (15 - i) : i;
+                            const regIdx = 15 - i; // Process registers from A7 down to D0 (Reverse order)
                             if (regMask & (1 << i)) {
                                 const val = regIdx < 8 ? cpu.d[regIdx] : cpu.a[regIdx - 8];
-                                cpu.writeEA(ea, val, size);
-                                ea += reverseOrder ? (size === 2 ? -2 : -4) : (size === 2 ? 2 : 4);
+                                currentEa = (currentEa - step) & 0xFFFFFF; // Decrement step before writing
+                                cpu.writeEA(currentEa, val, size);
                                 cycles += isWord ? 4 : 8;
                             }
                         }
+                        cpu.a[reg] = currentEa; // Set destination register to final decremented address
                     } else {
-                        // Post-increment/Absolute modes read registers in standard order
-                        for (let i = 0; i < 16; i++) {
-                            if (regMask & (1 << i)) {
-                                let val = cpu.readEA(ea, size);
-                                if (i < 8) {
-                                    cpu.d[i] = isWord ? ((val << 16) >> 16) : val;
-                                } else {
-                                    cpu.a[i - 8] = isWord ? ((val << 16) >> 16) : val;
+                        if (mode === 3) { // Post-increment (An)+
+                            ea = cpu.a[reg];
+                            cpu.a[reg] = (cpu.a[reg] + (count * step)) & 0xFFFFFF;
+                        } else {
+                            ea = cpu.resolveEA(mode, reg, size);
+                        }
+
+                        if (toMemory) {
+                            let currentEa = ea;
+                            for (let i = 0; i < 16; i++) {
+                                if (regMask & (1 << i)) {
+                                    const val = i < 8 ? cpu.d[i] : cpu.a[i - 8];
+                                    cpu.writeEA(currentEa, val, size);
+                                    currentEa += step; 
+                                    cycles += isWord ? 4 : 8;
                                 }
-                                ea += (size === 2 ? 2 : 4);
-                                cycles += isWord ? 4 : 8;
+                            }
+                        } else {
+                            let currentEa = ea;
+                            for (let i = 0; i < 16; i++) {
+                                if (regMask & (1 << i)) {
+                                    let val = cpu.readEA(currentEa, size);
+                                    if (i < 8) {
+                                        cpu.d[i] = isWord ? ((val << 16) >> 16) : val;
+                                    } else {
+                                        cpu.a[i - 8] = isWord ? ((val << 16) >> 16) : val;
+                                    }
+                                    currentEa += step;
+                                    cycles += isWord ? 4 : 8;
+                                }
                             }
                         }
                     }

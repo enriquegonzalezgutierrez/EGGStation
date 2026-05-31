@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -69,7 +69,7 @@ class GenesisBusZ80 {
                 this.z80Cpu.registers.pc = 0;
                 this.z80Cpu.registers.iff1 = 0;
                 this.z80Cpu.registers.iff2 = 0;
-                this.z80Cpu.interruptMode = 0;
+                this.z80Cpu.registers.interruptMode = 0;
                 this.z80Cpu.isHalted = false;
             }
         }

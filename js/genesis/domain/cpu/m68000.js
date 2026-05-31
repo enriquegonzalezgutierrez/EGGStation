@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -103,6 +103,7 @@ class M68000 {
 
     /**
      * Packs the internal unpacked flag states back into the CCR Status Register byte.
+     * @returns {number} CCR status bits
      */
     getCCR() {
         return (this.fX << 4) | (this.fN << 3) | (this.fZ << 2) | (this.fV << 1) | this.fC;
@@ -110,6 +111,7 @@ class M68000 {
 
     /**
      * Unpacks the CCR Status Register byte into high-speed internal properties.
+     * @param {number} ccr - CCR status bits
      */
     setCCR(ccr) {
         this.fX = (ccr >> 4) & 1;
@@ -121,6 +123,7 @@ class M68000 {
 
     /**
      * Toggles Active Stack Pointer depending on the Status Register's Supervisor Bit (bit 13).
+     * @param {number} newSr - New packed Status Register value
      */
     syncStackPointers(newSr) {
         const oldSupervisor = (this.sr & 0x2000) !== 0;
@@ -141,6 +144,7 @@ class M68000 {
 
     /**
      * Pushes a 32-bit longword onto the active system stack.
+     * @param {number} value - 32-bit data longword
      */
     pushLong(value) {
         this.a[7] = (this.a[7] - 4) & 0xFFFFFF;
@@ -150,6 +154,7 @@ class M68000 {
 
     /**
      * Pops a 32-bit longword from the active system stack.
+     * @returns {number} 32-bit popped data longword
      */
     popLong() {
         const high = this.bus.readWord(this.a[7], this.pc) & 0xFFFF;
@@ -160,12 +165,21 @@ class M68000 {
 
     /**
      * Triggers a synchronous hardware exception (e.g. traps, interrupts, resets).
+     * @param {number} vector - Target vector index from CPU vector table
      */
     triggerException(vector) {
         const prevSr = (this.sr & 0xFF00) | this.getCCR();
         
-        // Force Supervisor Mode (bit 13) and mask interrupts up to vector level
-        const newSr = (this.sr & ~0x300) | 0x2000;
+        // Force Supervisor Mode (bit 13) and clear trace bits (bits 14-15)
+        let newSr = (this.sr | 0x2000) & ~0xC000;
+
+        // Autovectored interrupts (levels 1-7, mapped to vectors 25-31)
+        // Correctly set the interrupt mask inside SR to block same or lower priority IRQs
+        if (vector >= 25 && vector <= 31) {
+            const irqLevel = vector - 24;
+            newSr = (newSr & ~0x0700) | (irqLevel << 8);
+        }
+
         this.syncStackPointers(newSr);
 
         // Push program status on Stack
@@ -350,10 +364,9 @@ class M68000 {
                 cost = legacyCost | 0;
             }
 
-            // DETECTIVE UPDATE: Skip logging the boring 65,536 RAM clearing loop iterations (0x0276-0x0278)
-            // This resumes logging IMMEDIATELY after the loop exits, showing us the post-loop instructions!
+            // Skip logging the redundant RAM clearing loop iterations (0x0276-0x0278) for clean logs
             if (currentInstructionAddress < 0x000276 || currentInstructionAddress > 0x000278) {
-                if (this.instructionTelemetryCount < 300) {
+                if (this.instructionTelemetryCount < 20000) {
                     console.log(`[M68000 Trace #${this.instructionTelemetryCount}] PC: 0x${currentInstructionAddress.toString(16).toUpperCase().padStart(6, '0')} | Opcode: 0x${opcode.toString(16).toUpperCase().padStart(4, '0')} | D1: 0x${this.d[1].toString(16).toUpperCase()} | A6: 0x${this.a[6].toString(16).toUpperCase()}`);
                     this.instructionTelemetryCount++;
                 }
@@ -365,6 +378,8 @@ class M68000 {
 
     /**
      * Evaluates status conditional test parameters (Bcc / DBcc / Scc).
+     * @param {number} cond - 4-bit conditional code
+     * @returns {boolean} True if condition is met
      */
     resolveCondition(cond) {
         switch (cond) {

@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -8,9 +8,11 @@
  * and multitap splitters. Processes active-low digital logic for standard 
  * 3-button and 6-button gamepads.
  * 
- * SOLID: Adheres to Dependency Inversion Principle (DIP). The manager safely 
- * receives an external input poller function, preventing the memory buses from 
- * passing null pointers or coupling with browser APIs.
+ * SOLID Principles:
+ * - Single Responsibility Principle (SRP): Isolates strictly controller port 
+ *   multiplexing logic from the system bus and keyboard polling interfaces.
+ * - Dependency Inversion Principle (DIP): Receives frontend input polling 
+ *   mechanics through a clean decoupled callback interface.
  */
 
 // General standard button definitions
@@ -32,15 +34,25 @@ const GENESIS_CONTROLLER_MODE   = 11;
 // ========================================================================
 class GenesisController {
     constructor() {
-        this.countdown = 0; // Microsecond countdown until strobe resets (1.5ms threshold)
-        this.strobes = 0;   // 6-button detection toggle pulse count
-        this.thBit = 0;     // State of the physical TH pin (output/input select)
+        this.lastThWriteTime = 0; // Milliseconds timestamp of the last TH write (using high-precision performance.now)
+        this.strobes = 0;         // Strobe state counter for 6-button polling
+        this.thBit = 1;           // State of the physical TH pin (Defaults to pulled-up HIGH)
     }
 
     initialise() {
-        this.countdown = 0;
+        this.lastThWriteTime = 0;
         this.strobes = 0;
-        this.thBit = 0;
+        this.thBit = 1;
+    }
+
+    /**
+     * Resets the strobe counter to 0 if the 1.5ms watchdog threshold is exceeded.
+     */
+    updateWatchdog() {
+        const now = performance.now();
+        if (now - this.lastThWriteTime > 1.5) {
+            this.strobes = 0; // Watchdog timed out, reset selection phase back to 0
+        }
     }
 
     /**
@@ -50,6 +62,8 @@ class GenesisController {
      * @returns {number} Active-low 6-bit button state (0 = pressed, 1 = released).
      */
     read(controllerIndex, pollerFn) {
+        this.updateWatchdog();
+
         // Helper to query active-low button bits securely
         const getButtonBit = (btn) => {
             return (pollerFn && pollerFn(controllerIndex, btn)) ? 0 : 1;
@@ -89,10 +103,11 @@ class GenesisController {
                          | (getButtonBit(GENESIS_CONTROLLER_A) << 4);
 
                 case 3:
-                    // Strobe 3 LOW: Pulls up lower 4 bits to high-Z state (1s) to signal 6-button presence
+                    // FIX: Strobe 3 LOW pulls down lower 4 bits to 0x00 to signal 6-button gamepad signature.
+                    // This tells Sega software a 6-button pad is actively connected.
                     return (getButtonBit(GENESIS_CONTROLLER_START) << 5)
                          | (getButtonBit(GENESIS_CONTROLLER_A) << 4)
-                         | 0xF;
+                         | 0x00; 
             }
         }
     }
@@ -103,28 +118,20 @@ class GenesisController {
      */
     write(value) {
         const newThBit = (value & 0x40) !== 0 ? 1 : 0;
+        const now = performance.now();
 
-        if (newThBit !== 0 && this.thBit === 0) {
-            // Increment selection strobe on rising edge of the TH pin
+        // Reset the multiplexer strobe if the timeout period has expired between writes
+        if (now - this.lastThWriteTime > 1.5) {
+            this.strobes = 0;
+        }
+        this.lastThWriteTime = now;
+
+        // FIX: Strobe count increments strictly on the FALLING edge (1 to 0 transition) of the TH pin
+        if (newThBit === 0 && this.thBit === 1) {
             this.strobes = (this.strobes + 1) % 4;
-            this.countdown = 1500; // Reset watchdog timer to 1.5 milliseconds
         }
 
         this.thBit = newThBit;
-    }
-
-    /**
-     * Steps the internal 1.5ms watchdog countdown timer.
-     * If the watchdog expires, the selection strobe resets to 0.
-     * @param {number} microseconds - Microseconds passed.
-     */
-    doMicroseconds(microseconds) {
-        if (this.countdown >= microseconds) {
-            this.countdown = (this.countdown - microseconds) | 0;
-        } else {
-            this.countdown = 0;
-            this.strobes = 0; // Strobe reset (watchdog timed out)
-        }
     }
 }
 
@@ -147,19 +154,12 @@ class GenesisMultitapEA {
         this.selectedController = 0;
     }
 
-    doMicroseconds(microseconds) {
-        for (let i = 0; i < 4; i++) {
-            this.controllers[i].doMicroseconds(microseconds);
-        }
-    }
-
     readPort(portIndex, microseconds, pollerFn) {
         switch (portIndex) {
             case 0:
                 if (this.selectedController > 3) {
                     return 0x7C; // EA Multitap Identification signature byte
                 }
-                this.doMicroseconds(microseconds);
                 return this.controllers[this.selectedController].read(this.selectedController, pollerFn);
 
             case 1:
@@ -171,7 +171,6 @@ class GenesisMultitapEA {
     writePort(portIndex, microseconds, value) {
         switch (portIndex) {
             case 0:
-                this.doMicroseconds(microseconds);
                 this.controllers[this.selectedController].write(value);
                 break;
 
@@ -183,12 +182,10 @@ class GenesisMultitapEA {
     }
 
     readController(controllerIndex, microseconds, pollerFn) {
-        this.doMicroseconds(microseconds);
         return this.controllers[controllerIndex].read(controllerIndex, pollerFn);
     }
 
     writeController(controllerIndex, microseconds, value) {
-        this.doMicroseconds(microseconds);
         this.controllers[controllerIndex].write(value);
     }
 }
@@ -301,8 +298,6 @@ class GenesisControllerManager {
 
     /**
      * Reads a byte from the target controller port.
-     * Arguments `callback` and `userData` are intentionally ignored to prevent 
-     * null-pointer crashes from legacy bus requests.
      */
     read(portIndex, microseconds) {
         portIndex = portIndex & 1;

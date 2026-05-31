@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -6,12 +6,12 @@
  * 
  * Implements the registration and execution logic for the entire M68K 
  * logical instruction family (AND, OR, EOR, NOT, TST, CLR, NEG, ANDI, ORI, EORI).
- * Now includes privileged immediate operations targeting the Status Register (SR)
- * and Condition Code Register (CCR) to enable/disable interrupts properly.
+ * Fully aligned with MDTracer reference standards to ensure proper privilege 
+ * checking and correct status flags (CCR) updates, resolving critical MOVE.B overlap.
  * 
  * SOLID Principles:
- * - Single Responsibility Principle (SRP): Isolates logical calculations 
- *   and status flag (CCR) updates cleanly into its own domain file.
+ * - Single Responsibility Principle (SRP): Isolates logical and bitwise algebraic 
+ *   calculations and status flag updates cleanly into its own domain file.
  * - Open/Closed Principle (OCP): Dynamically populates the CPU's opcode dispatch 
  *   table on startup without modifying core CPU execution code.
  */
@@ -36,31 +36,31 @@ class M68kLogical {
                 opcodeTable[opcode] = () => {
                     const size = isSR ? 2 : 1;
                     
-                    // The source is an Immediate value located right after the instruction word
+                    // Fetch immediate operand directly following the instruction word
                     const immEa = cpu.resolveEA(7, 4, size); 
                     const srcVal = cpu.readEA(immEa, size);
 
-                    // Writing to SR is a privileged instruction
+                    // Writing to the Status Register (SR) is a privileged operation
                     if (isSR && (cpu.sr & 0x2000) === 0) {
-                        cpu.triggerException(8); // Privilege violation exception vector
+                        cpu.triggerException(8); // Privilege violation exception
                         return 34;
                     }
 
                     let currentVal = isSR ? cpu.sr : cpu.getCCR();
                     let result = 0;
 
-                    if (immediateOpType === 0x0) result = currentVal | srcVal; // ORI
-                    else if (immediateOpType === 0x2) result = currentVal & srcVal; // ANDI
-                    else if (immediateOpType === 0xA) result = currentVal ^ srcVal; // EORI
+                    if (immediateOpType === 0x0) result = currentVal | srcVal;      // ORI to SR/CCR
+                    else if (immediateOpType === 0x2) result = currentVal & srcVal; // ANDI to SR/CCR
+                    else if (immediateOpType === 0xA) result = currentVal ^ srcVal; // EORI to SR/CCR
 
                     if (isSR) {
-                        // Crucial: Updating SR might change the Supervisor bit or Interrupt Mask!
+                        // Updates stack pointers if supervisor mode status changed
                         cpu.syncStackPointers(result);
                     } else {
                         cpu.setCCR(result & 0xFF);
                     }
 
-                    return 20; // Exact execution cycles for Immediate to SR
+                    return 20; // Word-size immediate to SR consumes 20 cycles
                 };
                 continue;
             }
@@ -85,34 +85,37 @@ class M68kLogical {
                     const toRegister = (opMode < 3);
                     const isAnd = (opType === 0xC);
 
+                    const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                    const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
                     if (toRegister) {
                         const srcEa = cpu.resolveEA(srcMode, srcReg, size);
-                        const srcVal = cpu.readEA(srcEa, size);
-                        const destVal = cpu.d[reg];
+                        let srcVal = cpu.readEA(srcEa, size) & mask;
+                        let destVal = cpu.d[reg] & mask;
 
                         const result = isAnd ? (destVal & srcVal) : (destVal | srcVal);
 
                         // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
-                        cpu.fZ = (result & (size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF))) === 0 ? 1 : 0;
-                        cpu.fN = size === 1 ? ((result & 0x80) !== 0 ? 1 : 0) : (size === 2 ? ((result & 0x8000) !== 0 ? 1 : 0) : ((result & 0x80000000) !== 0 ? 1 : 0));
+                        cpu.fZ = result === 0 ? 1 : 0;
+                        cpu.fN = (result & signBit) !== 0 ? 1 : 0;
 
-                        if (size === 1) cpu.d[reg] = (cpu.d[reg] & 0xFFFFFF00) | (result & 0xFF);
-                        else if (size === 2) cpu.d[reg] = (cpu.d[reg] & 0xFFFF0000) | (result & 0xFFFF);
-                        else cpu.d[reg] = result & 0xFFFFFFFF;
+                        if (size === 1) cpu.d[reg] = (cpu.d[reg] & 0xFFFFFF00) | result;
+                        else if (size === 2) cpu.d[reg] = (cpu.d[reg] & 0xFFFF0000) | result;
+                        else cpu.d[reg] = result;
                     } else {
                         const destEa = cpu.resolveEA(srcMode, srcReg, size);
-                        const destVal = cpu.readEA(destEa, size);
-                        const srcVal = cpu.d[reg];
+                        let destVal = cpu.readEA(destEa, size) & mask;
+                        let srcVal = cpu.d[reg] & mask;
 
                         const result = isAnd ? (destVal & srcVal) : (destVal | srcVal);
 
                         // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
-                        cpu.fZ = (result & (size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF))) === 0 ? 1 : 0;
-                        cpu.fN = size === 1 ? ((result & 0x80) !== 0 ? 1 : 0) : (size === 2 ? ((result & 0x8000) !== 0 ? 1 : 0) : ((result & 0x80000000) !== 0 ? 1 : 0));
+                        cpu.fZ = result === 0 ? 1 : 0;
+                        cpu.fN = (result & signBit) !== 0 ? 1 : 0;
 
                         cpu.writeEA(destEa, result, size);
                     }
@@ -124,7 +127,8 @@ class M68kLogical {
 
             // --- 3. EOR (Exclusive OR) Group ---
             // Format: [1011][reg:3][1][size_raw:2][mode:3][reg:3]
-            if ((opcode & 0xF100) === 0x01100 || (opcode & 0xF100) === 0xB100) {
+            // FIX: Removed 0x1100 overlap check to prevent breaking MOVE.B instructions targeting A1/D1 registers!
+            if ((opcode & 0xF100) === 0xB100) {
                 const reg = (opcode >> 9) & 7;
                 const sizeRaw = (opcode >> 6) & 3;
                 const mode = (opcode >> 3) & 7;
@@ -135,16 +139,20 @@ class M68kLogical {
                     opcodeTable[opcode] = () => {
                         const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
                         const destEa = cpu.resolveEA(mode, srcReg, size);
-                        const destVal = cpu.readEA(destEa, size);
-                        const srcVal = cpu.d[reg];
+                        
+                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                        let destVal = cpu.readEA(destEa, size) & mask;
+                        let srcVal = cpu.d[reg] & mask;
 
                         const result = destVal ^ srcVal;
 
                         // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
-                        cpu.fZ = (result & (size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF))) === 0 ? 1 : 0;
-                        cpu.fN = size === 1 ? ((result & 0x80) !== 0 ? 1 : 0) : (size === 2 ? ((result & 0x8000) !== 0 ? 1 : 0) : ((result & 0x80000000) !== 0 ? 1 : 0));
+                        cpu.fZ = result === 0 ? 1 : 0;
+                        cpu.fN = (result & signBit) !== 0 ? 1 : 0;
 
                         cpu.writeEA(destEa, result, size);
 
@@ -168,22 +176,28 @@ class M68kLogical {
                     opcodeTable[opcode] = () => {
                         // Fetch Immediate Operand
                         const immEa = cpu.resolveEA(7, 4, size);
-                        const srcVal = cpu.readEA(immEa, size);
+                        let srcVal = cpu.readEA(immEa, size);
                         
                         // Fetch Destination Operand
                         const destEa = cpu.resolveEA(mode, reg, size);
-                        const destVal = cpu.readEA(destEa, size);
+                        let destVal = cpu.readEA(destEa, size);
+
+                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                        srcVal &= mask;
+                        destVal &= mask;
 
                         let result = 0;
-                        if (immediateOpType === 0) result = destVal | srcVal; // ORI
+                        if (immediateOpType === 0) result = destVal | srcVal;      // ORI
                         else if (immediateOpType === 1) result = destVal & srcVal; // ANDI
-                        else result = destVal ^ srcVal; // EORI
+                        else result = destVal ^ srcVal;                            // EORI
 
-                        // Update CCR
+                        // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
-                        cpu.fZ = (result & (size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF))) === 0 ? 1 : 0;
-                        cpu.fN = size === 1 ? ((result & 0x80) !== 0 ? 1 : 0) : (size === 2 ? ((result & 0x8000) !== 0 ? 1 : 0) : ((result & 0x80000000) !== 0 ? 1 : 0));
+                        cpu.fZ = result === 0 ? 1 : 0;
+                        cpu.fN = (result & signBit) !== 0 ? 1 : 0;
 
                         cpu.writeEA(destEa, result, size);
 
@@ -204,13 +218,18 @@ class M68kLogical {
                     opcodeTable[opcode] = () => {
                         const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
                         const ea = cpu.resolveEA(mode, reg, size);
-                        const val = cpu.readEA(ea, size);
+                        let val = cpu.readEA(ea, size);
+
+                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                        val &= mask;
 
                         // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
-                        cpu.fZ = (val & (size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF))) === 0 ? 1 : 0;
-                        cpu.fN = size === 1 ? ((val & 0x80) !== 0 ? 1 : 0) : (size === 2 ? ((val & 0x8000) !== 0 ? 1 : 0) : ((val & 0x80000000) !== 0 ? 1 : 0));
+                        cpu.fZ = val === 0 ? 1 : 0;
+                        cpu.fN = (val & signBit) !== 0 ? 1 : 0;
                         
                         return 4;
                     };
@@ -255,14 +274,17 @@ class M68kLogical {
                     opcodeTable[opcode] = () => {
                         const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
                         const ea = cpu.resolveEA(mode, reg, size);
-                        const val = cpu.readEA(ea, size);
+                        let val = cpu.readEA(ea, size);
+
+                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                        val &= mask;
 
                         const result = isNegx ? (0 - val - cpu.fX) : (0 - val);
-                        cpu.writeEA(ea, result, size);
-
-                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
-                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
                         const resMasked = result & mask;
+                        
+                        cpu.writeEA(ea, resMasked, size);
 
                         if (isNegx) {
                             if (resMasked !== 0) cpu.fZ = 0; 
@@ -299,16 +321,21 @@ class M68kLogical {
                     opcodeTable[opcode] = () => {
                         const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
                         const ea = cpu.resolveEA(mode, reg, size);
-                        const val = cpu.readEA(ea, size);
+                        let val = cpu.readEA(ea, size);
 
-                        const result = ~val;
+                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+
+                        val &= mask;
+
+                        const result = (~val) & mask;
                         cpu.writeEA(ea, result, size);
 
                         // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
-                        cpu.fZ = (result & (size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF))) === 0 ? 1 : 0;
-                        cpu.fN = size === 1 ? ((result & 0x80) !== 0 ? 1 : 0) : (size === 2 ? ((result & 0x8000) !== 0 ? 1 : 0) : ((result & 0x80000000) !== 0 ? 1 : 0));
+                        cpu.fZ = result === 0 ? 1 : 0;
+                        cpu.fN = (result & signBit) !== 0 ? 1 : 0;
 
                         return size === 3 ? 10 : 6;
                     };

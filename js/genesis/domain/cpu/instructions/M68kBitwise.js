@@ -1,4 +1,4 @@
-/* 
+/**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
@@ -6,6 +6,8 @@
  * 
  * Implements the registration and execution logic for the entire M68K 
  * bitwise manipulation instruction family (BTST, BSET, BCLR, BCHG).
+ * Fully aligned with MDTracer reference standards to ensure proper Z flag 
+ * updating on single-bit tests, resolving critical static opcode mapping.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates direct single-bit testing 
@@ -42,7 +44,11 @@ class M68kBitwise {
                     const size = isRegister ? 3 : 1; 
 
                     const destEa = cpu.resolveEA(mode, destReg, size);
-                    const val = cpu.readEA(destEa, size);
+                    let val = cpu.readEA(destEa, size);
+                    
+                    // Explicitly mask data to align registers to 32-bit and memory to 8-bit
+                    const maskLimit = isRegister ? 0xFFFFFFFF : 0xFF;
+                    val &= maskLimit;
                     
                     // Register bit offset is modulo 32, Memory bit offset is modulo 8
                     const mask = 1 << (bitNum & (isRegister ? 31 : 7));
@@ -53,15 +59,15 @@ class M68kBitwise {
                     // Note: CCR N, V, C flags are entirely UNAFFECTED by bitwise operations
 
                     if (opType === 1) { // BCHG (Bit Change - Toggle)
-                        cpu.writeEA(destEa, val ^ mask, size);
+                        cpu.writeEA(destEa, (val ^ mask) & maskLimit, size);
                     } else if (opType === 2) { // BCLR (Bit Clear - Force 0)
-                        cpu.writeEA(destEa, val & ~mask, size);
+                        cpu.writeEA(destEa, (val & ~mask) & maskLimit, size);
                     } else if (opType === 3) { // BSET (Bit Set - Force 1)
-                        cpu.writeEA(destEa, val | mask, size);
+                        cpu.writeEA(destEa, (val | mask) & maskLimit, size);
                     }
                     // Note: opType === 0 is BTST (Only tests, does not write back to memory/register)
 
-                    // Cycle timings vary slightly based on type and destination
+                    // Timing cycles derived from MDTracer standards
                     if (opType === 0) { // BTST
                         return isRegister ? 6 : 8;
                     } else { // BCHG, BCLR, BSET
@@ -74,7 +80,8 @@ class M68kBitwise {
             // --- 2. Static Bit Operations (Immediate bit number value) ---
             // Format: [0000][1000][00][opType:2][mode:3][dest_reg:3]
             // opType: 0 = BTST, 1 = BCHG, 2 = BCLR, 3 = BSET
-            if ((opcode & 0xFFC0) === 0x0800) {
+            // FIX: Masked with 0xFF00 instead of 0xFFC0 to register static BCHG, BCLR and BSET correctly
+            if ((opcode & 0xFF00) === 0x0800) {
                 const opType = (opcode >> 6) & 3;
                 const mode = (opcode >> 3) & 7;
                 const destReg = opcode & 7;
@@ -89,18 +96,22 @@ class M68kBitwise {
                     const size = isRegister ? 3 : 1;
 
                     const destEa = cpu.resolveEA(mode, destReg, size);
-                    const val = cpu.readEA(destEa, size);
+                    let val = cpu.readEA(destEa, size);
+
+                    const maskLimit = isRegister ? 0xFFFFFFFF : 0xFF;
+                    val &= maskLimit;
+
                     const mask = 1 << (bitNum & (isRegister ? 31 : 7));
 
                     // Test bit: Z flag is set to the complement of the tested bit
                     cpu.fZ = (val & mask) === 0 ? 1 : 0;
 
                     if (opType === 1) { // BCHG (Bit Change - Toggle)
-                        cpu.writeEA(destEa, val ^ mask, size);
+                        cpu.writeEA(destEa, (val ^ mask) & maskLimit, size);
                     } else if (opType === 2) { // BCLR (Bit Clear - Force 0)
-                        cpu.writeEA(destEa, val & ~mask, size);
+                        cpu.writeEA(destEa, (val & ~mask) & maskLimit, size);
                     } else if (opType === 3) { // BSET (Bit Set - Force 1)
-                        cpu.writeEA(destEa, val | mask, size);
+                        cpu.writeEA(destEa, (val | mask) & maskLimit, size);
                     }
 
                     if (opType === 0) { // BTST
