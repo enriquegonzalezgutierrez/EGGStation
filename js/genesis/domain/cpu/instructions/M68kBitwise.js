@@ -80,7 +80,7 @@ class M68kBitwise {
             // --- 2. Static Bit Operations (Immediate bit number value) ---
             // Format: [0000][1000][00][opType:2][mode:3][dest_reg:3]
             // opType: 0 = BTST, 1 = BCHG, 2 = BCLR, 3 = BSET
-            // FIX: Masked with 0xFF00 instead of 0xFFC0 to register static BCHG, BCLR and BSET correctly
+            // FIX: Corrected mask with 0xFF00 to register static BCHG, BCLR and BSET correctly
             if ((opcode & 0xFF00) === 0x0800) {
                 const opType = (opcode >> 6) & 3;
                 const mode = (opcode >> 3) & 7;

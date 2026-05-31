@@ -228,7 +228,7 @@ class GenesisOrchestrator {
     loop(currentTime) {
         if (!this.isRunning || this.isPaused) return;
 
-        // FIX: Silent auto-resume handshake on any user interaction/loop tick.
+        // Silent auto-resume handshake on any user interaction/loop tick.
         // Bypasses browser autoplay restrictions completely without modifying HTML/CSS.
         if (this.audioCtx && this.audioCtx.state === 'suspended') {
             this.audioCtx.resume().catch(() => {});
@@ -305,6 +305,16 @@ class GenesisOrchestrator {
                     if (this.vdp.vIntEnabled) {
                         this.m68k.irqPending = 6;
                     }
+
+                    // FIX: Trigger V-Blank Interrupt on the Z80 secondary CPU thread!
+                    // Drives the sound playback driver (driving music/SFX on level loads).
+                    if (!this.z80Bus.isZ80Frozen()) {
+                        if (typeof this.z80.interrupt === 'function') {
+                            this.z80.interrupt(0x38); // Standard Z80 Mode 1 V-Blank Interrupt
+                        } else if (typeof this.z80.requestInterrupt === 'function') {
+                            this.z80.requestInterrupt(0x38);
+                        }
+                    }
                 }
                 
                 // Process full scanline's worth of CPU cycles for blanking period
@@ -364,7 +374,7 @@ class GenesisOrchestrator {
         if (this.videoContext) {
             const canvas = this.videoContext.canvas;
             
-            // FIX: Dynamically resize the internal width and height of the shared <canvas> element.
+            // Dynamically resize the internal width and height of the shared <canvas> element.
             // When switching to Genesis (320px or 256px wide), this prevents the browser from 
             // clipping/cutting off the right side of the screen, whilst keeping the shared HTML/CSS intact.
             if (canvas.width !== width || canvas.height !== height) {
