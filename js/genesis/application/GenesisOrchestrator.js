@@ -122,10 +122,6 @@ class GenesisOrchestrator {
         window.AudioContext = window.AudioContext || window.webkitAudioContext;
         this.audioCtx = new AudioContext();
 
-        if (this.audioCtx.state === 'suspended') {
-            this.audioCtx.resume();
-        }
-
         this.gainNode = this.audioCtx.createGain();
         this.gainNode.gain.value = 0.5; // Master volume scale
 
@@ -232,6 +228,12 @@ class GenesisOrchestrator {
     loop(currentTime) {
         if (!this.isRunning || this.isPaused) return;
 
+        // FIX: Silent auto-resume handshake on any user interaction/loop tick.
+        // Bypasses browser autoplay restrictions completely without modifying HTML/CSS.
+        if (this.audioCtx && this.audioCtx.state === 'suspended') {
+            this.audioCtx.resume().catch(() => {});
+        }
+
         const targetFps = this.tvStandard === 1 ? 50.0 : 59.94;
         const targetFrameTime = 1000 / targetFps;
 
@@ -287,8 +289,8 @@ class GenesisOrchestrator {
                 this.stepCPUs(Math.floor(m68kCyclesPerScanline / 2));
 
                 // 2. Rasterize background and sprite layers inside the VDP core
-                this.vdp.endScanline(scanline, (user_data, line, pixels, left, right, w, h) => {
-                    this.renderScanline(line, pixels, left, right, w, h);
+                this.vdp.endScanline(scanline, (user_data, line, pixels, shadowMap, w, h) => {
+                    this.renderScanline(line, pixels, shadowMap, w, h);
                 }, null);
 
                 // 3. Process second half of scanline CPU cycles
@@ -297,6 +299,7 @@ class GenesisOrchestrator {
                 // --- Off-Screen Vertical Blanking lines ---
                 if (scanline === activeHeight) {
                     this.vdp.currentlyInVblank = true;
+                    this.vdp.vIntPending = true; // Assert V-Blank interrupt pending flag
 
                     // Trigger Vertical Interrupt (V-Int: M68K level 6 interrupt) if enabled
                     if (this.vdp.vIntEnabled) {
@@ -353,21 +356,42 @@ class GenesisOrchestrator {
      * Copies the rasterized pixel row to the main canvas context via ImageData buffering.
      * @param {number} line - The target Y coordinate on the canvas.
      * @param {Uint8Array} pixels - Raw 8-bit palette indices for the scanline.
-     * @param {number} left - Leftmost rendering boundary.
-     * @param {number} right - Rightmost rendering boundary.
-     * @param {number} width - Total canvas width.
-     * @param {number} height - Total canvas height.
+     * @param {Uint8Array} shadowMap - Shadows/Highlights mapping bits.
+     * @param {number} width - Total active VDP screen width.
+     * @param {number} height - Total active VDP screen height.
      */
-    renderScanline(line, pixels, left, right, width, height) {
+    renderScanline(line, pixels, shadowMap, width, height) {
         if (this.videoContext) {
-            const imgData = this.videoContext.createImageData(width, 1);
+            const canvas = this.videoContext.canvas;
             
-            // FIX: Always render the full scanline width (from 0 to width) 
-            // instead of restricting to active windows (left to right).
-            // This prevents rendering black bar clipping artifacts on screen edges.
+            // FIX: Dynamically resize the internal width and height of the shared <canvas> element.
+            // When switching to Genesis (320px or 256px wide), this prevents the browser from 
+            // clipping/cutting off the right side of the screen, whilst keeping the shared HTML/CSS intact.
+            if (canvas.width !== width || canvas.height !== height) {
+                canvas.width = width;
+                canvas.height = height;
+            }
+
+            const imgData = this.videoContext.createImageData(width, 1);
+            const shadowEnabled = this.vdp.shadowHighlightEnabled;
+            
+            // Fast direct 1D array pixel pushing
             for (let i = 0; i < width; i++) {
-                const colorIdx = pixels[i] & 0x3F;
-                const rgb = this.vdp.cram[colorIdx]; // Fetch RGB444 color from CRAM
+                let colorIdx = pixels[i] & 0x3F;
+                
+                // Default CRAM palette offset
+                let cramOffset = 0x000; 
+
+                if (shadowEnabled) {
+                    const shadowStatus = shadowMap[i];
+                    if (shadowStatus === 0) {
+                        cramOffset = 0x040; // Apply shadow palette offset (1/2 luminance)
+                    } else if (shadowStatus === 2) {
+                        cramOffset = 0x080; // Apply highlight palette offset (double luminance)
+                    }
+                }
+
+                const rgb = this.vdp.cram[cramOffset + colorIdx]; // Fetch the calculated RGB color
 
                 // Convert SEGA RGB444 to standard 24-bit HTML5 RGB
                 const r = ((rgb & 0x00E) >> 1) * 36;

@@ -7,8 +7,8 @@
  * Emulates the central physical memory bus of the Motorola 68000 processor. 
  * Decodes 24-bit physical address lines and routes synchronous data cycles 
  * to Cartridge ROM, 64KB Work RAM, VDP coprocessors, and secondary Z80 subsystems.
- * Fully aligned with MDTracer reference standards to ensure accurate memory 
- * mapping, direct non-blocking YM2612 ports access, and non-blocking VDP DMA transfers.
+ * Fully aligned with MDTracer reference standards to ensure proper memory 
+ * mapping, non-inverted Z80 BUSREQ status reads, and non-blocking VDP DMA transfers.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates 68K memory space decoding, 
@@ -164,7 +164,7 @@ class GenesisBusM68k {
                 if (ioSubChunk < 0x10) { // 0xA00000 - 0xA0FFFF: Z80 RAM and YM2612 Ports
                     const z80Addr = address & 0x7FFF;
                     
-                    // FIX: YM2612 FM registers (0xA04000 - 0xA04003) are always readable by the 68K directly
+                    // YM2612 FM registers (0xA04000 - 0xA04003) are always readable by the 68K directly
                     const isYmPort = (z80Addr >= 0x4000 && z80Addr <= 0x4003);
 
                     if (isYmPort || (this.z80Bus && this.z80Bus.busRequested)) {
@@ -201,9 +201,11 @@ class GenesisBusM68k {
                     }
                 } else if (ioSubChunk === 0x11) { // 0xA11100 - 0xA11200: System Control
                     if ((address & 0xFF00) === 0xA11100) {
-                        // Z80 BUSREQ status register
-                        const busObtained = this.z80Bus.busRequested ? 0 : 1; // 0 = bus free to Z80
-                        return (0xFF ^ busObtained) << 8;
+                        // FIX: Non-inverted Z80 BUSREQ status.
+                        // Bit 8 must be 0 if the Z80 is frozen (68K has the bus), and 1 if the Z80 is running.
+                        // Mapped directly with open-bus pull-up (0xFF) on the lower byte.
+                        const z80Running = this.z80Bus.isZ80Frozen() ? 0 : 1;
+                        return (z80Running << 8) | 0x00FF;
                     }
                 } else if (ioSubChunk === 0x14) { // 0xA14000 - 0xA140FF: TMSS Security Area
                     if (address === 0xA14000) return this.tmssString[0];
@@ -289,7 +291,7 @@ class GenesisBusM68k {
                 if (ioSubChunk < 0x10) { // Z80 RAM and YM2612 ports
                     const z80Addr = address & 0x7FFF;
                     
-                    // FIX: Direct non-blocking access to YM2612 registers (0xA04000 - 0xA04003) 
+                    // Direct non-blocking access to YM2612 registers (0xA04000 - 0xA04003) 
                     // from the 68K CPU thread, bypassing active Z80 busreq checks.
                     const isYmPort = (z80Addr >= 0x4000 && z80Addr <= 0x4003);
 
@@ -357,7 +359,7 @@ class GenesisBusM68k {
                         break;
 
                     case 2: case 3:
-                        // FIX: Corrected callback invocation parameters. Wraps standard writeControl parameters 
+                        // Corrected callback invocation parameters. Wraps standard writeControl parameters 
                         // ensuring that the bound readCallback properly maps (userData, addr, cycle) inputs.
                         this.vdp.writeControl(
                             value, 
