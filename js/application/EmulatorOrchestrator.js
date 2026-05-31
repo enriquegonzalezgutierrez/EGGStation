@@ -2,14 +2,14 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Emulator Orchestrator (With WebGL2, DRC, Rewind & Shader Tuning)
+ * Application Layer: Emulator Orchestrator (With Debugger & VRAM Inspector)
  * 
  * Coordinates system execution loops, schedules frame sync rates (NTSC/PAL),
  * and links the isolated Domain entities with Infrastructure services.
  * Decoupled from DOM rendering and browser event APIs (SRP).
  * 
- * OPTIMIZED FOR PHASE 4: Added a clean bridge wrapper to safely pipe interactive 
- * WebGL2 shader parameters into the active post-processing pipeline.
+ * OPTIMIZED FOR PHASE 5: Integrated active CPU step-debugging, breakpoint traps, 
+ * and a contiguous 4bpp planar VRAM tile rasterizer.
  */
 
 class EmulatorOrchestrator {
@@ -28,7 +28,8 @@ class EmulatorOrchestrator {
         this.isRunning = false;
         this.isPaused = false;
         this.fastForward = false;
-        this.isRewinding = false; // State flag for active time-travel rewinding
+        this.isRewinding = false; 
+        this.isDebugging = false; // Debugger state flag
         
         // Visual post-processing filter configuration index (0: Sharp, 1: Bilinear, etc.)
         this.postProcessMode = 0;
@@ -51,6 +52,9 @@ class EmulatorOrchestrator {
         this.rewindHistory = [];
         this.maxRewindStates = 100; // Store last ~10 seconds of gameplay (approx. 2.5 MB in RAM)
         this.rewindFrameCount = 0;
+
+        // Breakpoint trap configuration
+        this.breakpointAddress = null; // Stores 16-bit integer address
 
         // Hardware Domain & Infrastructure Pointers
         this.cpu = null;
@@ -140,6 +144,8 @@ class EmulatorOrchestrator {
         this.isRunning = true;
         this.isPaused = false;
         this.isRewinding = false;
+        this.isDebugging = false;
+        this.breakpointAddress = null;
         this.rewindHistory = [];
         this.rewindFrameCount = 0;
         this.lastTime = performance.now();
@@ -331,16 +337,93 @@ class EmulatorOrchestrator {
     }
 
     /**
+     * Executes precisely one CPU instruction (one fetch-decode-execute cycle).
+     * Used exclusively during active step debugging to trace hardware clocks.
+     */
+    stepInstruction() {
+        if (!this.isRunning || !this.cpu) return;
+        
+        // Execute exactly one CPU opcode and step the sound/video clocks
+        const cycles = this.cpu.executeOne();
+        this.psg.step(this.cpu.totCycles);
+        this.vdp.update(this.cpu, cycles);
+        
+        this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
+    }
+
+    /**
+     * Rasterizes the VRAM pattern generator tiles to a 2D canvas context.
+     * Decodes SMS Mode 4 planar 4bpp sprite sheets to raw RGBA.
+     * @param {CanvasRenderingContext2D} ctx - Target 2D canvas context.
+     */
+    rasterizeVramTiles(ctx) {
+        if (!this.vdp) return;
+        
+        const imgData = ctx.createImageData(128, 192); // 16 x 24 tiles grid
+        const vram = this.vdp.vRam;
+        const cram = this.vdp.colorRam;
+        const scale = this.vdp.analogColorScale;
+
+        for (let tileIdx = 0; tileIdx < 384; tileIdx++) { // Render first 384 tiles
+            const vramBase = tileIdx * 32;
+            
+            const tileY = Math.floor(tileIdx / 16);
+            const tileX = tileIdx % 16;
+            const destBaseY = tileY * 8;
+            const destBaseX = tileX * 8;
+
+            for (let row = 0; row < 8; row++) {
+                const rowAddr = vramBase + (row * 4);
+                
+                const b0 = vram[rowAddr];
+                const b1 = vram[rowAddr + 1];
+                const b2 = vram[rowAddr + 2];
+                const b3 = vram[rowAddr + 3];
+
+                for (let col = 0; col < 8; col++) {
+                    const shift = 7 - col;
+                    const bit0 = (b0 >> shift) & 1;
+                    const bit1 = (b1 >> shift) & 1;
+                    const bit2 = (b2 >> shift) & 1;
+                    const bit3 = (b3 >> shift) & 1;
+
+                    const cramIdx = bit0 | (bit1 << 1) | (bit2 << 2) | (bit3 << 3);
+                    const colorByte = cram[cramIdx]; // Fetch from Background Palette (First 16 entries of CRAM)
+
+                    const red = scale[colorByte & 0x03];
+                    const green = scale[(colorByte & 0x0c) >> 2];
+                    const blue = scale[(colorByte & 0x30) >> 4];
+
+                    const pixelX = destBaseX + col;
+                    const pixelY = destBaseY + row;
+                    const destIdx = (pixelX + (pixelY * 128)) * 4;
+
+                    imgData.data[destIdx] = red;
+                    imgData.data[destIdx + 1] = green;
+                    imgData.data[destIdx + 2] = blue;
+                    imgData.data[destIdx + 3] = 255;
+                }
+            }
+        }
+        ctx.putImageData(imgData, 0, 0);
+    }
+
+    /**
      * The core emulation loop, driven by the browser's V-Sync.
      * Utilizes a delta-time accumulator to maintain correct internal clock speed 
      * regardless of monitor refresh rates (60Hz, 144Hz, etc.).
      * @param {number} currentTime - High-resolution timestamp provided by requestAnimationFrame.
      */
     loop(currentTime) {
-        // Enforce total sound mute if system is paused or stopped
-        if (!this.isRunning || this.isPaused) {
+        // Enforce total sound mute if system is paused, stopped or debugging
+        if (!this.isRunning || this.isPaused || this.isDebugging) {
             if (this.psg) {
                 this.psg.setMuted(true);
+            }
+            if (this.isDebugging) {
+                // Keep requesting animation frames during active debugger breaks to keep the UI thread alive
+                this.lastTime = currentTime;
+                this.animationFrameId = requestAnimationFrame(this.loop);
             }
             return;
         }
@@ -452,6 +535,19 @@ class EmulatorOrchestrator {
         }
 
         while (emulatedCycles < targetCycles) {
+            // ========================================================================
+            // CPU HARDWARE BREAKPOINT TRAP INTERCEPTOR
+            // ========================================================================
+            if (this.breakpointAddress !== null && this.cpu.registers.pc === this.breakpointAddress) {
+                this.isDebugging = true;
+                this.isPaused = false; // Override pause flag to prevent clock lock conflicts
+                console.warn(`EmulatorOrchestrator::Breakpoint hit at address: 0x${this.breakpointAddress.toString(16).padStart(4, '0')}`);
+                
+                // Dispatch a standard browser event to notify the UI to refresh registers/disassembly readouts
+                window.dispatchEvent(new CustomEvent('debugger-break'));
+                break;
+            }
+
             const cyclesElapsed = this.cpu.executeOne();
             
             // Do not step audio clock during fast-forward to prevent buffer clipping noise

@@ -2,14 +2,16 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: UI Controller (With Gamepad, Rewinding, Phaser & Shader Tuning)
+ * Presentation Layer: UI Controller (Unified Version with Disassembler Typo Fixed)
  * 
  * Maps DOM interactions (buttons, file inputs, selects), keyboard/touch events, 
  * and Physical USB/Bluetooth Gamepads to the Emulator Orchestrator. 
  * Swaps viewports via clean display rules to prevent flexbox offset anomalies (SRP).
  * 
- * OPTIMIZED FOR PHASE 4: Added explicit inline style overrides to safely bypass 
- * synchronous WebGL2 canvas display blockages initiated during early app bootstraps.
+ * OPTIMIZED: Adjusted slider scale divisions to represent 1:1 multipliers (1.0 = standard),
+ * eliminating double-multiplication bugs. Synchronized settings state post asynchronous ROM loads.
+ * 
+ * BUGFIX: Fixed ReferenceError on Z80Disassembler class call during step-debugging.
  */
 
 class UIController {
@@ -117,6 +119,112 @@ class UIController {
         bindSlider('sh-scanlines');
         bindSlider('sh-phosphor');
         bindSlider('sh-bloom');
+
+        // 11. Developer Mode Debugger Suite Buttons & Inputs
+        const dbgPlay = document.getElementById('dbg-play');
+        const dbgPause = document.getElementById('dbg-pause');
+        const dbgStep = document.getElementById('dbg-step');
+        const dbgBpInput = document.getElementById('dbg-breakpoint');
+
+        if (dbgPlay) {
+            dbgPlay.addEventListener('click', () => {
+                this.orchestrator.isDebugging = false;
+                this.orchestrator.isPaused = false;
+            });
+        }
+
+        if (dbgPause) {
+            dbgPause.addEventListener('click', () => {
+                this.orchestrator.isDebugging = true;
+                this.updateDebuggerUI();
+            });
+        }
+
+        if (dbgStep) {
+            dbgStep.addEventListener('click', () => {
+                if (this.orchestrator.isDebugging) {
+                    this.orchestrator.stepInstruction();
+                    this.updateDebuggerUI();
+                }
+            });
+        }
+
+        if (dbgBpInput) {
+            dbgBpInput.addEventListener('input', (e) => {
+                const val = e.target.value.trim();
+                if (val.length === 4) {
+                    this.orchestrator.breakpointAddress = parseInt(val, 16);
+                    console.log(`UIController::Breakpoint bound to address: 0x${this.orchestrator.breakpointAddress.toString(16).toUpperCase().padStart(4, '0')}`);
+                } else {
+                    this.orchestrator.breakpointAddress = null;
+                }
+            });
+        }
+
+        // Listen for breakpoint break events dispatched from Orchestrator
+        window.addEventListener('debugger-break', () => {
+            this.updateDebuggerUI();
+        });
+
+        // Populate initial debugger state values immediately when Dev Mode panel is opened
+        const devToggle = document.getElementById('dev-toggle-btn');
+        if (devToggle) {
+            devToggle.addEventListener('click', () => {
+                if (!document.getElementById('developer-suite').classList.contains('hidden')) {
+                    this.updateDebuggerUI();
+                }
+            });
+        }
+    }
+
+    /**
+     * Gathers, decodes and formats all CPU register values, active program disassembly instructions,
+     * and maps active VDP memory patterns onto the secondary diagnostic canvas.
+     */
+    updateDebuggerUI() {
+        if (!this.orchestrator.cpu || !this.orchestrator.isRunning) return;
+
+        const cpu = this.orchestrator.cpu;
+        const reg = cpu.registers;
+
+        // 1. Update CPU Registers Hex text readouts (Padded to 4 uppercase hex characters)
+        const updateReg = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val.toString(16).toUpperCase().padStart(4, '0');
+        };
+
+        updateReg('reg-af', reg.af);
+        updateReg('reg-bc', reg.bc);
+        updateReg('reg-de', reg.de);
+        updateReg('reg-hl', reg.hl);
+        updateReg('reg-ix', reg.ix);
+        updateReg('reg-iy', reg.iy);
+        updateReg('reg-sp', reg.sp);
+        updateReg('reg-pc', reg.pc);
+
+        // 2. Render Real-time Disassembly Output centered around the active Program Counter
+        const disasmBox = document.getElementById('disasm-output');
+        if (disasmBox) {
+            disasmBox.innerHTML = ''; // Clear previous disassembly text rows
+
+            // Disassemble 5 consecutive instructions starting from current Program Counter
+            const instructions = Z80Disassembler.disassembleBlock(cpu, 5);
+            instructions.forEach((instr, idx) => {
+                const line = document.createElement('div');
+                line.className = 'disasm-line' + (idx === 0 ? ' active' : '');
+                
+                const hexAddr = instr.address.toString(16).toUpperCase().padStart(4, '0');
+                line.textContent = `${hexAddr}: ${instr.decodedString}`;
+                disasmBox.appendChild(line);
+            });
+        }
+
+        // 3. Rasterize active VRAM Pattern Tiles onto the secondary canvas
+        const vramCanvas = document.getElementById('vram-canvas');
+        if (vramCanvas) {
+            const ctx = vramCanvas.getContext('2d');
+            this.orchestrator.rasterizeVramTiles(ctx);
+        }
     }
 
     /**
@@ -124,11 +232,11 @@ class UIController {
      * and streams them into active GPU uniform variables.
      */
     handleShaderTuningChange() {
-        // Translate slider integers (e.g. 0-150) to normalized float scales (e.g. 0.0 - 0.15)
-        const curvVal = parseInt(document.getElementById('sh-curvature')?.value || "90", 10) / 1000;
-        const scanVal = parseInt(document.getElementById('sh-scanlines')?.value || "38", 10) / 100;
-        const phosVal = parseInt(document.getElementById('sh-phosphor')?.value || "25", 10) / 100;
-        const blmVal  = parseInt(document.getElementById('sh-bloom')?.value || "15", 10) / 100;
+        // Translate slider values into exact multipliers (1.0 = standard default)
+        const curvVal = parseInt(document.getElementById('sh-curvature')?.value || "90", 10) / 90;
+        const scanVal = parseInt(document.getElementById('sh-scanlines')?.value || "38", 10) / 38;
+        const phosVal = parseInt(document.getElementById('sh-phosphor')?.value || "25", 10) / 25;
+        const blmVal  = parseInt(document.getElementById('sh-bloom')?.value || "15", 10) / 15;
 
         // Pipe variables down to GPU memory space
         this.orchestrator.updateShaderUniforms(curvVal, scanVal, phosVal, blmVal);
@@ -307,12 +415,15 @@ class UIController {
             display2D.classList.add('hidden');
             displayGL.classList.remove('hidden');
             
-            // CRITICAL BUGFIX: Override the snychronous bootstrap inline styles injected by app.js
+            // Explicitly override the snychronous bootstrap inline styles injected by app.js
             displayGL.style.display = "block";
             displayGL.style.visibility = "visible";
             displayGL.style.position = "relative";
+            
+            // Re-apply slider multiples onto the GPU program
+            this.handleShaderTuningChange();
         } else {
-            // Show 2D Canvas completely
+            // Restore standard canvas layout
             display2D.classList.remove('hidden');
             displayGL.classList.add('hidden');
             
@@ -351,7 +462,12 @@ class UIController {
         const reader = new FileReader();
         reader.onload = (event) => {
             const arrayBuffer = event.target.result;
-            this.orchestrator.loadRom(file.name, arrayBuffer);
+            
+            // Await async ROM loads, then synchronize the UI slider states to the newly created VDP
+            this.orchestrator.loadRom(file.name, arrayBuffer).then(() => {
+                this.handleShaderTuningChange();
+            });
+            
             this.hideUIForGameplay();
         };
         reader.readAsArrayBuffer(file);

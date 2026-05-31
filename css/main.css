@@ -2,12 +2,15 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: EGGStation Style Sheet (Responsive & Fluid UI)
+ * Presentation Layer: EGGStation Style Sheet (Responsive & Immersive CRT Display)
  * 
  * Defines a dark-mode Synthwave aesthetic. Features 3 responsive states:
  * 1. Desktop (Canvas center, glass sidebar)
  * 2. Mobile Portrait (Canvas top, D-PAD bottom, sidebar hidden in drawer)
  * 3. Mobile Landscape (Canvas 100%, overlaid translucent D-PAD)
+ * 
+ * OPTIMIZED: Configures the CRT container with a native 4:3 retro television aspect 
+ * ratio and forces high-DPI scaling edge-to-edge for dynamic height viewports.
  */
 
 /* ==========================================================================
@@ -59,6 +62,16 @@ body {
     width: 100%;
     max-width: 1600px;
     margin: 0 auto;
+    transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Master Grid Expansion when Developer Diagnostics Panel is toggled */
+#app-container.dev-mode {
+    grid-template-areas: 
+        "header header"
+        "stage sidebar"
+        "debugger debugger";
+    grid-template-rows: 60px 1fr 280px;
 }
 
 /* ==========================================================================
@@ -140,21 +153,25 @@ body {
 #crt-wrapper {
     position: relative;
     width: 100%;
-    max-width: 960px; /* Highly optimized scaling anchor */
-    /* Prevents the viewport from overflowing the page height on smaller screens */
+    max-width: 960px; 
     max-height: calc(100vh - 160px); 
-    aspect-ratio: 256 / 240; /* Absolute hardware ratio */
+    aspect-ratio: 4 / 3; /* OPTIMIZED: Immersive standard retro television 4:3 ratio */
     background: #000;
     border-radius: 8px;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--glass-border);
     overflow: hidden;
 }
 
+/* Dynamically compress CRT height when developer panel expands downward */
+#app-container.dev-mode #crt-wrapper {
+    max-height: calc(100vh - 440px);
+}
+
 canvas {
     width: 100%;
     height: 100%;
     display: block;
-    object-fit: contain;
+    object-fit: contain; /* OPTIMIZED: Automatically centers and scales display edge-to-edge */
 }
 
 /* Hardware standard pixel rendering */
@@ -289,6 +306,113 @@ select:hover, .btn:hover {
 }
 
 /* ==========================================================================
+   Developer Diagnostics Suite (Hacker-Console CSS)
+   ========================================================================== */
+#developer-suite {
+    grid-area: debugger;
+    display: grid;
+    grid-template-columns: 240px 1fr 240px 160px;
+    gap: 24px;
+    padding: 20px 24px;
+    border-top: 1px solid var(--glass-border);
+    border-left: none; /* Occupies full bottom width */
+    overflow-y: hidden;
+    z-index: 30;
+}
+
+.dev-section h4 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+
+.dev-btn-group {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+}
+
+.dev-btn {
+    padding: 8px 12px;
+    font-size: 0.75rem;
+}
+
+/* Code Disassembly Terminal Box */
+.terminal-box {
+    background: #000;
+    border: 1px solid var(--glass-border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+    font-size: 0.82rem;
+    height: calc(100% - 24px);
+    overflow-y: auto;
+    line-height: 1.6;
+}
+
+.disasm-line {
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    border-radius: 2px;
+    padding: 2px 6px;
+}
+
+.disasm-line.active {
+    color: var(--success);
+    background: rgba(4, 211, 97, 0.12);
+    font-weight: bold;
+}
+
+/* Registers readout grids */
+.registers-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 16px;
+    font-family: monospace;
+    font-size: 0.95rem;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--glass-border);
+}
+
+.registers-grid span {
+    color: var(--neon-pink);
+    font-weight: bold;
+}
+
+/* VRAM Canvas Viewer container */
+.vram-preview-wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: calc(100% - 24px);
+}
+
+#vram-canvas {
+    background: #000;
+    border: 1px solid var(--glass-border);
+    border-radius: 4px;
+    image-rendering: pixelated;
+    display: block;
+}
+
+#dbg-breakpoint {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: var(--neon-pink);
+    font-family: monospace;
+    font-size: 0.9rem;
+    padding: 8px;
+    border-radius: 4px;
+    outline: none;
+    text-align: center;
+    font-weight: bold;
+}
+
+/* ==========================================================================
    Virtual Gamepad (Hidden on Desktop)
    ========================================================================== */
 #virtual-gamepad {
@@ -299,7 +423,15 @@ select:hover, .btn:hover {
 /* ==========================================================================
    MEDIA QUERIES - MOBILE PORTRAIT (Vertical)
    ========================================================================== */
-@media (max-width: 900px) and (orientation: portrait) {
+@media (max-width: 900px) {
+    /* CRITICAL: Suspend developer mode debugger entirely on mobile displays */
+    #developer-suite, #dev-toggle-btn {
+        display: none !important;
+    }
+    #app-container.dev-mode {
+        grid-template-rows: 50px 1fr;
+    }
+
     #app-container {
         grid-template-areas: 
             "header"

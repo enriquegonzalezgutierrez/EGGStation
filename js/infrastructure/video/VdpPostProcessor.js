@@ -2,13 +2,14 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: VDP Post-Processor Service (With CRT-Royale Uniform Tuning)
+ * Infrastructure Layer: VDP Post-Processor Service (With Dynamic Height Alignment)
  * 
  * Manages zero-allocation hardware upscalers (Scale2X, Scale4X), 
  * CRT Scanline emulators, and compiles a native WebGL2 CRT-Royale Shader.
  * 
- * OPTIMIZED: Added safe null-guards for dynamic uniform bindings to prevent 
- * JS thread-crashing exceptions on strict WebGL2 browsers/GPU drivers.
+ * OPTIMIZED: Adjusted rendering buffers and WebGL texture mappings to scale 
+ * dynamically matching the active hardware resolution (192, 224, 240 lines), 
+ * completely eliminating dead black margins and aligning aspect ratios.
  */
 
 class VdpPostProcessor {
@@ -251,7 +252,7 @@ class VdpPostProcessor {
      * Uploads the 2D frame buffer as a texture and draws standard vertex coordinates.
      * @param {Uint8ClampedArray} src - Core Frame buffer.
      * @param {number} width - 256.
-     * @param {number} height - Active screen lines.
+     * @param {number} height - Active screen lines (192, 224, 240).
      */
     renderGL(src, width, height) {
         const gl = this.gl;
@@ -272,16 +273,16 @@ class VdpPostProcessor {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.textureHandle);
         
-        const activeLength = width * 240 * 4;
+        const activeLength = width * height * 4; // OPTIMIZED: Upload exactly the active screen lines
         const webglCompatibleBuffer = new Uint8Array(src.buffer, src.byteOffset, activeLength);
         
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, 240, 0, gl.RGBA, gl.UNSIGNED_BYTE, webglCompatibleBuffer);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, webglCompatibleBuffer);
 
         // Update uniforms
         gl.uniform1i(gl.getUniformLocation(this.glProgram, "uTexture"), 0);
-        gl.uniform2f(gl.getUniformLocation(this.glProgram, "uResolution"), width, 240);
+        gl.uniform2f(gl.getUniformLocation(this.glProgram, "uResolution"), width, height); // Bind dynamic resolution limits
 
-        // CRITICAL BUGFIX: Safe null-guards before binding uniforms to prevent crash loops
+        // Bind custom interactive shader values to the GPU
         if (this.uniformLocs.curvature) gl.uniform1f(this.uniformLocs.curvature, this.shCurvature);
         if (this.uniformLocs.scanlines) gl.uniform1f(this.uniformLocs.scanlines, this.shScanlines);
         if (this.uniformLocs.phosphor)  gl.uniform1f(this.uniformLocs.phosphor,  this.shPhosphor);
@@ -352,14 +353,14 @@ class VdpPostProcessor {
     }
 
     scale4X(src, yScreenLines) {
-        this.scale2X(src, this.upscaledBuffer, 256, 240); 
-        this.scale2X(this.upscaledBuffer, this.scale4xBuffer, 512, 480);
+        this.scale2X(src, this.upscaledBuffer, 256, yScreenLines); 
+        this.scale2X(this.upscaledBuffer, this.scale4xBuffer, 512, yScreenLines * 2);
     }
 
     applyScanlines(src, yScreenLines) {
         const dst = this.upscaledBuffer;
         const width = 256;
-        const height = 240; 
+        const height = yScreenLines; 
         const outWidth = 512;
 
         for (let y = 0; y < height; y++) {
@@ -393,7 +394,7 @@ class VdpPostProcessor {
     applyNtsdBleed(src, yScreenLines) {
         const dst = this.upscaledBuffer;
         const width = 256;
-        const height = 240; 
+        const height = yScreenLines; 
 
         for (let y = 0; y < height; y++) {
             const rowOffset = y * width * 4;
@@ -425,14 +426,14 @@ class VdpPostProcessor {
         // GPU Mode 6: Execute high-performance GPU Fragment Shaders
         if (postProcessMode === 6 && this.webglInitialized) {
             const targetGLWidth = 512; 
-            const targetGLHeight = 480; 
+            const targetGLHeight = yScreenLines * 2; // OPTIMIZED: Adapt WebGL Canvas height dynamically
 
             if (this.gl.canvas.width !== targetGLWidth || this.gl.canvas.height !== targetGLHeight) {
                 this.gl.canvas.width = targetGLWidth;
                 this.gl.canvas.height = targetGLHeight;
             }
 
-            this.renderGL(src, 256, 240);
+            this.renderGL(src, 256, yScreenLines); // Render exactly the active screen lines
             return;
         }
         
@@ -447,7 +448,7 @@ class VdpPostProcessor {
         if (postProcessMode === 4) scaleFactor = 4; // Scale4X Cartoon (1024x)
 
         const targetWidth = 256 * scaleFactor;
-        const targetHeight = 240 * scaleFactor; 
+        const targetHeight = yScreenLines * scaleFactor; // OPTIMIZED: Adapt 2D Canvas height dynamically
 
         // Adjust 2D canvas size if changed
         if (ctx.canvas.width !== targetWidth || ctx.canvas.height !== targetHeight) {
@@ -463,22 +464,22 @@ class VdpPostProcessor {
         const activeLength = targetWidth * targetHeight * 4;
 
         if (postProcessMode === 2) {
-            this.scale2X(src, this.upscaledBuffer, 256, 240);
+            this.scale2X(src, this.upscaledBuffer, 256, yScreenLines);
             this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
         } else if (postProcessMode === 3) {
-            this.applyScanlines(src, 240);
+            this.applyScanlines(src, yScreenLines);
             this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
         } else if (postProcessMode === 4) {
-            this.scale4X(src, 240);
+            this.scale4X(src, yScreenLines);
             this.glbImgData.data.set(this.scale4xBuffer.subarray(0, activeLength));
         } else if (postProcessMode === 5) {
-            this.applyNtsdBleed(src, 240);
+            this.applyNtsdBleed(src, yScreenLines);
             this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
         } 
         // ANAGLYPH 3-D GLASSES COMPOSITOR (Mode 7)
         else if (postProcessMode === 7) { 
             const width = 256;
-            const height = 240;
+            const height = yScreenLines;
             const dst = this.upscaledBuffer;
             const previous = this.vdp.prevFrameBuffer; // Read the cached offset frame
 

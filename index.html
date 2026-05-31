@@ -34,6 +34,7 @@
             </div>
             
             <div class="system-stats">
+                <button id="dev-toggle-btn" class="btn outline-btn" style="width:auto; padding: 6px 14px;">DEV MODE</button>
                 <span id="fpsSpan">60.0 FPS</span>
                 <!-- Mobile Menu Toggle -->
                 <button id="mobile-menu-btn" class="icon-btn mobile-only">
@@ -170,6 +171,56 @@
             </div>
         </aside>
 
+        <!-- Collapsible Developer Diagnostics Suite -->
+        <footer id="developer-suite" class="glass-panel hidden">
+            
+            <!-- CPU Stepper Controls -->
+            <div class="dev-section" id="dev-controls">
+                <h4>Debugger Core</h4>
+                <div class="dev-btn-group">
+                    <button id="dbg-play" class="btn dev-btn">RESUME</button>
+                    <button id="dbg-pause" class="btn dev-btn">BREAK</button>
+                    <button id="dbg-step" class="btn dev-btn">STEP INTO</button>
+                </div>
+                <div class="control-group" style="margin-top: 10px;">
+                    <label>Hex Breakpoint</label>
+                    <input type="text" id="dbg-breakpoint" placeholder="e.g. 0038" maxlength="4">
+                </div>
+            </div>
+
+            <!-- CPU Real-time Assembly Disassembly -->
+            <div class="dev-section" id="dev-disasm">
+                <h4>Assembly Output</h4>
+                <div id="disasm-output" class="terminal-box">
+                    <div class="disasm-line">0000: NOP</div>
+                </div>
+            </div>
+
+            <!-- CPU Register Status -->
+            <div class="dev-section" id="dev-registers">
+                <h4>CPU Registers</h4>
+                <div class="registers-grid">
+                    <div>AF: <span id="reg-af">0040</span></div>
+                    <div>BC: <span id="reg-bc">0000</span></div>
+                    <div>DE: <span id="reg-de">0000</span></div>
+                    <div>HL: <span id="reg-hl">0000</span></div>
+                    <div>IX: <span id="reg-ix">FFFF</span></div>
+                    <div>IY: <span id="reg-iy">FFFF</span></div>
+                    <div>SP: <span id="reg-sp">DFF0</span></div>
+                    <div>PC: <span id="reg-pc">0000</span></div>
+                </div>
+            </div>
+
+            <!-- VRAM Pattern Tile Viewer -->
+            <div class="dev-section" id="dev-vram">
+                <h4>VRAM Tile Visualizer</h4>
+                <div class="vram-preview-wrapper">
+                    <canvas id="vram-canvas" width="128" height="192"></canvas>
+                </div>
+            </div>
+
+        </footer>
+
         <!-- Overlay for Mobile Menu -->
         <div id="mobile-overlay" class="hidden"></div>
     </div>
@@ -177,6 +228,7 @@
     <!-- Scripts -->
     <script src="js/domain/cpu/Z80Registers.js"></script>
     <script src="js/domain/cpu/Z80Alu.js"></script>
+    <script src="js/domain/cpu/Z80Disassembler.js"></script> <!-- BUGFIX: Loader tag added successfully -->
     <script src="js/domain/cpu/instructions/Z80Arithmetic.js"></script>
     <script src="js/domain/cpu/instructions/Z80Bitwise.js"></script>
     <script src="js/domain/cpu/instructions/Z80BlockOps.js"></script>
@@ -208,7 +260,7 @@
     <script src="js/presentation/UIController.js"></script>
     <script src="js/app.js"></script>
 
-    <!-- UI Interaction Logic for Mobile Drawer -->
+    <!-- UI Interaction Logic for Mobile Drawer & Developer Suite -->
     <script>
         document.getElementById('mobile-menu-btn').addEventListener('click', () => {
             document.getElementById('settings-panel').classList.toggle('active');
@@ -217,6 +269,14 @@
         document.getElementById('mobile-overlay').addEventListener('click', () => {
             document.getElementById('settings-panel').classList.remove('active');
             document.getElementById('mobile-overlay').classList.add('hidden');
+        });
+        
+        // Developer Mode Drawer Toggler
+        document.getElementById('dev-toggle-btn').addEventListener('click', () => {
+            const devSuite = document.getElementById('developer-suite');
+            const appContainer = document.getElementById('app-container');
+            devSuite.classList.toggle('hidden');
+            appContainer.classList.toggle('dev-mode');
         });
     </script>
 </body>
