@@ -122,6 +122,10 @@ class GenesisOrchestrator {
         window.AudioContext = window.AudioContext || window.webkitAudioContext;
         this.audioCtx = new AudioContext();
 
+        if (this.audioCtx.state === 'suspended') {
+            this.audioCtx.resume();
+        }
+
         this.gainNode = this.audioCtx.createGain();
         this.gainNode.gain.value = 0.5; // Master volume scale
 
@@ -358,8 +362,10 @@ class GenesisOrchestrator {
         if (this.videoContext) {
             const imgData = this.videoContext.createImageData(width, 1);
             
-            // Fast direct 1D array pixel pushing
-            for (let i = left; i < right; i++) {
+            // FIX: Always render the full scanline width (from 0 to width) 
+            // instead of restricting to active windows (left to right).
+            // This prevents rendering black bar clipping artifacts on screen edges.
+            for (let i = 0; i < width; i++) {
                 const colorIdx = pixels[i] & 0x3F;
                 const rgb = this.vdp.cram[colorIdx]; // Fetch RGB444 color from CRAM
 

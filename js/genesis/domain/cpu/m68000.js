@@ -365,12 +365,12 @@ class M68000 {
             }
 
             // Skip logging the redundant RAM clearing loop iterations (0x0276-0x0278) for clean logs
-            if (currentInstructionAddress < 0x000276 || currentInstructionAddress > 0x000278) {
-                if (this.instructionTelemetryCount < 20000) {
-                    console.log(`[M68000 Trace #${this.instructionTelemetryCount}] PC: 0x${currentInstructionAddress.toString(16).toUpperCase().padStart(6, '0')} | Opcode: 0x${opcode.toString(16).toUpperCase().padStart(4, '0')} | D1: 0x${this.d[1].toString(16).toUpperCase()} | A6: 0x${this.a[6].toString(16).toUpperCase()}`);
-                    this.instructionTelemetryCount++;
-                }
-            }
+            // if (currentInstructionAddress < 0x000276 || currentInstructionAddress > 0x000278) {
+            //     if (this.instructionTelemetryCount < 20000) {
+            //         console.log(`[M68000 Trace #${this.instructionTelemetryCount}] PC: 0x${currentInstructionAddress.toString(16).toUpperCase().padStart(6, '0')} | Opcode: 0x${opcode.toString(16).toUpperCase().padStart(4, '0')} | D1: 0x${this.d[1].toString(16).toUpperCase()} | A6: 0x${this.a[6].toString(16).toUpperCase()}`);
+            //         this.instructionTelemetryCount++;
+            //     }
+            // }
 
             this.cyclesRemaining -= cost;
         }

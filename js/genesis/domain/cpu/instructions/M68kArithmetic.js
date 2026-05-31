@@ -37,7 +37,8 @@ class M68kArithmetic {
                 const isAdd = (opType === 0xD);
 
                 // Safe Hardware Filter: ADDX/SUBX strictly require bit 8 as 1 and bits 4-5 as 0
-                const isAddxSubx = (opcode & 0x0130) === 0x0100;
+                // FIX: Ensure it doesn't match ADDA/SUBA (opMode 3 or 7) where bit 8 could also be 1
+                const isAddxSubx = (opMode !== 3 && opMode !== 7) && (opcode & 0x0130) === 0x0100;
 
                 if (isAddxSubx) {
                     continue; // Skip and let the specialized ADDX/SUBX block handle this opcode
@@ -138,8 +139,6 @@ class M68kArithmetic {
 
                         const resMasked = result & 0xFFFFFFFF;
 
-                        // FIX: Resolved signed/unsigned mismatch in Address comparisons.
-                        // Aligned strictly with MDTracer's boolean subtraction solvers.
                         const SMC = (srcVal & 0x80000000) !== 0;
                         const DMC = (destVal & 0x80000000) !== 0;
                         const RMC = (resMasked & 0x80000000) !== 0;

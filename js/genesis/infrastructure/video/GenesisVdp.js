@@ -8,7 +8,7 @@
  * sprite caching/sorting lists, window boundary locks, H32 / H40 resolution modes, 
  * and advanced hardware-level pixel priorities (Shadow / Highlight).
  * Aligned with MDTracer reference standards to ensure proper H-Blank status 
- * toggling, V-Interrupt flag clearing, and non-blocking register set commands.
+ * toggling, V-Interrupt flag clearing, and pixel-perfect line-by-line rendering.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates the complex 2D scanline compositing 
@@ -43,56 +43,6 @@ function VDP_GetCachedSprite(state, spriteIndex) {
     return { y, link, width, height };
 }
 
-const GENESIS_VDP_BLIT_NORMAL           = new Uint8Array(128 * 128);
-const GENESIS_VDP_BLIT_SHADOW_HIGHLIGHT = new Uint8Array(128 * 128);
-const GENESIS_VDP_BLIT_FORCED_LAYER     = new Uint8Array(128 * 128);
-
-(function precomputeDepthTestTables() {
-    for (let newPixel = 0; newPixel < 128; ++newPixel) {
-        for (let oldPixel = 0; oldPixel < 128; ++oldPixel) {
-            const oldPaletteLine = oldPixel & 0xF;
-            const oldColourIdx = oldPixel & 0x3F;
-            const oldPriority = (oldPixel & 0x40) !== 0;
-            const oldNotShadowed = (oldPixel & 0x80) !== 0;
-
-            const newPaletteLine = newPixel & 0xF;
-            const newColourIdx = newPixel & 0x3F;
-            const newPriority = (newPixel & 0x40) !== 0;
-            const newNotShadowed = newPriority;
-
-            const drawNewPixel = newPaletteLine !== 0 && (oldPaletteLine === 0 || !oldPriority || newPriority);
-
-            let outputNormal = drawNewPixel ? newPixel : oldPixel;
-            if (oldNotShadowed || newNotShadowed) {
-                outputNormal |= 0x80; 
-            }
-            GENESIS_VDP_BLIT_NORMAL[(newPixel * 128) + oldPixel] = outputNormal;
-
-            let outputSh = 0;
-            if (drawNewPixel) {
-                switch (newColourIdx) {
-                    case 0x0E: case 0x1E: case 0x2E:
-                        outputSh = newColourIdx | 0x00; 
-                        break;
-                    case 0x3E:
-                        outputSh = oldColourIdx | (oldNotShadowed ? 0x80 : 0x00); 
-                        break;
-                    case 0x3F:
-                        outputSh = oldColourIdx | 0x40; 
-                        break;
-                    default:
-                        outputSh = newColourIdx | (newNotShadowed || oldNotShadowed ? 0x00 : 0x40);
-                        break;
-                }
-            } else {
-                outputSh = oldColourIdx | (oldNotShadowed ? 0x00 : 0x40);
-            }
-            GENESIS_VDP_BLIT_SHADOW_HIGHLIGHT[(newPixel * 128) + oldPixel] = outputSh;
-            GENESIS_VDP_BLIT_FORCED_LAYER[(newPixel * 128) + oldPixel] = oldPixel & (newColourIdx | ~0x3F);
-        }
-    }
-})();
-
 class GenesisVdp {
     constructor() {
         this.vRam = new Uint8Array(0x10000); 
@@ -117,10 +67,11 @@ class GenesisVdp {
         this.accessIncrement = 0;
 
         this.dmaEnabled = false;
-        this.dmaMode = 0; 
+        this.dmaMode = 0; // 0/1 = Memory-to-VRAM, 2 = VRAM Fill, 3 = VRAM Copy
         this.dmaSourceAddressHigh = 0;
         this.dmaSourceAddressLow = 0;
         this.dmaLength = 0;
+        this.dmaFillPending = false; // Flag to wait for fill byte to write to data port
 
         this.planeAAddress = 0;
         this.planeBAddress = 0;
@@ -204,6 +155,7 @@ class GenesisVdp {
         this.dmaSourceAddressHigh = 0;
         this.dmaSourceAddressLow = 0;
         this.dmaLength = 0;
+        this.dmaFillPending = false;
 
         this.planeAAddress = 0;
         this.planeBAddress = 0;
@@ -401,9 +353,92 @@ class GenesisVdp {
         this.previousDataWrites[3] = value & 0xFFFF;
     }
 
+    // ========================================================================
+    // YM2612 VERIFIED DMA FILL & COPY OPERATIONS
+    // ========================================================================
+
+    /**
+     * Performs an authentic word-aligned Memory-to-VDP DMA transfer (Mode 0 / 1).
+     */
+    dmaRunMemory(readCallback, readCallbackUserData, colorUpdatedCallback, callbackUserData, targetCycle) {
+        const dmaCount = this.dmaLength === 0 ? 0x10000 : this.dmaLength;
+        let sourceAddr = ((this.dmaSourceAddressHigh << 16) | this.dmaSourceAddressLow) << 1;
+        let loopCount = dmaCount;
+
+        do {
+            const value = readCallback(readCallbackUserData, sourceAddr, targetCycle);
+            this.writeAndIncrement(value, colorUpdatedCallback, callbackUserData);
+
+            sourceAddr = (sourceAddr + 2) & 0xFFFFFF;
+        } while (--loopCount > 0);
+
+        // Update registers with final address state
+        this.dmaSourceAddressLow = (sourceAddr >> 1) & 0xFFFF;
+        this.dmaSourceAddressHigh = (sourceAddr >> 17) & 0x3F;
+        this.dmaLength = 0;
+    }
+
+    /**
+     * Performs a byte-aligned VDP VRAM Fill (Mode 2).
+     */
+    dmaRunFill(value, colorUpdatedCallback, callbackUserData) {
+        let loopCount = this.dmaLength === 0 ? 0x10000 : this.dmaLength;
+        const fillByteLow = value & 0xFF;
+        const fillByteHigh = (value >> 8) & 0xFF;
+
+        if (this.accessSelectedBuffer === 0) { // VRAM Fill
+            this.writeVRAM(this.accessAddressRegister, fillByteLow);
+            do {
+                this.writeVRAM(this.accessAddressRegister ^ 1, fillByteHigh);
+                this.incrementAccessAddressRegister();
+            } while (--loopCount > 0);
+        } else if (this.accessSelectedBuffer === 1) { // CRAM Fill
+            do {
+                const cramIdx = Math.floor(this.accessAddressRegister / 2) % 64;
+                this.cram[cramIdx] = value;
+                this.incrementAccessAddressRegister();
+            } while (--loopCount > 0);
+        } else if (this.accessSelectedBuffer === 2) { // VSRAM Fill
+            do {
+                const vsramIdx = Math.floor(this.accessAddressRegister / 2) % 64;
+                if (vsramIdx < 40) {
+                    this.vsram[vsramIdx] = value;
+                }
+                this.incrementAccessAddressRegister();
+            } while (--loopCount > 0);
+        }
+        this.dmaLength = 0;
+    }
+
+    /**
+     * Performs a byte-aligned VDP VRAM-to-VRAM Copy (Mode 3).
+     */
+    dmaRunCopy() {
+        let loopCount = this.dmaLength === 0 ? 0x10000 : this.dmaLength;
+        let sourceAddr = ((this.dmaSourceAddressHigh << 16) | this.dmaSourceAddressLow) & 0xFFFF;
+
+        if (this.accessSelectedBuffer === 0) { // VRAM Copy
+            do {
+                const val = this.readVRAM(sourceAddr);
+                this.writeVRAM(this.accessAddressRegister, val);
+                sourceAddr = (sourceAddr + 1) & 0xFFFF;
+                this.incrementAccessAddressRegister();
+            } while (--loopCount > 0);
+        }
+        this.dmaLength = 0;
+    }
+
     writeData(value, colorUpdatedCallback, callbackUserData) {
         this.accessWritePending = false;
         this.updateFakeFIFO(value);
+
+        // Handle delayed VRAM Fill (Mode 2) execution on data port write,
+        // mirroring authentic Sega Genesis hardware protocols.
+        if (this.dmaFillPending) {
+            this.dmaFillPending = false;
+            this.dmaRunFill(value, colorUpdatedCallback, callbackUserData);
+            return;
+        }
 
         if (this.accessSelectedBuffer === 4) { 
             this.incrementAccessAddressRegister();
@@ -448,166 +483,168 @@ class GenesisVdp {
                 case 6: this.accessSelectedBuffer = 3; break; 
                 default: this.accessSelectedBuffer = 4; break; 
             }
+
+            // Removed the restrictive 'if (this.dmaEnabled)' check.
+            // Under authentic Genesis hardware rules, writing a DMA command to the control register
+            // triggers DMA transfer immediately on write, even if DMA enable bit in Reg 1 is not set.
+            if ((this.accessCodeRegister & 0x20) !== 0) {
+                this.accessCodeRegister &= ~0x20;
+
+                if (this.dmaMode === 0 || this.dmaMode === 1) { // Memory-to-VRAM DMA
+                    dmaTransferBeginCallback(readCallbackUserData, this.dmaLength, targetCycle);
+                    this.dmaRunMemory(readCallback, readCallbackUserData, colorUpdatedCallback, callbackUserData, targetCycle);
+                } else if (this.dmaMode === 2) { // VRAM Fill Pending
+                    this.dmaFillPending = true;
+                } else if (this.dmaMode === 3) { // VRAM-to-VRAM Copy
+                    this.dmaRunCopy();
+                }
+            }
         } else {
             const reg = (value >> 8) & 0x1F;
             const data = value & 0xFF;
-
             this.accessSelectedBuffer = 4; 
-
-            if (reg <= 10 || this.megaDriveModeEnabled) {
-                switch (reg) {
-                    case 0:
-                        this.hIntEnabled = (data & 0x10) !== 0;
-                        break;
-
-                    case 1:
-                        this.extendedVramEnabled = (data & 0x80) !== 0;
-                        this.displayEnabled = (data & 0x40) !== 0;
-                        this.vIntEnabled = (data & 0x20) !== 0;
-                        this.dmaEnabled = (data & 0x10) !== 0;
-                        this.v30Enabled = (data & 0x08) !== 0;
-                        this.megaDriveModeEnabled = (data & 0x04) !== 0;
-                        break;
-
-                    case 2:
-                        this.planeAAddress = (data & 0x78) << 10;
-                        break;
-
-                    case 3:
-                        this.windowAddress = (data & 0x7E) << 10;
-                        break;
-
-                    case 4:
-                        this.planeBAddress = (data & 0x0F) << 13;
-                        break;
-
-                    case 5:
-                        this.spriteTableAddress = data << 9;
-                        break;
-
-                    case 6:
-                        this.spriteTileIndexRebase = (data & 0x20) !== 0;
-                        break;
-
-                    case 7:
-                        this.backgroundColour = data & 0x3F;
-                        break;
-
-                    case 10:
-                        this.hIntInterval = data;
-                        this.register0a = data; // Keep reload backup synced with written interval data
-                        break;
-
-                    case 11:
-                        this.vscrollMode = (data & 4) !== 0 ? 1 : 0;
-                        this.hscrollMask = [0x00, 0x07, 0xF8, 0xFF][data & 3];
-                        break;
-
-                    case 12:
-                        this.h40Enabled = (data & 0x81) !== 0;
-                        this.shadowHighlightEnabled = (data & 0x08) !== 0;
-                        this.doubleResolutionEnabled = ((data >> 1) & 3) === 3;
-                        break;
-
-                    case 13:
-                        this.hscrollAddress = (data & 0x7F) << 10;
-                        break;
-
-                    case 14:
-                        this.planeATileIndexRebase = (data & 0x01) !== 0;
-                        this.planeBTileIndexRebase = (data & 0x10) !== 0 && this.planeATileIndexRebase;
-                        break;
-
-                    case 15:
-                        this.accessIncrement = data;
-                        break;
-
-                    case 16:
-                        this.planeHeightBitmask = (data << 1) | 0x1F;
-                        switch (data & 3) {
-                            case 0:
-                                this.planeWidthShift = 5;
-                                this.planeHeightBitmask &= 0x7F;
-                                break;
-                            case 1:
-                                this.planeWidthShift = 6;
-                                this.planeHeightBitmask &= 0x3F;
-                                break;
-                            case 2:
-                                this.planeWidthShift = 5;
-                                this.planeHeightBitmask &= 0;
-                                break;
-                            case 3:
-                                this.planeWidthShift = 7;
-                                this.planeHeightBitmask &= 0x1F;
-                                break;
-                        }
-                        break;
-
-                    case 17:
-                        this.windowAlignedRight = (data & 0x80) !== 0;
-                        this.windowHorizontalBoundary = Math.min(32, data & 0x1F);
-                        break;
-
-                    case 18:
-                        this.windowAlignedBottom = (data & 0x80) !== 0;
-                        this.windowVerticalBoundary = (data & 0x1F) << (3 + this.doubleResolutionEnabled);
-                        break;
-
-                    case 19:
-                        this.dmaLength = (this.dmaLength & 0xFF00) | data;
-                        break;
-
-                    case 20:
-                        this.dmaLength = (this.dmaLength & 0x00FF) | (data << 8);
-                        break;
-
-                    case 21:
-                        this.dmaSourceAddressLow = (this.dmaSourceAddressLow & 0xFF00) | data;
-                        break;
-
-                    case 22:
-                        this.dmaSourceAddressLow = (this.dmaSourceAddressLow & 0x00FF) | (data << 8);
-                        break;
-
-                    case 23:
-                        if ((data & 0x80) !== 0) {
-                            this.dmaSourceAddressHigh = data & 0x3F;
-                            this.dmaMode = (data & 0x40) !== 0 ? 2 : 1; 
-                        } else {
-                            this.dmaSourceAddressHigh = data & 0x7F;
-                            this.dmaMode = 0; 
-                        }
-                        break;
-                }
-            }
+            this.setRegister(reg, data);
         }
+    }
 
-        if (((this.accessCodeRegister & 0x20) !== 0) && this.dmaMode !== 1) {
-            this.accessCodeRegister &= ~0x20; 
+    /**
+     * Resolves and updates internal VDP register configurations.
+     * Segregated to comply with the Single Responsibility Principle.
+     */
+    setRegister(reg, data) {
+        if (reg <= 10 || this.megaDriveModeEnabled) {
+            switch (reg) {
+                case 0:
+                    this.hIntEnabled = (data & 0x10) !== 0;
+                    break;
 
-            const totalReads = this.dmaLength === 0 ? 0x10000 : this.dmaLength;
-            dmaTransferBeginCallback(readCallbackUserData, totalReads, targetCycle);
+                case 1:
+                    this.extendedVramEnabled = (data & 0x80) !== 0;
+                    this.displayEnabled = (data & 0x40) !== 0;
+                    this.vIntEnabled = (data & 0x20) !== 0;
+                    this.dmaEnabled = (data & 0x10) !== 0;
+                    this.v30Enabled = (data & 0x08) !== 0;
+                    this.megaDriveModeEnabled = (data & 0x04) !== 0;
+                    break;
 
-            do {
-                if (this.dmaMode === 0) { 
-                    const addressWord = ((this.dmaSourceAddressHigh << 17) | (this.dmaSourceAddressLow << 1)) >>> 0;
-                    const value = readCallback(readCallbackUserData, addressWord, targetCycle);
-                    this.updateFakeFIFO(value);
-                    this.writeAndIncrement(value, colorUpdatedCallback, callbackUserData);
-                } else { 
-                    this.writeVRAM(this.accessAddressRegister, this.readVRAM(this.dmaSourceAddressLow));
-                    this.incrementAccessAddressRegister();
-                }
+                case 2:
+                    this.planeAAddress = (data & 0x78) << 10;
+                    break;
 
-                this.dmaSourceAddressLow = (this.dmaSourceAddressLow + 1) & 0xFFFF;
-                this.dmaLength = (this.dmaLength - 1) & 0xFFFF;
-            } while (this.dmaLength !== 0);
+                case 3:
+                    this.windowAddress = (data & 0x7E) << 10;
+                    break;
+
+                case 4:
+                    this.planeBAddress = (data & 0x0F) << 13;
+                    break;
+
+                case 5:
+                    this.spriteTableAddress = data << 9;
+                    break;
+
+                case 6:
+                    this.spriteTileIndexRebase = (data & 0x20) !== 0;
+                    break;
+
+                case 7:
+                    this.backgroundColour = data & 0x3F;
+                    break;
+
+                case 10:
+                    this.hIntInterval = data;
+                    this.register0a = data; // Keep reload backup synced with written interval data
+                    break;
+
+                case 11:
+                    this.vscrollMode = (data & 4) !== 0 ? 1 : 0;
+                    this.hscrollMask = [0x00, 0x07, 0xF8, 0xFF][data & 3];
+                    break;
+
+                case 12:
+                    this.h40Enabled = (data & 0x81) !== 0;
+                    this.shadowHighlightEnabled = (data & 0x08) !== 0;
+                    this.doubleResolutionEnabled = ((data >> 1) & 3) === 3;
+                    break;
+
+                case 13:
+                    this.hscrollAddress = (data & 0x7F) << 10;
+                    break;
+
+                case 14:
+                    this.planeATileIndexRebase = (data & 0x01) !== 0;
+                    this.planeBTileIndexRebase = (data & 0x10) !== 0 && this.planeATileIndexRebase;
+                    break;
+
+                case 15:
+                    this.accessIncrement = data;
+                    break;
+
+                case 16:
+                    this.planeHeightBitmask = (data << 1) | 0x1F;
+                    switch (data & 3) {
+                        case 0:
+                            this.planeWidthShift = 5;
+                            this.planeHeightBitmask &= 0x7F;
+                            break;
+                        case 1:
+                            this.planeWidthShift = 6;
+                            this.planeHeightBitmask &= 0x3F;
+                            break;
+                        case 2:
+                            this.planeWidthShift = 5;
+                            this.planeHeightBitmask &= 0;
+                            break;
+                        case 3:
+                            this.planeWidthShift = 7;
+                            this.planeHeightBitmask &= 0x1F;
+                            break;
+                    }
+                    break;
+
+                case 17:
+                    this.windowAlignedRight = (data & 0x80) !== 0;
+                    this.windowHorizontalBoundary = Math.min(32, data & 0x1F);
+                    break;
+
+                case 18:
+                    this.windowAlignedBottom = (data & 0x80) !== 0;
+                    this.windowVerticalBoundary = (data & 0x1F) << (3 + this.doubleResolutionEnabled);
+                    break;
+
+                case 19:
+                    this.dmaLength = (this.dmaLength & 0xFF00) | data;
+                    break;
+
+                case 20:
+                    this.dmaLength = (this.dmaLength & 0x00FF) | (data << 8);
+                    break;
+
+                case 21:
+                    this.dmaSourceAddressLow = (this.dmaSourceAddressLow & 0xFF00) | data;
+                    break;
+
+                case 22:
+                    this.dmaSourceAddressLow = (this.dmaSourceAddressLow & 0x00FF) | (data << 8);
+                    break;
+
+                case 23:
+                    // FIX: Direct alignment with MDTracer's 23-5 DMA high source mask logic.
+                    // If bit 7 of register 23 is 0, the source maps 7 bits of ROM address (0x7F).
+                    // If bit 7 is 1, it maps 6 bits (0x3F).
+                    if ((data & 0x80) === 0) {
+                        this.dmaSourceAddressHigh = data & 0x7F;
+                    } else {
+                        this.dmaSourceAddressHigh = data & 0x3F;
+                    }
+                    this.dmaMode = (data >> 6) & 3; 
+                    break;
+            }
         }
     }
 
     // ========================================================================
-    // SCANLINE RASTERIZER SEQUENCERS
+    // SCANLINE RASTERIZER SEQUENCERS (MDTRACER PIXEL-PERFECT PORT)
     // ========================================================================
     beginScanline() {
         this.vsramCache[0] = this.vsram[0];
@@ -655,259 +692,272 @@ class GenesisVdp {
         } while (spriteIndex !== 0 && --spritesRemaining !== 0);
     }
 
-    renderTilePair(pixelY, vramAddress, baseTileAddress, destBuffer, destPtr, blitTable) {
-        const tileHeightShift = 3 + this.doubleResolutionEnabled;
-        const tileHeightMask = (1 << tileHeightShift) - 1;
-        const pixelYInTileUnflipped = pixelY & tileHeightMask;
-
-        for (let i = 0; i < 2; i++) {
-            const word = this.readVRAMWord(vramAddress + i * 2);
-            const xFlip = (word & 0x800) !== 0;
-            const yFlip = (word & 0x1000) !== 0;
-
-            const pixelYInTile = yFlip ? pixelYInTileUnflipped ^ tileHeightMask : pixelYInTileUnflipped;
-            const tileIdx = word & 0x7FF;
-
-            const tileRowAddress = baseTileAddress + (((tileIdx << tileHeightShift) + pixelYInTile) << 2);
-
-            const byteIndexXor = 1 ^ (xFlip ? 3 : 0);
-            const shift1 = xFlip ? 0 : 4;
-            const shift2 = 4 ^ shift1;
-
-            const paletteLine = (word >> 13) & 3;
-            const priority = (word >> 15) & 1;
-            const basePixel = (priority << 6) | (paletteLine << 4);
-
-            for (let j = 0; j < 4; j++) {
-                const byte = this.vRam[(tileRowAddress + j) ^ byteIndexXor];
-
-                const col1 = (byte >> shift1) & 0xF;
-                const newPixel1 = basePixel | col1;
-                destBuffer[destPtr] = blitTable[(newPixel1 * 128) + destBuffer[destPtr]];
-                destPtr++;
-
-                const col2 = (byte >> shift2) & 0xF;
-                const newPixel2 = basePixel | col2;
-                destBuffer[destPtr] = blitTable[(newPixel2 * 128) + destBuffer[destPtr]];
-                destPtr++;
-            }
+    getVScroll(planeIndex, col) {
+        if (this.vscrollMode === 0) {
+            return this.vsramCache[planeIndex];
+        } else {
+            return this.vsram[planeIndex + (col * 2)];
         }
     }
 
-    renderScrollingPlane(start, end, scanline, planeIndex, xOffset, destBuffer, blitLookupList) {
-        const baseTileAddress = planeIndex === 0 ? (this.planeATileIndexRebase ? 0x10000 : 0) : (this.planeBTileIndexRebase ? 0x10000 : 0);
-        const pitchShift = this.planeWidthShift;
-        const widthMask = (1 << pitchShift) - 1;
-        const heightMask = this.planeHeightBitmask;
-        const tableAddress = planeIndex === 0 ? this.planeAAddress : this.planeBAddress;
+    /**
+     * High-fidelity, pixel-perfect scanline rendering engine translated from MDTracer.
+     * Replaces previous staggered tile-chunk methods.
+     */
+    endScanline(scanline, scanlineRenderedCallback, callbackUserData) {
+        const w_display_xsize = this.getScreenWidthInPixels();
+        const w_scroll_xcell = 1 << this.planeWidthShift;
+        const w_scroll_xsize_mask = (w_scroll_xcell << 3) - 1;
+        const vscrollMask = this.vscrollMode === 1 ? 0x000F : 0xFFFF;
 
-        const tileHeightShift = 3 + this.doubleResolutionEnabled;
+        const w_game_cmap = new Uint8Array(w_display_xsize);
+        const w_game_primap = new Uint8Array(w_display_xsize);
+        const w_game_shadowmap = new Uint8Array(w_display_xsize);
 
-        const widescreenOffset = Math.ceil(this.configWidescreenTiles / 2);
+        this.updateSpriteCache();
 
-        for (let i = start; i <= end && i < this.getExtendedScreenWidthInTilePairs() + 1; ++i) {
-            let vscroll = 0;
-            if (this.vscrollMode === 0) { 
-                vscroll = this.vsramCache[planeIndex];
-            } else { 
-                vscroll = this.vsram[planeIndex + ((i - 1 - widescreenOffset) * 2) % 64];
+        // 1. Render Background Plane (Scroll B) Pixel-by-Pixel
+        if (this.displayEnabled && !this.configPlanesDisabled[1]) {
+            const hscrollTableAddress = this.hscrollAddress + 2 + ((scanline >> this.doubleResolutionEnabled) & this.hscrollMask) * 4;
+            const hscrollB = this.readVRAMWord(hscrollTableAddress);
+
+            let w_view_x = hscrollB;
+            let w_view_dy = 0;
+            let w_view_addr = 0;
+            let w_view_dx = 8;
+            let w_priority = 0;
+            let w_palette = 0;
+            let w_reverse = 0;
+            let w_char = 0;
+            let w_pic_addr = 0;
+            let w_pic_w = 0;
+
+            for (let wx = 0; wx < w_display_xsize; wx++) {
+                if ((wx & vscrollMask) === 0) {
+                    const w_view_y = this.getVScroll(1, wx >> 4) + scanline;
+                    w_view_dy = w_view_y & 7;
+
+                    const tileY = (w_view_y >> 3) & this.planeHeightBitmask;
+                    w_view_addr = this.planeBAddress + (tileY << this.planeWidthShift) * 2;
+                    w_view_dx = 8;
+                }
+                if (w_view_dx === 8) {
+                    w_view_x &= w_scroll_xsize_mask;
+                    w_view_dx = w_view_x & 7;
+
+                    const w_val = this.readVRAMWord(w_view_addr + (w_view_x >> 3) * 2);
+                    w_priority = (w_val >> 15) & 1;
+                    w_palette = ((w_val >> 13) & 3) << 4;
+                    w_reverse = (w_val >> 11) & 3;
+                    w_char = w_val & 0x07FF;
+
+                    const yFlip = (w_reverse & 2) !== 0;
+                    const pixelYInTile = yFlip ? w_view_dy ^ 7 : w_view_dy;
+                    w_pic_addr = (this.planeBTileIndexRebase ? 0x10000 : 0) + (w_char << 5) + (pixelYInTile << 2);
+                    
+                    w_pic_w = this.readVRAMWord(w_pic_addr + (w_view_dx >= 4 ? 2 : 0));
+                } else if ((w_view_dx & 3) === 0) {
+                    w_pic_w = this.readVRAMWord(w_pic_addr + (w_view_dx >= 4 ? 2 : 0));
+                }
+
+                const xFlip = (w_reverse & 1) !== 0;
+                const shift = xFlip ? (w_view_dx & 3) * 4 : (3 - (w_view_dx & 3)) * 4;
+                const w_pic = (w_pic_w >> shift) & 0x0F;
+
+                if (w_pic !== 0) {
+                    w_game_cmap[wx] = w_palette + w_pic;
+                    w_game_primap[wx] = w_priority;
+                }
+                if (this.shadowHighlightEnabled) {
+                    w_game_shadowmap[wx] = w_priority;
+                }
+
+                w_view_x += 1;
+                w_view_dx += 1;
             }
-
-            const pixelY = vscroll + scanline;
-            const clampedI = Math.max(start, i - 1);
-
-            const tileX = ((xOffset + clampedI) * 2) & widthMask;
-            const tileY = (pixelY >> tileHeightShift) & heightMask;
-            const vramAddress = tableAddress + ((tileY << pitchShift) + tileX) * 2;
-
-            let destPtr = i * 16;
-            this.renderTilePair(pixelY, vramAddress, baseTileAddress, destBuffer, destPtr, blitLookupList);
         }
-    }
 
-    renderWindowPlane(start, end, scanline, destBuffer, blitLookupList) {
-        const baseTileAddress = this.planeATileIndexRebase ? 0x10000 : 0;
-        const tileY = scanline >> (3 + this.doubleResolutionEnabled);
-        const pitchShift = 5 + this.h40Enabled;
-        const widthMask = (1 << pitchShift) - 1;
+        // 2. Render Foreground Plane (Scroll A / Window) Pixel-by-Pixel
+        if (this.displayEnabled) {
+            const hscrollTableAddress = this.hscrollAddress + 0 + ((scanline >> this.doubleResolutionEnabled) & this.hscrollMask) * 4;
+            const hscrollA = this.readVRAMWord(hscrollTableAddress);
 
-        const tableAddressBase = GetWindowPlaneTableAddress(this); 
-        const vramAddressBase = tableAddressBase + (tileY << pitchShift) * 2;
-        
-        const widescreenOffset = Math.ceil(this.configWidescreenTiles / 2) * 2;
-        const tileXBase = (0 - widescreenOffset) & widthMask;
+            let w_view_x = hscrollA;
+            let w_view_dy = 0;
+            let w_view_addr = 0;
+            let w_view_dx = 8;
+            let w_priority = 0;
+            let w_palette = 0;
+            let w_reverse = 0;
+            let w_char = 0;
+            let w_pic_addr = 0;
+            let w_pic_w = 0;
 
-        for (let i = start; i < end && i < this.getExtendedScreenWidthInTilePairs(); ++i) {
-            const vramAddress = vramAddressBase + ((tileXBase + i * 2) & widthMask) * 2;
-            let destPtr = i * 16;
-            this.renderTilePair(scanline, vramAddress, baseTileAddress, destBuffer, destPtr, blitLookupList);
-        }
-    }
+            const isWindowY = (scanline < this.windowVerticalBoundary) !== this.windowAlignedBottom;
 
-    renderSprites(destBuffer, scanline) {
-        const baseTileAddress = this.spriteTileIndexRebase ? 0x10000 : 0;
-        const tileHeightShift = 3 + this.doubleResolutionEnabled;
-        const tileHeightMask = (1 << tileHeightShift) - 1;
+            for (let wx = 0; wx < w_display_xsize; wx++) {
+                const isWindowX = ((wx >> 4) < this.windowHorizontalBoundary) !== this.windowAlignedRight;
+                const isWindowActive = (isWindowY || isWindowX) && !this.configWindowDisabled;
 
-        const rowTotal = this.spriteRowCacheTotal[scanline];
-        const rowOffset = scanline * 20;
+                if (isWindowActive) {
+                    // --- Window Plane (Non-scrolling static overlay) ---
+                    const win_view_dx = wx & 7;
+                    if (win_view_dx === 0 || wx === 0) {
+                        const tileX = (wx >> 3) & 0x3F;
+                        const tileY = (scanline >> 3) & this.planeHeightBitmask;
+                        const winTable = GetWindowPlaneTableAddress(this);
+                        const w_val = this.readVRAMWord(winTable + (tileY * w_scroll_xcell + tileX) * 2);
+                        
+                        w_priority = (w_val >> 15) & 1;
+                        w_palette = ((w_val >> 13) & 3) << 4;
+                        w_reverse = (w_val >> 11) & 3;
+                        w_char = w_val & 0x07FF;
 
-        let pixelLimit = this.getExtendedScreenWidthInTilePairs() * 16;
-        let masked = false;
+                        const yFlip = (w_reverse & 2) !== 0;
+                        const pixelYInTile = yFlip ? (scanline & 7) ^ 7 : (scanline & 7);
+                        w_pic_addr = (this.planeATileIndexRebase ? 0x10000 : 0) + (w_char << 5) + (pixelYInTile << 2);
+                        w_pic_w = this.readVRAMWord(w_pic_addr + (win_view_dx >= 4 ? 2 : 0));
+                    } else if ((win_view_dx & 3) === 0) {
+                        w_pic_w = this.readVRAMWord(w_pic_addr + (win_view_dx >= 4 ? 2 : 0));
+                    }
 
-        for (let i = 0; i < rowTotal; i++) {
-            const spriteRowCacheEntryIdx = rowOffset + i;
-            const tableIndex = this.spriteRowCacheTableIdx[spriteRowCacheEntryIdx];
-            const width = this.spriteRowCacheWidth[spriteRowCacheEntryIdx];
-            const height = this.spriteRowCacheHeight[spriteRowCacheEntryIdx];
+                    if (w_game_primap[wx] <= w_priority) {
+                        const xFlip = (w_reverse & 1) !== 0;
+                        const shift = xFlip ? (win_view_dx & 3) * 4 : (3 - (win_view_dx & 3)) * 4;
+                        const w_pic = (w_pic_w >> shift) & 0x0F;
 
-            const tableOffset = GetSpriteTableAddress(this); 
-            const spriteTableBase = tableOffset + tableIndex * 8;
+                        if (w_pic !== 0) {
+                            w_game_cmap[wx] = w_palette + w_pic;
+                            w_game_primap[wx] = w_priority;
+                        }
+                        if (this.shadowHighlightEnabled) {
+                            w_game_shadowmap[wx] |= w_priority;
+                        }
+                    }
+                    w_view_x += 1;
+                    w_view_dx += 1;
+                } else if (!this.configPlanesDisabled[0]) {
+                    // --- Scroll A Plane ---
+                    if ((wx & vscrollMask) === 0) {
+                        const w_view_y = this.getVScroll(0, wx >> 4) + scanline;
+                        w_view_dy = w_view_y & 7;
 
-            const rawX = this.readVRAMWord(spriteTableBase + 6) & 0x1FF;
-            const widescreenOffsetPixels = Math.ceil(this.configWidescreenTiles / 2) * 16;
-            const x = rawX + widescreenOffsetPixels;
+                        const tileY = (w_view_y >> 3) & this.planeHeightBitmask;
+                        w_view_addr = this.planeAAddress + (tileY << this.planeWidthShift) * 2;
+                        w_view_dx = 8;
+                    }
+                    if (w_view_dx === 8) {
+                        w_view_x &= w_scroll_xsize_mask;
+                        w_view_dx = w_view_x & 7;
 
-            if (rawX === 0) {
-                masked = this.allowSpriteMasking;
-            } else {
-                this.allowSpriteMasking = true;
+                        const w_val = this.readVRAMWord(w_view_addr + (w_view_x >> 3) * 2);
+                        w_priority = (w_val >> 15) & 1;
+                        w_palette = ((w_val >> 13) & 3) << 4;
+                        w_reverse = (w_val >> 11) & 3;
+                        w_char = w_val & 0x07FF;
+
+                        const yFlip = (w_reverse & 2) !== 0;
+                        const pixelYInTile = yFlip ? w_view_dy ^ 7 : w_view_dy;
+                        w_pic_addr = (this.planeATileIndexRebase ? 0x10000 : 0) + (w_char << 5) + (pixelYInTile << 2);
+                        w_pic_w = this.readVRAMWord(w_pic_addr + (w_view_dx >= 4 ? 2 : 0));
+                    } else if ((w_view_dx & 3) === 0) {
+                        w_pic_w = this.readVRAMWord(w_pic_addr + (w_view_dx >= 4 ? 2 : 0));
+                    }
+
+                    if (w_game_primap[wx] <= w_priority) {
+                        const xFlip = (w_reverse & 1) !== 0;
+                        const shift = xFlip ? (w_view_dx & 3) * 4 : (3 - (w_view_dx & 3)) * 4;
+                        const w_pic = (w_pic_w >> shift) & 0x0F;
+
+                        if (w_pic !== 0) {
+                            w_game_cmap[wx] = w_palette + w_pic;
+                            w_game_primap[wx] = w_priority;
+                        }
+                        if (this.shadowHighlightEnabled) {
+                            w_game_shadowmap[wx] |= w_priority;
+                        }
+                    }
+                    w_view_x += 1;
+                    w_view_dx += 1;
+                }
             }
+        }
 
-            if (masked || x + width * 8 <= 0x80 || x >= 0x80 + this.getExtendedScreenWidthInTiles() * 8) {
-                if (pixelLimit <= width * 8) return;
-                pixelLimit -= width * 8;
-            } else {
+        // 3. Render Sprites Pixel-by-Pixel
+        if (this.displayEnabled && !this.configSpritesDisabled) {
+            const rowTotal = this.spriteRowCacheTotal[scanline];
+            const rowOffset = scanline * 20;
+
+            for (let i = rowTotal - 1; i >= 0; i--) {
+                const spriteRowCacheEntryIdx = rowOffset + i;
+                const tableIndex = this.spriteRowCacheTableIdx[spriteRowCacheEntryIdx];
+                const width = this.spriteRowCacheWidth[spriteRowCacheEntryIdx];
+                const height = this.spriteRowCacheHeight[spriteRowCacheEntryIdx];
+
+                const spriteTableBase = GetSpriteTableAddress(this) + tableIndex * 8;
+                const rawX = this.readVRAMWord(spriteTableBase + 6) & 0x1FF;
+                const x = rawX - 0x80;
+
                 const word = this.readVRAMWord(spriteTableBase + 4);
                 const tileIndexBase = word & 0x7FF;
                 const xFlip = (word & 0x0800) !== 0;
                 const yFlip = (word & 0x1000) !== 0;
 
-                const paletteLineMask = (word >> 9) & 0x70;
-                const byteIndexXor = 1 ^ (xFlip ? 3 : 0);
+                const paletteLineMask = ((word >> 13) & 3) << 4;
+                const w_priority = (word >> 15) & 1;
 
                 const yInSpriteNonFlipped = this.spriteRowCacheYInSprite[spriteRowCacheEntryIdx];
-                const yInSprite = yFlip ? (height << tileHeightShift) - yInSpriteNonFlipped - 1 : yInSpriteNonFlipped;
-                const pixelYInTile = yInSprite & tileHeightMask;
-
-                const shift1 = xFlip ? 0 : 4;
-                const shift2 = 4 ^ shift1;
+                const yInSprite = yFlip ? (height * 8) - yInSpriteNonFlipped - 1 : yInSpriteNonFlipped;
+                const pixelYInTile = yInSprite & 7;
 
                 for (let j = 0; j < width; j++) {
                     const xInSprite = xFlip ? width - j - 1 : j;
-                    const tileIdx = tileIndexBase + (yInSprite >> tileHeightShift) + xInSprite * height;
+                    const tileIdx = tileIndexBase + (Math.floor(yInSprite / 8)) + xInSprite * height;
+                    const tileRowAddress = (this.spriteTileIndexRebase ? 0x10000 : 0) + (tileIdx << 5) + (pixelYInTile << 2);
 
-                    const tileRowAddress = baseTileAddress + (((tileIdx << tileHeightShift) + pixelYInTile) << 2);
+                    const screenX = x + (j * 8);
 
-                    const screenX = x - 0x80 + (j * 8);
+                    for (let k = 0; k < 8; k++) {
+                        const pixelIndex = screenX + k;
+                        if (pixelIndex >= 0 && pixelIndex < w_display_xsize) {
+                            if (w_game_primap[pixelIndex] <= w_priority) {
+                                const w_pic_w = this.readVRAMWord(tileRowAddress + (k >= 4 ? 2 : 0));
+                                const shift = xFlip ? (k & 3) * 4 : (3 - (k & 3)) * 4;
+                                const w_pic = (w_pic_w >> shift) & 0x0F;
 
-                    for (let k = 0; k < 4; k++) {
-                        const byte = this.vRam[(tileRowAddress + k) ^ byteIndexXor];
-                        
-                        for (let l = 0; l < 2; l++) {
-                            const shift = l === 0 ? shift1 : shift2;
-                            const pixelIndex = screenX + (k * 2) + l;
-
-                            if (pixelIndex >= 0 && pixelIndex < destBuffer.length) {
-                                if ((destBuffer[pixelIndex] & 0xF) === 0) {
-                                    const colorIdx = (byte >> shift) & 0xF;
-                                    destBuffer[pixelIndex] = paletteLineMask | colorIdx;
+                                if (w_pic !== 0) {
+                                    const w_color = paletteLineMask + w_pic;
+                                    
+                                    if (!this.shadowHighlightEnabled) {
+                                        w_game_cmap[pixelIndex] = w_color;
+                                        w_game_primap[pixelIndex] = w_priority;
+                                        this.g_vdp_status_5_collision = 1;
+                                    } else if (w_color === 0x3E) {
+                                        const w_map = w_game_shadowmap[pixelIndex];
+                                        if (w_map < 2) w_game_shadowmap[pixelIndex] = w_map + 1;
+                                    } else if (w_color === 0x3F) {
+                                        const w_map = w_game_shadowmap[pixelIndex];
+                                        if (w_map > 0) w_game_shadowmap[pixelIndex] = w_map - 1;
+                                    } else if ((w_color & 0x0F) === 0x0E) {
+                                        w_game_cmap[pixelIndex] = w_color;
+                                        w_game_primap[pixelIndex] = w_priority;
+                                        w_game_shadowmap[pixelIndex] = 0x1000;
+                                        this.g_vdp_status_5_collision = 1;
+                                    } else {
+                                        w_game_cmap[pixelIndex] = w_color;
+                                        w_game_primap[pixelIndex] = w_priority;
+                                        w_game_shadowmap[pixelIndex] |= w_priority;
+                                        this.g_vdp_status_5_collision = 1;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-
-            if (--pixelLimit === 0) return;
-        }
-        this.allowSpriteMasking = false;
-    }
-
-    renderForegroundPlane(left, right, scanline, destBuffer, windowPlane) {
-        if (windowPlane && !this.configWindowDisabled) {
-            this.renderWindowPlane(left, right, scanline, destBuffer, GENESIS_VDP_BLIT_NORMAL);
-        } else {
-            this.renderScrollPlane(left, right, scanline, destBuffer, 0);
-        }
-    }
-
-    renderScrollPlane(left, right, scanline, destBuffer, planeIndex) {
-        if (!this.configPlanesDisabled[planeIndex]) {
-            const hscrollTableAddress = this.hscrollAddress + planeIndex * 2 + ((scanline >> this.doubleResolutionEnabled) & this.hscrollMask) * 4;
-            const hscroll = this.readVRAMWord(hscrollTableAddress) + Math.ceil(this.configWidescreenTiles / 2) * 16;
-
-            const scrollOffset = 16 - (hscroll % 16);
-            const xOffset = -Math.floor(hscroll / 16);
-
-            this.renderScrollingPlane(left, right, scanline, planeIndex, xOffset, destBuffer, GENESIS_VDP_BLIT_NORMAL);
-        }
-    }
-
-    renderSpritePlane(destBuffer, spriteBuffer, blitLookup, leftPixels, rightPixels) {
-        for (let i = leftPixels; i < rightPixels; i++) {
-            destBuffer[i] = blitLookup[(spriteBuffer[i] * 128) + destBuffer[i]];
-        }
-    }
-
-    renderForegroundAndSpritePlanes(scanline, destBuffer, spriteBuffer, windowPlane, scanlineRenderedCallback, callbackUserData) {
-        const fullWindowLine = (scanline < this.windowVerticalBoundary) !== this.windowAlignedBottom;
-        const widescreenOffsetPairs = Math.ceil(this.configWidescreenTiles / 2);
-        
-        const winHBoundary = this.windowHorizontalBoundary === 0 ? 0 : widescreenOffsetPairs + this.windowHorizontalBoundary;
-
-        const left = fullWindowLine ? 0 : (this.windowAlignedRight === windowPlane ? winHBoundary : 0);
-        const right = fullWindowLine ? (windowPlane ? this.getExtendedScreenWidthInTilePairs() : 0) : (this.windowAlignedRight === windowPlane ? this.getExtendedScreenWidthInTilePairs() : winHBoundary);
-
-        const leftPixels = left * 16;
-        const rightPixels = right * 16;
-
-        if (left === right) return;
-
-        if (this.displayEnabled) {
-            if (!this.debugHideLayers) {
-                this.renderForegroundPlane(left, right, scanline, destBuffer, windowPlane);
-
-                if (this.shadowHighlightEnabled) {
-                    this.renderSpritePlane(destBuffer, spriteBuffer, GENESIS_VDP_BLIT_SHADOW_HIGHLIGHT, leftPixels, rightPixels);
-                } else {
-                    this.renderSpritePlane(destBuffer, spriteBuffer, GENESIS_VDP_BLIT_NORMAL, leftPixels, rightPixels);
-                }
-            }
         }
 
-        const inputExtraTilesInPixels = widescreenOffsetPairs * 16;
-        const outputExtraTilesInPixels = this.configWidescreenTiles * 8;
-        const xOffset = Math.floor((inputExtraTilesInPixels - outputExtraTilesInPixels) / 2);
-
-        const outputWidth = this.getScreenWidthInPixels() + outputExtraTilesInPixels;
-        const outputHeight = this.getScreenHeightInTiles() << (3 + this.doubleResolutionEnabled);
-
-        const clampedLeft = Math.max(xOffset, Math.min(xOffset + outputWidth, leftPixels)) - xOffset;
-        const clampedRight = Math.max(xOffset, Math.min(xOffset + outputWidth, rightPixels)) - xOffset;
-
-        scanlineRenderedCallback(callbackUserData, scanline, destBuffer, clampedLeft, clampedRight, outputWidth, outputHeight);
-    }
-
-    endScanline(scanline, scanlineRenderedCallback, callbackUserData) {
-        const bufferWidth = (2 + this.getExtendedScreenWidthInTilePairs()) * 16;
-        
-        const planeBuffer = new Uint8Array(bufferWidth);
-        const spriteBuffer = new Uint8Array(bufferWidth);
-
-        this.updateSpriteCache();
-
-        if (!this.configSpritesDisabled) {
-            this.renderSprites(spriteBuffer, scanline);
-        }
-
-        planeBuffer.fill(this.debugForcedLayer === 0 ? this.backgroundColour : 0x3F);
-
-        if (this.displayEnabled && !this.debugHideLayers) {
-            this.renderScrollPlane(0, this.getExtendedScreenWidthInTilePairs(), scanline, planeBuffer, 1);
-        }
-
-        this.renderForegroundAndSpritePlanes(scanline, planeBuffer, spriteBuffer, true, scanlineRenderedCallback, callbackUserData);
-        this.renderForegroundAndSpritePlanes(scanline, planeBuffer, spriteBuffer, false, scanlineRenderedCallback, callbackUserData);
+        // 4. Dispatch Rendered Scanline back to Orchestrator
+        scanlineRenderedCallback(callbackUserData, scanline, w_game_cmap, w_game_shadowmap, w_display_xsize, this.getScreenHeightInTiles() * 8);
     }
 }

@@ -7,8 +7,8 @@
  * Emulates the central physical memory bus of the Motorola 68000 processor. 
  * Decodes 24-bit physical address lines and routes synchronous data cycles 
  * to Cartridge ROM, 64KB Work RAM, VDP coprocessors, and secondary Z80 subsystems.
- * Aligned with MDTracer reference standards to ensure accurate memory 
- * mapping and non-blocking VDP DMA transfers.
+ * Fully aligned with MDTracer reference standards to ensure accurate memory 
+ * mapping, direct non-blocking YM2612 ports access, and non-blocking VDP DMA transfers.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates 68K memory space decoding, 
@@ -162,8 +162,12 @@ class GenesisBusM68k {
                 const ioSubChunk = (address >> 12) & 0xFF;
 
                 if (ioSubChunk < 0x10) { // 0xA00000 - 0xA0FFFF: Z80 RAM and YM2612 Ports
-                    if (this.z80Bus && this.z80Bus.busRequested) {
-                        const z80Addr = address & 0x7FFF;
+                    const z80Addr = address & 0x7FFF;
+                    
+                    // FIX: YM2612 FM registers (0xA04000 - 0xA04003) are always readable by the 68K directly
+                    const isYmPort = (z80Addr >= 0x4000 && z80Addr <= 0x4003);
+
+                    if (isYmPort || (this.z80Bus && this.z80Bus.busRequested)) {
                         const byte = this.z80Bus.read(z80Addr, targetCycle) & 0xFF;
                         return (byte << 8) | byte; // Hardware repeats byte across 16-bit buses
                     }
@@ -283,8 +287,13 @@ class GenesisBusM68k {
                 const ioSubChunk = (address >> 12) & 0xFF;
 
                 if (ioSubChunk < 0x10) { // Z80 RAM and YM2612 ports
-                    if (this.z80Bus && this.z80Bus.busRequested) {
-                        const z80Addr = address & 0x7FFF;
+                    const z80Addr = address & 0x7FFF;
+                    
+                    // FIX: Direct non-blocking access to YM2612 registers (0xA04000 - 0xA04003) 
+                    // from the 68K CPU thread, bypassing active Z80 busreq checks.
+                    const isYmPort = (z80Addr >= 0x4000 && z80Addr <= 0x4003);
+
+                    if (isYmPort || (this.z80Bus && this.z80Bus.busRequested)) {
                         if ((mask & 0xFF00) !== 0) {
                             this.z80Bus.write(z80Addr, (value >> 8) & 0xFF, targetCycle);
                         } else {
@@ -326,7 +335,7 @@ class GenesisBusM68k {
                     } else if ((address & 0xFF00) === 0xA11200 && (mask & 0xFF00) !== 0) {
                         // Z80 RESET trigger
                         const resetHeld = ((value >> 8) & 1) === 0;
-                        this.z80Bus.resetHeld = resetHeld;
+                        this.z80Bus.setReset(resetHeld);
                     }
                 } else if (ioSubChunk === 0x14) { // TMSS Register Check
                     if (address === 0xA14000) this.tmssString[0] = value & 0xFFFF;
