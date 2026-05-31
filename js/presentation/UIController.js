@@ -2,13 +2,14 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: UI Controller (With Cache-Proof Layout Controls, Gamepad & Rewinding)
+ * Presentation Layer: UI Controller (With Cache-Proof Layout Controls, Gamepad, Rewinding & Phaser)
  * 
  * Maps DOM interactions (buttons, file inputs, selects), keyboard/touch events, 
  * and Physical USB/Bluetooth Gamepads to the Emulator Orchestrator. 
  * Swaps viewports via clean display rules to prevent flexbox offset anomalies (SRP).
  * 
- * OPTIMIZED FOR PHASE 2: Added input handlers for Real-Time Gameplay Rewinding (Backspace / L2).
+ * OPTIMIZED FOR PHASE 3: Added touch/mouse handlers to emulate the SMS Light Phaser 
+ * and latch coordinates directly into VDP counter registers.
  */
 
 class UIController {
@@ -90,6 +91,59 @@ class UIController {
         window.addEventListener("gamepadconnected", (e) => {
             console.log(`UIController::Gamepad connected: [${e.gamepad.id}]`);
         });
+
+        // 9. Light Phaser Mouse & Touch Event Listeners
+        const crtWrapper = document.getElementById('crt-wrapper');
+        if (crtWrapper) {
+            crtWrapper.addEventListener('mousedown', (e) => this.handlePhaserClick(e));
+            crtWrapper.addEventListener('touchstart', (e) => {
+                if (e.touches && e.touches[0]) {
+                    this.handlePhaserClick(e.touches[0]);
+                }
+            });
+        }
+    }
+
+    /**
+     * Intercepts pointer coordinates over the CRT wrapper and translates them into 
+     * 256x240 pixel space, triggering the physical light phaser registers.
+     * @param {MouseEvent|Touch} e - The raw pointer coordinate event.
+     */
+    handlePhaserClick(e) {
+        // Query the standard canvas element to resolve coordinates relative to its rendered rectangle
+        const display2D = document.getElementById("smsdisplay");
+        if (!display2D || !this.orchestrator.isRunning) return;
+
+        const rect = display2D.getBoundingClientRect();
+        
+        // Translate absolute mouse pointer positions to physical VDP coordinate matrices
+        const x = Math.floor(((e.clientX - rect.left) / rect.width) * 256);
+        const y = Math.floor(((e.clientY - rect.top) / rect.height) * 240);
+
+        // Confirm coordinates sit within native hardware limits
+        if (x >= 0 && x < 256 && y >= 0 && y < 240) {
+            const vdp = this.orchestrator.vdp;
+            const io = this.orchestrator.ioController;
+
+            if (vdp && io) {
+                vdp.phaserClicked = true;
+                vdp.phaserX = x;
+                vdp.phaserY = y;
+
+                // 1. Pull the physical trigger (Button 1 of Player 1) LOW
+                io.pressButton1();
+
+                // 2. Latch the Lightgun Photo-Receptor Sensor (PORT_A_TR pin on Port 0xDD) LOW
+                io.writePinStateDD('PORT_A_TR', true);
+
+                // 3. Keep registers latched for exactly 80ms (roughly 5 frames) then release
+                setTimeout(() => {
+                    vdp.phaserClicked = false;
+                    io.depressButton1();
+                    io.writePinStateDD('PORT_A_TR', false);
+                }, 80);
+            }
+        }
     }
 
     /**

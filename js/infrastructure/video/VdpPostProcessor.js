@@ -2,11 +2,14 @@
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: VDP Post-Processor Service (With CRT-Royale Extreme Shaders)
+ * Infrastructure Layer: VDP Post-Processor Service (With CRT-Royale & Anaglyph 3D)
  * 
  * Manages zero-allocation hardware upscalers (Scale2X, Scale4X), 
  * CRT Scanline emulators, and compiles a native WebGL2 CRT-Royale Shader.
  * Features an Extreme high-contrast CRT preset for highly visible retro simulation (SRP).
+ * 
+ * OPTIMIZED FOR PHASE 3: Added support for zero-allocation Red/Cyan Anaglyph 
+ * 3-D Glasses stereoscopic composite filtering (Mode 7).
  */
 
 class VdpPostProcessor {
@@ -55,7 +58,7 @@ class VdpPostProcessor {
             }
         `;
 
-        // 2. Fragment Shader: Ultra High-Fidelity CRT-Royale & Chromatic Aberration (Cranked Up Preset)
+        // 2. Fragment Shader: Ultra High-Fidelity CRT-Royale & Chromatic Aberration
         const fsSource = `#version 300 es
             precision highp float;
             in vec2 vTexCoord;
@@ -64,12 +67,12 @@ class VdpPostProcessor {
             uniform sampler2D uTexture;
             uniform vec2 uResolution;
 
-            // Simulates physical screen curvature (pronounced bulbous barrel distortion)
+            // Simulates physical screen curvature
             vec2 curve(vec2 uv) {
                 uv = (uv - 0.5) * 2.0;
-                uv.x *= 1.10; // Compensate horizontal zoom for pronounced curvature
-                uv.x *= 1.0 + (uv.y * uv.y) * 0.09; // Curved horizontal distortion (Upgraded to 0.09)
-                uv.y *= 1.0 + (uv.x * uv.x) * 0.10; // Curved vertical distortion (Upgraded to 0.10)
+                uv.x *= 1.10; // Compensate horizontal zoom
+                uv.x *= 1.0 + (uv.y * uv.y) * 0.09; // Curved horizontal distortion
+                uv.y *= 1.0 + (uv.x * uv.x) * 0.10; // Curved vertical distortion
                 uv = (uv / 2.0) + 0.5;
                 return uv;
             }
@@ -84,9 +87,8 @@ class VdpPostProcessor {
                 return pow(c, vec3(1.0 / 2.2));
             }
 
-            // Performs analog Chromatic Aberration (Microscopic RGB fringe splitting near edges)
+            // Performs analog Chromatic Aberration
             vec3 textureAberration(sampler2D tex, vec2 uv) {
-                // Shift Red and Blue coordinates sutilmente on the horizontal axis
                 float r = texture(tex, uv - vec2(0.0018, 0.0)).r;
                 float g = texture(tex, uv).g;
                 float b = texture(tex, uv + vec2(0.0018, 0.0)).b;
@@ -96,7 +98,7 @@ class VdpPostProcessor {
             void main() {
                 vec2 uv = curve(vTexCoord);
                 
-                // Vignette edge clipping with soft, organic curved corners (CRT shadow mask frame)
+                // Vignette edge clipping with soft, organic curved corners
                 vec2 vignette = smoothstep(vec2(0.0), vec2(0.025), uv) * smoothstep(vec2(0.0), vec2(0.025), 1.0 - uv);
                 float vignetteFactor = vignette.x * vignette.y;
 
@@ -108,15 +110,15 @@ class VdpPostProcessor {
                 // Retrieve chromatic-split pixel color and decode to linear space
                 vec3 color = decodeGamma(textureAberration(uTexture, uv));
                 
-                // 1. CRT Scanline calculation (sine-wave brightness modulation - Upgraded to 38% depth)
+                // 1. CRT Scanline calculation
                 float scanline = sin(uv.y * uResolution.y * 3.14159) * 0.38 + 0.62;
                 color *= scanline;
                 
-                // 2. Aperture Grille subpixel replication (Sony Trinitron phosphor triad look - Upgraded to 25% depth)
+                // 2. Aperture Grille subpixel replication
                 float phosphor = sin(uv.x * uResolution.x * 3.14159 * 2.0) * 0.25 + 0.75;
                 color *= phosphor;
 
-                // 3. Subtle bloom halation (makes colors pop sutilmente on dark backdrops - Upgraded to 15%)
+                // 3. Subtle bloom halation
                 vec3 bloom = vec3(0.0);
                 bloom += decodeGamma(texture(uTexture, uv + vec2(-0.004, 0.0)).rgb) * 0.15;
                 bloom += decodeGamma(texture(uTexture, uv + vec2(0.004, 0.0)).rgb) * 0.15;
@@ -150,7 +152,7 @@ class VdpPostProcessor {
         }
         console.log("VdpPostProcessor::WebGL2 Program linked successfully.");
 
-        // 5. ENFORCED: Create and bind WebGL2 Vertex Array Object (VAO)
+        // 5. Create and bind WebGL2 Vertex Array Object (VAO)
         this.vao = gl.createVertexArray();
         gl.bindVertexArray(this.vao);
 
@@ -201,7 +203,6 @@ class VdpPostProcessor {
             gl.deleteShader(shader);
             return null;
         }
-        console.log(`VdpPostProcessor::${type === gl.VERTEX_SHADER ? "VERTEX" : "FRAGMENT"} shader compiled successfully.`);
         return shader;
     }
 
@@ -210,7 +211,7 @@ class VdpPostProcessor {
      * Uploads the 2D frame buffer as a texture and draws standard vertex coordinates.
      * @param {Uint8ClampedArray} src - Core Frame buffer.
      * @param {number} width - 256.
-     * @param {number} height - Active screen lines (192, 224, 240).
+     * @param {number} height - Active screen lines.
      */
     renderGL(src, width, height) {
         const gl = this.gl;
@@ -221,12 +222,11 @@ class VdpPostProcessor {
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        // Enforce disable depth calculations on 2D shaders to bypass GPU clipping
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.CULL_FACE);
 
         gl.useProgram(this.glProgram);
-        gl.bindVertexArray(this.vao); // Re-bind pre-configured VAO containing attributes pointers
+        gl.bindVertexArray(this.vao); 
 
         // Upload active 2D frame buffer slice as texture map
         gl.activeTexture(gl.TEXTURE0);
@@ -241,10 +241,7 @@ class VdpPostProcessor {
         gl.uniform1i(gl.getUniformLocation(this.glProgram, "uTexture"), 0);
         gl.uniform2f(gl.getUniformLocation(this.glProgram, "uResolution"), width, 240);
 
-        // Execute drawing pass on the GPU in < 0.2ms
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        // Clean unbinds
         gl.bindVertexArray(null);
     }
 
@@ -309,14 +306,14 @@ class VdpPostProcessor {
     }
 
     scale4X(src, yScreenLines) {
-        this.scale2X(src, this.upscaledBuffer, 256, 240); // Standard 240 lines limit
+        this.scale2X(src, this.upscaledBuffer, 256, 240); 
         this.scale2X(this.upscaledBuffer, this.scale4xBuffer, 512, 480);
     }
 
     applyScanlines(src, yScreenLines) {
         const dst = this.upscaledBuffer;
         const width = 256;
-        const height = 240; // Fixed 240 lines base
+        const height = 240; 
         const outWidth = 512;
 
         for (let y = 0; y < height; y++) {
@@ -350,7 +347,7 @@ class VdpPostProcessor {
     applyNtsdBleed(src, yScreenLines) {
         const dst = this.upscaledBuffer;
         const width = 256;
-        const height = 240; // Fixed 240 lines base
+        const height = 240; 
 
         for (let y = 0; y < height; y++) {
             const rowOffset = y * width * 4;
@@ -373,17 +370,17 @@ class VdpPostProcessor {
 
     /**
      * Blits the frame buffer to the host canvas context.
-     * Routes the transaction to either standard 2D upscalers or WebGL2 GPU Shaders.
+     * Routes the transaction to standard 2D upscalers, WebGL2, or Anaglyph 3D Glasses.
      * @param {CanvasRenderingContext2D} ctx - Target 2D Canvas context.
      * @param {Uint8ClampedArray} src - The core frame buffer.
      * @param {number} yScreenLines - Current active screen lines.
      * @param {number} postProcessMode - Selected filter.
      */
     blit(ctx, src, yScreenLines, postProcessMode) {
-        // Option 6: Execute high-performance GPU Fragment Shaders
+        // GPU Mode 6: Execute high-performance GPU Fragment Shaders
         if (postProcessMode === 6 && this.webglInitialized) {
-            const targetGLWidth = 512; // Double native for nice CRT resolution
-            const targetGLHeight = 480; // Fixed 480 lines height on WebGL
+            const targetGLWidth = 512; 
+            const targetGLHeight = 480; 
 
             if (this.gl.canvas.width !== targetGLWidth || this.gl.canvas.height !== targetGLHeight) {
                 this.gl.canvas.width = targetGLWidth;
@@ -394,13 +391,13 @@ class VdpPostProcessor {
             return;
         }
 
-        // Options 0-5: Execute CPU snychronous upscalers (Fijados a 240 líneas de base)
+        // Standard 2D Canvas modes (1x, Bilinear, Scalers, and Anaglyph 3D)
         let scaleFactor = 1;
         if (postProcessMode === 2 || postProcessMode === 3) scaleFactor = 2; // Scale2X/Scanlines (512x)
-        if (postProcessMode === 4) scaleFactor = 4; // Scale4X Cartoon HD (1024x)
+        if (postProcessMode === 4) scaleFactor = 4; // Scale4X Cartoon (1024x)
 
         const targetWidth = 256 * scaleFactor;
-        const targetHeight = 240 * scaleFactor; // Enforce constant height ratio
+        const targetHeight = 240 * scaleFactor; 
 
         // Adjust 2D canvas size if changed
         if (ctx.canvas.width !== targetWidth || ctx.canvas.height !== targetHeight) {
@@ -427,7 +424,26 @@ class VdpPostProcessor {
         } else if (postProcessMode === 5) {
             this.applyNtsdBleed(src, 240);
             this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
-        } else {
+        } 
+        // ========================================================================
+        // ANAGLYPH 3-D GLASSES COMPOSITOR (Mode 7)
+        // ========================================================================
+        else if (postProcessMode === 7) { 
+            const width = 256;
+            const height = 240;
+            const dst = this.upscaledBuffer;
+            const previous = this.vdp.prevFrameBuffer; // Read the cached offset frame (Right Eye)
+
+            // Merge current frame (Left Eye) and previous frame (Right Eye) into Red/Cyan
+            for (let i = 0; i < src.length; i += 4) {
+                dst[i] = src[i];           // Red channel -> Current frame
+                dst[i+1] = previous[i+1];  // Green channel -> Previous frame
+                dst[i+2] = previous[i+2];  // Blue channel -> Previous frame
+                dst[i+3] = 255;
+            }
+            this.glbImgData.data.set(dst.subarray(0, width * height * 4));
+        } 
+        else {
             // Sharp 1x or Bilinear
             this.glbImgData.data.set(src.subarray(0, activeLength));
         }

@@ -8,7 +8,8 @@
  * Render passes, sprites, and post-processors are delegated to specialized subservices.
  * Injects the WebGL2 Rendering Context and applies native analog DAC resistor palettes (SRP).
  * 
- * OPTIMIZED: Utilizes Typed Arrays (Uint8Array) for deterministic memory allocation.
+ * OPTIMIZED FOR PHASE 3: Added support for previous-frame buffering (Sega 3D Glasses) 
+ * and Light Phaser latch registers (H-Counter/V-Counter overrides).
  */
 
 class Sega315_5124_Vdp {
@@ -34,10 +35,10 @@ class Sega315_5124_Vdp {
      * @param {WebGL2RenderingContext} glContext - Injected GPU context.
      */
     constructor(vdpMode, glContext) {
-        // OPTIMIZATION: 16KB of Video RAM (VRAM) allocated as a contiguous binary buffer
+        // 16KB of Video RAM (VRAM) allocated as a contiguous binary buffer
         this.vRam = new Uint8Array(0x4000);
 
-        // OPTIMIZATION: 32 Bytes of write-only Color RAM (CRAM)
+        // 32 Bytes of write-only Color RAM (CRAM)
         this.colorRam = new Uint8Array(0x20);
 
         // Standard timing configurations resolved via static class namespace
@@ -70,6 +71,11 @@ class Sega315_5124_Vdp {
         this.vcounter = 0;
         this.hcounter = 0;
 
+        // Light Phaser (Lightgun) coordinates and trigger states
+        this.phaserClicked = false;
+        this.phaserX = 0;
+        this.phaserY = 0;
+
         // Default power-up registers values matching real SMS VDP specs
         this.register00 = 0x36;
         this.register01 = 0x80;
@@ -90,14 +96,15 @@ class Sega315_5124_Vdp {
         this.glbResolutionY = 240;
         this.yScreenLines = 192;
 
-        // ========================================================================
         // SEGA NATIVE HARDWARE RESISTOR DAC PALETTE (6-Bit Color Scale)
-        // Replaces flat linear scaling with official analog voltage measurements.
-        // ========================================================================
         this.analogColorScale = new Uint8Array([0, 80, 175, 255]);
 
         // Core Image buffers
         this.glbFrameBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY * 4);
+        
+        // 3D Glasses frame cache (stores the previous completed frame for Anaglyph blending)
+        this.prevFrameBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY * 4);
+        
         this.priBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY);
         this.spriteBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY);
 
@@ -261,12 +268,17 @@ class Sega315_5124_Vdp {
         return currentStatusFlags | 0x1f;
     }    
 
+    /**
+     * Reads a byte from the VDP registers ports.
+     * Intercepts standard H/V Counters requests when the Light Phaser is active.
+     */
     readDataPort(p) {
         if (p === 0x7e) {
-            return this.vcounter;
+            // Latch mouseY if Light Phaser triggers on this frame
+            return this.phaserClicked ? this.phaserY : this.vcounter;
         } else if (p === 0x7f) {
-            console.warn("VDP::CPU read request targeting horizontal counters.");
-            return this.hcounter;
+            // Latch mouseX if Light Phaser triggers on this frame
+            return this.phaserClicked ? this.phaserX : this.hcounter;
         }
         return 0;
     }
@@ -287,7 +299,6 @@ class Sega315_5124_Vdp {
                 const cramIdx = byte0 | (byte1 << 1) | (byte2 << 2) | (byte3 << 3);
                 const curbyte = this.colorRam[cramIdx + (pal * 16)];
 
-                // Decoded using the real analog resistor network
                 const red = this.analogColorScale[curbyte & 0x03];
                 const green = this.analogColorScale[(curbyte & 0x0c) >> 2];
                 const blue = this.analogColorScale[(curbyte & 0x30) >> 4];
@@ -327,7 +338,6 @@ class Sega315_5124_Vdp {
             const cramIdx = (byte0 | (byte1 << 1) | (byte2 << 2) | (byte3 << 3)) & 0x0f;
             const curbyte = this.colorRam[cramIdx + (pal * 16)];
             
-            // Decoded using the real analog resistor network
             const red = this.analogColorScale[curbyte & 0x03];
             const green = this.analogColorScale[(curbyte & 0x0c) >> 2];
             const blue = this.analogColorScale[(curbyte & 0x30) >> 4];
@@ -370,7 +380,6 @@ class Sega315_5124_Vdp {
             const curbyte = this.colorRam[cramIdx + 16];
 
             if (cramIdx !== 0) {
-                // Decoded using the real analog resistor network
                 const red = this.analogColorScale[curbyte & 0x03];
                 const green = this.analogColorScale[(curbyte & 0x0c) >> 2];
                 const blue = this.analogColorScale[(curbyte & 0x30) >> 4];
@@ -521,6 +530,9 @@ class Sega315_5124_Vdp {
             }            
 
             if (this.currentScanlineIndex === 0) {
+                // SEGA 3D GLASSES OPTIMIZATION:
+                // Cache the full frame buffer into `prevFrameBuffer` before resetting or starting the next frame.
+                this.prevFrameBuffer.set(this.glbFrameBuffer);
                 this.cleanSpriteBuffer();
                 return true;
             } else {
