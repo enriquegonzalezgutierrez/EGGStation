@@ -931,6 +931,10 @@ class GenesisVdp {
                 const xFlip = (word & 0x0800) !== 0;
                 const yFlip = (word & 0x1000) !== 0;
 
+                if (tileIndexBase >= 20 && tileIndexBase <= 30) {
+                    console.log(`[VDP Debug] Sprite index ${tableIndex} | Tile: ${tileIndexBase} | Word2: 0x${word.toString(16).toUpperCase()} | H-Flip: ${xFlip} | Y-Flip: ${yFlip} | X-Pos: ${x}`);
+                }
+
                 const paletteLineMask = ((word >> 13) & 3) << 4;
                 const w_priority = (word >> 15) & 1;
 

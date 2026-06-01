@@ -176,7 +176,7 @@ class M68kLogical {
             // --- 4. Immediate Logicals (ANDI, ORI, EORI) to Data/Memory ---
             // Format: [0000][opType:2][00][size:2][mode:3][reg:3]
             if ((opcode & 0xFF00) === 0x0200 || (opcode & 0xFF00) === 0x0000 || (opcode & 0xFF00) === 0x0A00) {
-                const immediateOpType = (opcode >> 9) & 3; // 0=ORI, 1=ANDI, 5=EORI (0x0A)
+                const immediateOpType = (opcode >> 9) & 7; // 0=ORI, 1=ANDI, 5=EORI (0x0A)
                 const sizeRaw = (opcode >> 6) & 3;
                 
                 if (sizeRaw !== 3) {

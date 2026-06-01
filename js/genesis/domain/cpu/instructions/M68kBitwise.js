@@ -43,6 +43,10 @@ class M68kBitwise {
                 const mode = (opcode >> 3) & 7;
                 const destReg = opcode & 7;
 
+                // El modo 1 (Address Register Direct) es inválido para operaciones de bits
+                // y colisiona con el opcode de MOVEP.
+                if (mode === 1) continue;
+
                 opcodeTable[opcode] = () => {
                     const bitNum = cpu.d[srcReg];
                     const isRegister = (mode === 0); // 0 = Data Register Direct

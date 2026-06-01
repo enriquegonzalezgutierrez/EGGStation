@@ -8,20 +8,18 @@
  * control instruction family (JMP, JSR, BSR, RTS, RTE, RTR, Bcc, DBcc, Scc).
  * 
  * Aligned with hardware standards observed in BlastEm to resolve:
- * 1. Cycle-Accurate DBcc Loop Expiry: Evaluates first the conditional status. 
+ * 1. 68000 Strict Offset Compliance: Removes non-existent 32-bit (0xFF) branch 
+ *    displacements for Bcc/BSR/BRA. The 68000 exclusively supports 8-bit and 16-bit 
+ *    offsets. Parsing 32-bit offsets corrupts the PC and skips critical VDP setups.
+ * 2. Cycle-Accurate DBcc Loop Expiry: Evaluates first the conditional status. 
  *    If false, decrements exclusively the lower 16-bit word of Dn, performing 
  *    the PC displacement branch only if the decremented word is NOT equal to -1 (0xFFFF).
- * 2. Privilege Violation Checks on RTE: Restricts RTE execution strictly to 
- *    Supervisor mode (triggering Vector 8 exception otherwise), while allowing 
- *    RTR (which only updates Condition Codes) to execute in User mode.
- * 3. 24-Bit Program Counter Safety Masks: Enforces 24-bit physical address masking 
- *    on all stack pops, JMP destinations, and Bcc branch offsets.
+ * 3. Privilege Violation Checks on RTE: Restricts RTE execution strictly to 
+ *    Supervisor mode (triggering Vector 8 exception otherwise).
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates strictly CPU execution flow and 
  *   branching calculations into a dedicated instruction domain file.
- * - Open/Closed Principle (OCP): Dynamically extends the M68000 global dispatch 
- *   table at bootstrap without modifying core CPU execution engines.
  */
 
 class M68kProgramFlow {
@@ -101,15 +99,14 @@ class M68kProgramFlow {
                     let actualOffset = offset;
                     const basePc = cpu.pc; 
 
-                    // Word-sized (16-bit) and Long-sized (32-bit) displacement decoding
+                    // 68000 Hardware Rule: ONLY 8-bit and 16-bit displacements are supported.
+                    // If the 8-bit displacement is 0, the next 16-bit word is read.
                     if (offset === 0) {
-                        actualOffset = (cpu.bus.readWord(cpu.pc, cpu.pc) << 16) >> 16; // Sign-extend
+                        actualOffset = (cpu.bus.readWord(cpu.pc, cpu.pc) << 16) >> 16; // Sign-extend 16-bit
                         cpu.pc = (cpu.pc + 2) & 0xFFFFFF;
-                    } else if (offset === 0xFF) {
-                        actualOffset = ((cpu.bus.readWord(cpu.pc, cpu.pc) << 16) | cpu.bus.readWord(cpu.pc + 2, cpu.pc)) | 0;
-                        cpu.pc = (cpu.pc + 4) & 0xFFFFFF;
                     } else {
-                        actualOffset = (offset << 24) >> 24; // Sign-extend 8-bit offset
+                        // Sign-extend 8-bit offset directly to 32-bit bounds
+                        actualOffset = (offset << 24) >> 24; 
                     }
 
                     let branchTaken = false;

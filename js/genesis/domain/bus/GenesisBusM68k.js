@@ -16,11 +16,13 @@
  * 3. Version Register Mirroring: Mirrors the version byte across both lanes of the 
  *    16-bit bus on word reads to prevent CPU checks on even/odd byte-lanes from failing.
  * 4. BUSREQ Handshake Alignment: Emulates correct active-low !BUSACK status line feedback.
+ * 5. Automatic Endianness Detection: Automatically swaps bytes only if the ROM 
+ *    is Big-Endian on disk, aligning perfectly with standard browser Uint16Array layouts.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates memory decoding, bank switching, 
  *   and I/O register line arbitration from CPU instruction execution.
- * - Dependency Inversion Principle (DIP): Injects peripheral co-processors via 
+ * - Dependency Inversion Principle (DIP): Receives peripheral co-processors via 
  *   constructor references, maintaining a decoupled communication layer.
  */
 
@@ -101,34 +103,49 @@ class GenesisBusM68k {
     }
 
     /**
-     * Mounts a ROM buffer, swaps bytes to align big-endian file structures 
-     * with little-endian host platforms, parses standard SEGA headers,
-     * and autodetects the console TV/Region standards.
+     * Mounts a ROM buffer, automatically detects its endianness (Big-Endian vs Little-Endian)
+     * by checking the "SEGA" signature at offset 0x100, swaps bytes only if necessary to align
+     * with the host machine's Little-Endian typed arrays, and configures standard parameters.
      * @param {ArrayBuffer} romBuffer - Raw ROM binary.
      */
     setCartridge(romBuffer) {
         if (romBuffer) {
-            // Clone the ArrayBuffer using .slice(0) to prevent mutating the original 
-            // cached browser reference in-place, which would cause corrupt double byte-swapping 
-            // on subsequent loads of the same file.
             const clonedBuffer = romBuffer.slice(0); 
-
             const rawBytes = new Uint8Array(clonedBuffer);
-            for (let i = 0; i < rawBytes.length; i += 2) {
-                const temp = rawBytes[i];
-                rawBytes[i] = rawBytes[i + 1];
-                rawBytes[i + 1] = temp;
+
+            // Real Sega Genesis ROMs are Big-Endian ("SE" at offset 0x100).
+            // - If rawBytes[0x100] is 0x53 ('S') and rawBytes[0x101] is 0x45 ('E'), the file is 
+            //   Big-Endian on disk. We MUST swap them so that the Little-Endian Uint16Array 
+            //   reads them back correctly as Big-Endian!
+            // - If rawBytes[0x100] is 0x45 ('E') and rawBytes[0x101] is 0x53 ('S'), the file is 
+            //   already byte-swapped on disk, so it will read correctly without further swapping.
+            let needByteSwap = false;
+            if (rawBytes.length >= 0x102) {
+                if (rawBytes[0x100] === 0x53 && rawBytes[0x101] === 0x45) {
+                    needByteSwap = true;
+                    console.log("[EGGStation::Bus] Big-Endian ROM on disk. Byte-swapping for Little-Endian Uint16Array alignment...");
+                } else {
+                    console.log("[EGGStation::Bus] Little-Endian ROM on disk. Skipping byte swap.");
+                }
+            }
+
+            if (needByteSwap) {
+                for (let i = 0; i < rawBytes.length; i += 2) {
+                    const temp = rawBytes[i];
+                    rawBytes[i] = rawBytes[i + 1];
+                    rawBytes[i + 1] = temp;
+                }
             }
 
             this.cartridgeRom = new Uint16Array(clonedBuffer);
             this.cartridgeLength = this.cartridgeRom.length;
             
-            // Detect if this is a Sega Mapper / SSF2 game (size >= 512KB and starts with "SEGA SSF" at 0x100)
+            // Detect if this is a Sega Mapper / SSF2 game
             this.detectSegaMapper();
 
             this.setupExternalRam();
 
-            // Autodetect console standard region from the ASCII header at offset 0x1F0 (Word index 248)
+            // Autodetect console standard region from the ASCII header at offset 0x1F0
             this.autodetectRegion();
         } else {
             this.cartridgeRom = null;
@@ -476,7 +493,7 @@ class GenesisBusM68k {
                             this.bankRegisters[regIdx] = value & 0xFF;
                         }
                     }
-                } else if (ioSubChunk === 0x14) { // TMSS Register Check
+                } else if (ioSubChunk === 0x14) { // River / TMSS Register Check
                     if (address === 0xA14000) this.tmssString[0] = value & 0xFFFF;
                     if (address === 0xA14002) this.tmssString[1] = value & 0xFFFF;
                 }
