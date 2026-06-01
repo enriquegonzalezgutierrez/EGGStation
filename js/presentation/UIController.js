@@ -1,17 +1,18 @@
-/* 
+/**
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Presentation Layer: UI Controller (Unified Version with Disassembler Typo Fixed)
+ * Presentation Layer: UI Controller (Z80 Registers Restore and Auto-Refresh)
  * 
  * Maps DOM interactions (buttons, file inputs, selects), keyboard/touch events, 
  * and Physical USB/Bluetooth Gamepads to the Emulator Orchestrator. 
  * Swaps viewports via clean display rules to prevent flexbox offset anomalies (SRP).
  * 
- * OPTIMIZED: Adjusted slider scale divisions to represent 1:1 multipliers (1.0 = standard),
- * eliminating double-multiplication bugs. Synchronized settings state post asynchronous ROM loads.
- * 
- * BUGFIX: Fixed ReferenceError on Z80Disassembler class call during step-debugging.
+ * SOLID Principles:
+ * - Single Responsibility Principle (SRP): Isolates UI event bindings and keyboard 
+ *   layouts from the core execution clocks and system memory buses.
+ * - Dependency Inversion Principle (DIP): Injects the frontend input poller 
+ *   directly into the core's input manager, keeping the domain agnostic of the DOM.
  */
 
 class UIController {
@@ -36,6 +37,26 @@ class UIController {
 
         // Initiate the hardware gamepad polling loop
         this.pollGamepads();
+
+        // Restore the registers panel DOM layout to the original Z80 structure
+        this.restoreZ80Registers();
+
+        // Periodically refresh SMS registers, disassembly and VRAM tile viewer
+        // twice a second (every 500ms) only when the Developer Suite is expanded on screen.
+        this.devIntervalId = setInterval(() => {
+            const devSuite = document.getElementById('developer-suite');
+            
+            // Memory Leak Prevention: If the active controller is no longer this (unloaded/swapped),
+            // clear the interval automatically to free up browser memory.
+            if (typeof activeController !== 'undefined' && activeController !== this) {
+                clearInterval(this.devIntervalId);
+                return;
+            }
+
+            if (devSuite && !devSuite.classList.contains('hidden') && this.orchestrator.isRunning) {
+                this.updateDebuggerUI();
+            }
+        }, 500);
     }
 
     /**
@@ -120,7 +141,7 @@ class UIController {
         bindSlider('sh-phosphor');
         bindSlider('sh-bloom');
 
-        // 11. Developer Mode Debugger Suite Buttons & Inputs
+        // 11. Developer Mode Debugger Suite Buttons & Inputs (Z80 CPU Stepper)
         const dbgPlay = document.getElementById('dbg-play');
         const dbgPause = document.getElementById('dbg-pause');
         const dbgStep = document.getElementById('dbg-step');
@@ -178,7 +199,26 @@ class UIController {
     }
 
     /**
-     * Gathers, decodes and formats all CPU register values, active program disassembly instructions,
+     * Swaps the registers panel DOM layout back to the original Z80 structure.
+     */
+    restoreZ80Registers() {
+        const grid = document.querySelector('.registers-grid');
+        if (grid) {
+            grid.innerHTML = `
+                <div>AF: <span id="reg-af">0040</span></div>
+                <div>BC: <span id="reg-bc">0000</span></div>
+                <div>DE: <span id="reg-de">0000</span></div>
+                <div>HL: <span id="reg-hl">0000</span></div>
+                <div>IX: <span id="reg-ix">FFFF</span></div>
+                <div>IY: <span id="reg-iy">FFFF</span></div>
+                <div>SP: <span id="reg-sp">DFF0</span></div>
+                <div>PC: <span id="reg-pc">0000</span></div>
+            `;
+        }
+    }
+
+    /**
+     * Gathers, decodes and formats all Z80 CPU register values, active program disassembly instructions,
      * and maps active VDP memory patterns onto the secondary diagnostic canvas.
      */
     updateDebuggerUI() {
@@ -187,7 +227,7 @@ class UIController {
         const cpu = this.orchestrator.cpu;
         const reg = cpu.registers;
 
-        // 1. Update CPU Registers Hex text readouts (Padded to 4 uppercase hex characters)
+        // Update CPU Registers Hex text readouts (Padded to 4 uppercase hex characters)
         const updateReg = (id, val) => {
             const el = document.getElementById(id);
             if (el) el.textContent = val.toString(16).toUpperCase().padStart(4, '0');
@@ -202,7 +242,7 @@ class UIController {
         updateReg('reg-sp', reg.sp);
         updateReg('reg-pc', reg.pc);
 
-        // 2. Render Real-time Disassembly Output centered around the active Program Counter
+        // Render Real-time Disassembly Output centered around the active Program Counter
         const disasmBox = document.getElementById('disasm-output');
         if (disasmBox) {
             disasmBox.innerHTML = ''; // Clear previous disassembly text rows
@@ -219,7 +259,7 @@ class UIController {
             });
         }
 
-        // 3. Rasterize active VRAM Pattern Tiles onto the secondary canvas
+        // Rasterize active VRAM Pattern Tiles onto the secondary canvas
         const vramCanvas = document.getElementById('vram-canvas');
         if (vramCanvas) {
             const ctx = vramCanvas.getContext('2d');

@@ -2,7 +2,7 @@
  * Project: EGGStation - Sega Multi-System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Entry Point: Composition Root, Welcome Banner, & Console Swapper (Dev Mode Enabled)
+ * Application Entry Point: Composition Root, Welcome Banner, & Console Swapper (Debugger Purge)
  * 
  * This file serves as the system Bootstrapper. It coordinates the hot-swapping 
  * between the Sega Master System and Sega Genesis emulators dynamically, 
@@ -113,6 +113,15 @@ function bootConsole(consoleType) {
     const newSelector = oldSelector.cloneNode(true);
     oldSelector.parentNode.replaceChild(newSelector, oldSelector);
 
+    // FIX: Clone the Debugger control buttons container synchronously during hot-swaps.
+    // This purges all old, accumulated Event Listeners of 'dbg-play', 'dbg-pause', and 'dbg-step' snychronously,
+    // ensuring zero event conflicts between SMS and Genesis debugger states.
+    const dbgSection = document.getElementById('dev-controls');
+    if (dbgSection) {
+        const newDbgSection = dbgSection.cloneNode(true);
+        dbgSection.parentNode.replaceChild(newDbgSection, dbgSection);
+    }
+
     // 3. Setup canvas viewport contexts
     const videoCanvas = document.getElementById("smsdisplay");
     const videoContext = videoCanvas.getContext("2d", { willReadFrequently: true });
@@ -155,7 +164,6 @@ function bootConsole(consoleType) {
             document.getElementById('sms-config-section').classList.remove('hidden');
             document.getElementById('dev-toggle-btn').classList.remove('hidden');
 
-            // UNTOUCHED: SMS Initialization remains letter-for-letter identical to original code
             activeOrchestrator = new EmulatorOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");
                 if (fpsElement) fpsElement.textContent = `${fps} FPS`;
@@ -173,9 +181,7 @@ function bootConsole(consoleType) {
             // Hide Master System configurations (not used in Genesis standard mode)
             document.getElementById('sms-config-section').classList.add('hidden');
             
-            // FIX: Removed the line that hid 'dev-toggle-btn' on Genesis mode.
-            // This synchronously enables the "DEV MODE" toggle button for the Sega Genesis 
-            // as well, allowing full access to real-time 68K CPU diagnostics.
+            // Un-hide the "DEV MODE" button on Genesis mode as well
             document.getElementById('dev-toggle-btn').classList.remove('hidden'); 
             
             // Collapse developer diagnostics suite to preserve mobile/desktop grid spaces
@@ -191,8 +197,6 @@ function bootConsole(consoleType) {
             glCanvas.style.position = "absolute";
             videoCanvas.classList.remove('hidden');
 
-            // Pass glContext to the GenesisOrchestrator constructor 
-            // to enable dynamic GPU-accelerated CRT Shader compilation and filters
             activeOrchestrator = new GenesisOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");
                 if (fpsElement) fpsElement.textContent = `${fps} FPS`;

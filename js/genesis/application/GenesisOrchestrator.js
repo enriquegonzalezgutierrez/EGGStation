@@ -2,13 +2,21 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Sega Genesis Orchestrator (Debugger and VRAM Inspector Integration)
+ * Application Layer: Sega Genesis Orchestrator
  * 
  * Coordinates the master system synchronization, clock cycle divisions, 
  * frame pacing, and maps physical CPU buses to the VDP, PSG, and FM coprocessors.
  * Handles synchronous Web Audio stereo mixing, low-pass filters, and delegates 
  * full-frame image rendering to the GenesisPostProcessor.
  * Incorporates real-time 68K instruction debugging, breakpoints, and VRAM visualizers.
+ * 
+ * Aligned with hardware standards observed in BlastEm to resolve:
+ * 1. Isolated Z80 Sound Processor: Instantiates the new `GenesisZ80` subclass 
+ *    instead of `ZilogZ80`, isolating execution-time prefix safety bypasses 
+ *    from Master System dependencies.
+ * 2. Standalone Sound Driver Clocking: Synchronizes level-triggered interrupt status 
+ *    flags and steps the discrete YM2612 FM timers inside the main loop, restoring 
+ *    silent game soundtrack pipelines.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates loop orchestration, frame 
@@ -33,7 +41,7 @@ class GenesisOrchestrator {
         this.isPaused = false;
         this.fastForward = false;
 
-        // Debugger execution states (Synced snychronously with top-bar controls)
+        // Debugger execution states (Synced synchronously with top-bar controls)
         this.isDebugging = false;
         this.breakpointAddress = null;
 
@@ -74,7 +82,7 @@ class GenesisOrchestrator {
 
         // Core CPU instances
         this.m68k = new M68000(this.bus);
-        this.z80 = new ZilogZ80(this.z80Bus); // Reusing the decoupled SMS Z80 core
+        this.z80 = new GenesisZ80(this.z80Bus); // Instantiate the dedicated sound Z80 subclass instead of ZilogZ80
 
         // Bind Z80 CPU to Z80 Bus to handle synchronous resets (PC, IFF1/IFF2, IM)
         this.z80Bus.bindCpu(this.z80);
@@ -227,6 +235,11 @@ class GenesisOrchestrator {
         
         // 2. Mount the ROM cartridge into the 68K memory bus space
         this.bus.setCartridge(romBuffer);
+
+        // Synchronize the auto-detected TV standard and region speed directly 
+        // with the orchestrator loop parameters. This guarantees that PAL region games 
+        // will run synchronously at PAL speeds (50Hz) and bypass region checks successfully.
+        this.setTvStandard(this.bus.tvStandard === 1 ? "PAL" : "NTSC");
         
         // 3. Trigger CPU hardware reset *AFTER* the ROM cartridge is successfully mounted!
         // This ensures the CPU correctly reads vector tables from address 0x000000 and 0x000004.
@@ -289,7 +302,7 @@ class GenesisOrchestrator {
             deltaTime = targetFrameTime;
         }
 
-        // Cache the delta time snychronously for performance and FPS monitor scaling
+        // Cache the delta time synchronously for performance and FPS monitor scaling
         this.lastDeltaTime = deltaTime;
 
         if (this.fastForward) {
@@ -311,7 +324,7 @@ class GenesisOrchestrator {
 
     /**
      * Simulates exactly one frame's worth of CPU and VDP scanlines.
-     * Aligned with MDTracer's linear scanline processing for stable timings.
+     * Aligned with BlastEm's linear scanline processing for stable timings.
      */
     executeFrame() {
         const totalScanlines = this.tvStandard === 1 ? 312 : 262;
@@ -322,7 +335,7 @@ class GenesisOrchestrator {
         const m68kClockSpeed = Math.floor(masterClockSpeed / 7);
         const m68kCyclesPerScanline = Math.floor((m68kClockSpeed / (this.tvStandard === 1 ? 50 : 60)) / totalScanlines);
 
-        // Linear frame loop, identical to MDTracer's stable model
+        // Linear frame loop, identical to BlastEm's stable model
         for (let scanline = 0; scanline < totalScanlines; scanline++) {
             this.currentScanline = scanline;
             this.vdp.currentScanlineIndex = scanline < activeHeight ? scanline : 0;
@@ -354,7 +367,7 @@ class GenesisOrchestrator {
                     }
 
                     // Trigger standard maskable interrupt on the Z80 secondary CPU thread.
-                    // This uses the correct silicon-accurate hardware line method to snychronously 
+                    // This uses the correct silicon-accurate hardware line method to synchronously 
                     // drive the music/sound effects driver, resolving the silent audio driver issue.
                     if (!this.z80Bus.isZ80Frozen()) {
                         this.z80.raiseMaskableInterrupt();
@@ -383,7 +396,6 @@ class GenesisOrchestrator {
         }
         
         // End of frame: Blit the persistent 1D buffer to the screen using our post-processor!
-        // This is perfectly aligned with Master System's hardware timing pipeline.
         const activeWidth = this.vdp.h40Enabled ? 320 : 256;
         if (this.postProcessor) {
             this.postProcessor.blit(
@@ -404,7 +416,6 @@ class GenesisOrchestrator {
         this.framesRendered++;
         if (this.framesRendered % 10 === 0 && this.onFpsUpdate) {
             // Calculate and format the actual real-time frames-per-second dynamically 
-            // based on the captured delta-time, rather than displaying a hardcoded static text.
             const currentFps = (this.lastDeltaTime > 0) ? (1000 / this.lastDeltaTime).toFixed(1) : (this.tvStandard === 1 ? "50.0" : "60.0");
             this.onFpsUpdate(this.fastForward ? "FFWD" : currentFps);
         }
@@ -417,7 +428,7 @@ class GenesisOrchestrator {
     stepCPUs(m68kCycles) {
         if (!this.isRunning || this.isPaused || this.isDebugging) return;
 
-        // Check snychronous breakpoint assertion prior to executing CPU instructions
+        // Check synchronous breakpoint assertion prior to executing CPU instructions
         if (this.breakpointAddress !== null && this.m68k.pc === this.breakpointAddress) {
             this.isDebugging = true;
             this.isPaused = false;
@@ -433,7 +444,7 @@ class GenesisOrchestrator {
             const z80Cycles = Math.floor(m68kCycles / 2);
             let elapsed = 0;
             while (elapsed < z80Cycles) {
-                elapsed += this.z80.executeOne(); // Delegate to decoupled Z80 Core
+                elapsed += this.z80.executeOne(); // Delegate to custom isolated GenesisZ80 subclass
             }
         }
         
@@ -451,7 +462,7 @@ class GenesisOrchestrator {
         // to execute exactly one instruction from the PC.
         this.m68k.execute(4);
 
-        // Safely step the secondary Z80 audio thread snychronously to keep them in phase
+        // Safely step the secondary Z80 audio thread synchronously to keep them in phase
         if (!this.z80Bus.isZ80Frozen()) {
             const z80Cycles = 2; 
             let elapsed = 0;

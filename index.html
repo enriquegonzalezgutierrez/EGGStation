@@ -275,6 +275,10 @@
     <script src="js/domain/cpu/instructions/Z80ShiftRotate.js"></script>
     <script src="js/domain/cpu/instructions/Z80SystemIO.js"></script>
     <script src="js/domain/cpu/ZilogZ80.js"></script>
+    
+    <!-- NUEVO: CPU Z80 específica de Genesis cargada antes de interactuar con el bus de Genesis -->
+    <script src="js/genesis/domain/cpu/GenesisZ80.js"></script>
+
     <script src="js/domain/cartridge/mappers/BaseMapper.js"></script>
     <script src="js/domain/cartridge/mappers/SegaMapper.js"></script>
     <script src="js/domain/cartridge/mappers/CodemastersMapper.js"></script>
@@ -302,7 +306,7 @@
     <script src="js/genesis/domain/cpu/instructions/M68kBitwise.js"></script>
     <script src="js/genesis/domain/cpu/instructions/M68kShiftRotate.js"></script>
     <script src="js/genesis/domain/cpu/instructions/M68kProgramFlow.js"></script>
-    <script src="js/genesis/domain/cpu/instructions/M68kSystemExceptions.js"></script> <!-- NEW: Handles TRAP, STOP, MOVEP -->
+    <script src="js/genesis/domain/cpu/instructions/M68kSystemExceptions.js"></script>
     
     <!-- SEGA GENESIS INFRASTRUCTURE / PRESENTATION SCRIPTS -->
     <script src="js/genesis/domain/cpu/m68000.js"></script>
@@ -314,8 +318,7 @@
     <script src="js/genesis/infrastructure/audio/GenesisYm2612.js"></script>
     <script src="js/genesis/infrastructure/video/GenesisVdp.js"></script>
     
-    <!-- NEW: GPU-Accelerated Sega Genesis Post-Processing Filter Pipeline -->
-    <!-- Loaded snychronously before GenesisOrchestrator to resolve core execution dependencies -->
+    <!-- GPU-Accelerated Sega Genesis Post-Processing Filter Pipeline -->
     <script src="js/genesis/infrastructure/video/GenesisPostProcessor.js"></script>
     
     <script src="js/genesis/domain/controller/GenesisControllerManager.js"></script>

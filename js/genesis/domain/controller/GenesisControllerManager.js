@@ -2,7 +2,7 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: Genesis Input Controllers and Multitaps
+ * Domain Layer: Genesis Input Controllers and Multitaps (Cycle-Accurate Watchdog)
  * 
  * Emulates the multiplexing hardware of standard Sega Genesis controllers 
  * and multitap splitters. Processes active-low digital logic for standard 
@@ -12,7 +12,7 @@
  * - Single Responsibility Principle (SRP): Isolates strictly controller port 
  *   multiplexing logic from the system bus and keyboard polling interfaces.
  * - Dependency Inversion Principle (DIP): Receives frontend input polling 
- *   mechanics through a clean decoupled callback interface.
+ *   mechanics through a clean, decoupled callback interface.
  */
 
 // General standard button definitions
@@ -29,28 +29,33 @@ const GENESIS_CONTROLLER_Z      = 9;
 const GENESIS_CONTROLLER_START  = 10;
 const GENESIS_CONTROLLER_MODE   = 11;
 
+// 1.5ms physical hardware timeout mapped to M68K CPU clock cycles.
+// At ~7.67 MHz NTSC clock rate: 1500 microseconds * 7.670453 cycles/microsecond = 11505 cycles.
+const M68K_CLOCK_TIMEOUT_LIMIT = 11505;
+
 // ========================================================================
 // 1. STANDARD 3/6-BUTTON CONTROLLER CORE
 // ========================================================================
 class GenesisController {
     constructor() {
-        this.lastThWriteTime = 0; // Milliseconds timestamp of the last TH write (using high-precision performance.now)
-        this.strobes = 0;         // Strobe state counter for 6-button polling
-        this.thBit = 1;           // State of the physical TH pin (Defaults to pulled-up HIGH)
+        this.lastThWriteCycle = 0; // CPU clock timestamp of the last TH pin write
+        this.strobes = 0;          // Strobe state counter for 6-button polling (0 to 3)
+        this.thBit = 1;            // State of the physical TH pin (Defaults to pulled-up HIGH)
     }
 
     initialise() {
-        this.lastThWriteTime = 0;
+        this.lastThWriteCycle = 0;
         this.strobes = 0;
         this.thBit = 1;
     }
 
     /**
-     * Resets the strobe counter to 0 if the 1.5ms watchdog threshold is exceeded.
+     * Resets the strobe counter to 0 if the 1.5ms watchdog threshold (11505 CPU cycles) 
+     * is exceeded on the emulation timeline.
+     * @param {number} currentCycle - Current elapsed CPU cycles.
      */
-    updateWatchdog() {
-        const now = performance.now();
-        if (now - this.lastThWriteTime > 1.5) {
+    updateWatchdog(currentCycle) {
+        if (currentCycle - this.lastThWriteCycle > M68K_CLOCK_TIMEOUT_LIMIT) {
             this.strobes = 0; // Watchdog timed out, reset selection phase back to 0
         }
     }
@@ -58,11 +63,12 @@ class GenesisController {
     /**
      * Reads the multiplexed 6-bit button data from the controller port.
      * @param {number} controllerIndex - Index of the player (0 to 3).
+     * @param {number} currentCycle - Current elapsed CPU cycles.
      * @param {Function} pollerFn - Injected frontend input poller function.
      * @returns {number} Active-low 6-bit button state (0 = pressed, 1 = released).
      */
-    read(controllerIndex, pollerFn) {
-        this.updateWatchdog();
+    read(controllerIndex, currentCycle, pollerFn) {
+        this.updateWatchdog(currentCycle);
 
         // Helper to query active-low button bits securely
         const getButtonBit = (btn) => {
@@ -103,8 +109,8 @@ class GenesisController {
                          | (getButtonBit(GENESIS_CONTROLLER_A) << 4);
 
                 case 3:
-                    // FIX: Strobe 3 LOW pulls down lower 4 bits to 0x00 to signal 6-button gamepad signature.
-                    // This tells Sega software a 6-button pad is actively connected.
+                    // Strobe 3 LOW: Pulls down lower 4 bits (D3-D0) to 0x00 to signal 6-button gamepad signature.
+                    // This is the physical hardware handshake that identifies a 6-button controller.
                     return (getButtonBit(GENESIS_CONTROLLER_START) << 5)
                          | (getButtonBit(GENESIS_CONTROLLER_A) << 4)
                          | 0x00; 
@@ -113,20 +119,20 @@ class GenesisController {
     }
 
     /**
-     * Writes to the controller port to update the TH pin.
+     * Writes to the controller port to update the TH pin state.
      * @param {number} value - 8-bit output byte from the Bus.
+     * @param {number} currentCycle - Current elapsed CPU cycles.
      */
-    write(value) {
+    write(value, currentCycle) {
         const newThBit = (value & 0x40) !== 0 ? 1 : 0;
-        const now = performance.now();
 
         // Reset the multiplexer strobe if the timeout period has expired between writes
-        if (now - this.lastThWriteTime > 1.5) {
+        if (currentCycle - this.lastThWriteCycle > M68K_CLOCK_TIMEOUT_LIMIT) {
             this.strobes = 0;
         }
-        this.lastThWriteTime = now;
+        this.lastThWriteCycle = currentCycle;
 
-        // FIX: Strobe count increments strictly on the FALLING edge (1 to 0 transition) of the TH pin
+        // Strobe count increments strictly on the FALLING edge (1 to 0 transition) of the TH pin
         if (newThBit === 0 && this.thBit === 1) {
             this.strobes = (this.strobes + 1) % 4;
         }
@@ -154,13 +160,13 @@ class GenesisMultitapEA {
         this.selectedController = 0;
     }
 
-    readPort(portIndex, microseconds, pollerFn) {
+    readPort(portIndex, currentCycle, pollerFn) {
         switch (portIndex) {
             case 0:
                 if (this.selectedController > 3) {
                     return 0x7C; // EA Multitap Identification signature byte
                 }
-                return this.controllers[this.selectedController].read(this.selectedController, pollerFn);
+                return this.controllers[this.selectedController].read(this.selectedController, currentCycle, pollerFn);
 
             case 1:
                 return 0xFF; // Port 1 reads are unpopulated in standard EA protocols
@@ -168,10 +174,10 @@ class GenesisMultitapEA {
         return 0xFF;
     }
 
-    writePort(portIndex, microseconds, value) {
+    writePort(portIndex, currentCycle, value) {
         switch (portIndex) {
             case 0:
-                this.controllers[this.selectedController].write(value);
+                this.controllers[this.selectedController].write(value, currentCycle);
                 break;
 
             case 1:
@@ -181,12 +187,12 @@ class GenesisMultitapEA {
         }
     }
 
-    readController(controllerIndex, microseconds, pollerFn) {
-        return this.controllers[controllerIndex].read(controllerIndex, pollerFn);
+    readController(controllerIndex, currentCycle, pollerFn) {
+        return this.controllers[controllerIndex].read(controllerIndex, currentCycle, pollerFn);
     }
 
-    writeController(controllerIndex, microseconds, value) {
-        this.controllers[controllerIndex].write(value);
+    writeController(controllerIndex, currentCycle, value) {
+        this.controllers[controllerIndex].write(value, currentCycle);
     }
 }
 
@@ -299,15 +305,15 @@ class GenesisControllerManager {
     /**
      * Reads a byte from the target controller port.
      */
-    read(portIndex, microseconds) {
+    read(portIndex, currentCycle) {
         portIndex = portIndex & 1;
 
         switch (this.protocol) {
             case GENESIS_CONTROLLER_PROTOCOL_STANDARD:
-                return this.eaMultitap.readController(portIndex, microseconds, this.inputPoller);
+                return this.eaMultitap.readController(portIndex, currentCycle, this.inputPoller);
 
             case GENESIS_CONTROLLER_PROTOCOL_EA_MULTITAP:
-                return this.eaMultitap.readPort(portIndex, microseconds, this.inputPoller);
+                return this.eaMultitap.readPort(portIndex, currentCycle, this.inputPoller);
 
             case GENESIS_CONTROLLER_PROTOCOL_SEGA_TAP:
                 return this.segaMultitaps[portIndex].read(this.inputPoller);
@@ -319,16 +325,16 @@ class GenesisControllerManager {
     /**
      * Writes a byte to the target controller port.
      */
-    write(portIndex, microseconds, value) {
+    write(portIndex, currentCycle, value) {
         portIndex = portIndex & 1;
 
         switch (this.protocol) {
             case GENESIS_CONTROLLER_PROTOCOL_STANDARD:
-                this.eaMultitap.writeController(portIndex, microseconds, value);
+                this.eaMultitap.writeController(portIndex, currentCycle, value);
                 break;
 
             case GENESIS_CONTROLLER_PROTOCOL_EA_MULTITAP:
-                this.eaMultitap.writePort(portIndex, microseconds, value);
+                this.eaMultitap.writePort(portIndex, currentCycle, value);
                 break;
 
             case GENESIS_CONTROLLER_PROTOCOL_SEGA_TAP:

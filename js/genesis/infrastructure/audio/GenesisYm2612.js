@@ -2,19 +2,25 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain / Infrastructure Layer: Sega Genesis Yamaha YM2612 FM Synthesizer (Volume Scale Fix)
+ * Domain / Infrastructure Layer: Sega Genesis Yamaha YM2612 FM Synthesizer
  * 
  * Emulates the central 6-channel frequency modulation (FM) synthesizer chip 
  * of the Sega Genesis system bus. Handles 4-operator voice algorithms, 
  * independent LFO phase/amplitude modulations, custom DAC sampling registers, 
  * and hardware Timer A / Timer B interrupts.
  * 
+ * Aligned with hardware standards observed in BlastEm to resolve:
+ * 1. 9-Bit Sign-Magnitude DAC Emulation: Replicates physical hardware truncation 
+ *    by masking intermediate channel outputs with 0x3FE0 and extending the sign 
+ *    upon detecting the 0x2000 sign bit.
+ * 2. DAC Volume/Luminance Clamping: Applies strict hardware limits to the DAC accumulator 
+ *    outputs (maximum: 0x1FE0, minimum: -0x1FF0) to prevent wrapping digital distortion.
+ * 3. Discrete "Ladder Effect" Crossover Distortion: Simulates physical discrete YM2612 
+ *    circuitry by shifting the mixed zero-levels by a constant analog offset of 0x70.
+ * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates complex FM mathematical 
- *   operator synthesis, envelope scaling, and LFO modulations from general buses,
- *   moving synchronous timing updates out of asynchronous audio synthesizers.
- * - Open/Closed Principle (OCP): Designed with modular algorithm routes that 
- *   process channel streams without modifying the master sound mixer.
+ *   operator synthesis, envelope scaling, and LFO modulations from general buses.
  */
 
 // 12-bit logarithmic attenuation sine table (1 quarter of a sine wave)
@@ -28,13 +34,13 @@ const GENESIS_YM_SINE_TABLE = new Uint16Array([
     0x00D7, 0x00D4, 0x00D1, 0x00CD, 0x00CA, 0x00C7, 0x00C4, 0x00C1, 0x00BE, 0x00BB, 0x00B8, 0x00B5, 0x00B2, 0x00AF, 0x00AC, 0x00A9,
     0x00A7, 0x00A4, 0x00A1, 0x009F, 0x009C, 0x0099, 0x0097, 0x0094, 0x0092, 0x008F, 0x008D, 0x008A, 0x0088, 0x0086, 0x0083, 0x0081,
     0x007F, 0x007D, 0x007A, 0x0078, 0x0076, 0x0074, 0x0072, 0x0070, 0x006E, 0x006C, 0x006A, 0x0068, 0x0066, 0x0064, 0x0062, 0x0060,
-    0x005E, 0x005C, 0x005B, 0x0059, 0x0057, 0x0055, 0x0053, 0x0052, 0x0050, 0x004E, 0x004D, 0x004B, 0x004A, 0x0048, 0x0046, 0x0045,
-    0x0043, 0x0042, 0x0040, 0x003F, 0x003E, 0x003C, 0x003B, 0x0039, 0x0038, 0x0037, 0x0035, 0x0034, 0x0033, 0x0031, 0x0030, 0x002F,
-    0x002E, 0x002D, 0x002B, 0x002A, 0x0029, 0x0028, 0x0027, 0x0026, 0x0025, 0x0024, 0x0023, 0x0022, 0x0021, 0x0020, 0x001F, 0x001E,
-    0x001D, 0x001C, 0x001B, 0x001A, 0x0019, 0x0018, 0x0017, 0x0017, 0x0016, 0x0015, 0x0014, 0x0014, 0x0013, 0x0012, 0x0011, 0x0011,
-    0x0010, 0x000F, 0x000F, 0x000E, 0x000D, 0x000D, 0x000C, 0x000C, 0x000B, 0x000A, 0x000A, 0x0009, 0x0009, 0x0008, 0x0008, 0x0007,
-    0x0007, 0x0007, 0x0006, 0x0006, 0x0005, 0x0005, 0x0005, 0x0004, 0x0004, 0x0004, 0x0003, 0x0003, 0x0003, 0x0002, 0x0002, 0x0002,
-    0x0002, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+    0x005E, 0x005C, 0x005B, 0x0059, 0x0057, 0x0055, 0x0053, 0x0052, 0x0050, 0x004E, 0x004D, 0x004B, 0x004A, 0x0048, 0x0045, 0x0043,
+    0x0042, 0x0040, 0x003F, 0x003E, 0x003C, 0x003B, 0x0039, 0x0038, 0x0037, 0x0035, 0x0034, 0x0033, 0x0031, 0x0030, 0x002F, 0x002E,
+    0x002D, 0x002B, 0x002A, 0x0029, 0x0028, 0x0027, 0x0026, 0x0025, 0x0024, 0x0023, 0x0022, 0x0021, 0x0020, 0x001F, 0x001E, 0x001D,
+    0x001C, 0x001B, 0x001A, 0x0019, 0x0018, 0x0017, 0x0017, 0x0016, 0x0015, 0x0014, 0x0014, 0x0013, 0x0012, 0x0011, 0x0011, 0x0010,
+    0x000F, 0x000F, 0x000E, 0x000D, 0x000D, 0x000C, 0x000C, 0x000B, 0x000A, 0x000A, 0x0009, 0x0009, 0x0008, 0x0008, 0x0007, 0x0007,
+    0x0007, 0x0006, 0x0006, 0x0005, 0x0005, 0x0005, 0x0004, 0x0004, 0x0004, 0x0003, 0x0003, 0x0003, 0x0002, 0x0002, 0x0002, 0x0002,
+    0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
 ]);
 
 // 11-bit power lookup table converting logarithms back to linear values
@@ -181,6 +187,8 @@ class GenesisYm2612 {
         this.chPanLeft = new Uint8Array(6);
         this.chPanRight = new Uint8Array(6);
 
+        this.channelsOutput = new Int16Array(6); // 14-bit resolved channels output array
+
         // Special Channel 3 Multi-Frequency Arrays
         this.ch3Frequencies = new Uint16Array(4);
         this.ch3PerOperatorFrequenciesEnabled = 0;
@@ -263,6 +271,8 @@ class GenesisYm2612 {
         this.chPanLeft.fill(1); 
         this.chPanRight.fill(1);
 
+        this.channelsOutput.fill(0);
+
         this.ch3Frequencies.fill(0);
         this.ch3PerOperatorFrequenciesEnabled = 0;
         this.ch3CsmModeEnabled = 0;
@@ -308,7 +318,6 @@ class GenesisYm2612 {
 
         const keyCodes = [0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 3, 3, 3, 3, 3, 3];
         
-        // Corrected detune lookup table to be fully 3-dimensional, preventing NaN values
         const detuneLookup = [
             // Block 0
             [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
@@ -335,7 +344,6 @@ class GenesisYm2612 {
 
         const fNumberUpper = fNumber >> 4;
         
-        // Precise phase LFO shift logic matching fm.c pg_lfo_sh1/sh2 tables
         const lfoShifts = [
             [[7, 7], [7, 7], [7, 7], [7, 7], [7, 7], [7, 7], [7, 7], [7, 7]],
             [[7, 7], [7, 7], [7, 7], [7, 7], [7, 2], [7, 2], [7, 2], [7, 2]],
@@ -603,7 +611,6 @@ class GenesisYm2612 {
 
     /**
      * Steps the physical Z80/M68K timers on the CPU execution thread.
-     * Aligned with MDTracer's stable timer_control tick model.
      * @param {number} cycles - Clock cycles passed.
      * @returns {number} YM2612 Status Register (IRQ flags).
      */
@@ -615,8 +622,6 @@ class GenesisYm2612 {
             }
         }
 
-        // Step Timer A and Timer B synchronously on the CPU execution thread.
-        // This ensures the timers decrement while the CPU is executing tight polling wait loops.
         this.timerCycleAccumulator += cycles;
 
         while (this.timerCycleAccumulator >= 144) {
@@ -637,7 +642,7 @@ class GenesisYm2612 {
             }
 
             this.timerBAccumulator++;
-            if (this.timerBAccumulator >= 16) { // Timer B is 16 times slower than Timer A
+            if (this.timerBAccumulator >= 16) { 
                 this.timerBAccumulator = 0;
 
                 if (this.timerBEnabled !== 0) {
@@ -734,7 +739,8 @@ class GenesisYm2612 {
 
     /**
      * Mixer core: Runs all algorithm routes per active channel.
-     * Generates stereo audio signals and writes them directly to the sound buffer.
+     * Generates stereo audio signals, applying correct 9-bit sign-magnitude DAC truncation
+     * and optional discrete analog ladder crossover distortion offsets.
      * @param {Int16Array} sampleBuffer - Interactive signed 16-bit audio block.
      * @param {number} totalFrames - Total frames to process on this step.
      */
@@ -804,30 +810,40 @@ class GenesisYm2612 {
 
                 let finalSample = isDac ? dacSampleValue : outSample;
 
-                if (this.ladderEffectDisabled === 0) {
-                    if (finalSample < 0) {
-                        finalSample += 1;
-                        finalSample -= 4; 
-                    } else {
-                        finalSample += 4; 
-                    }
-                }
-
                 if (channelDisabled) {
                     finalSample = 0;
                 }
 
-                // FIX: Map channel outputs directly to the stereo mixing accumulators 
-                // in their native amplitude scale, removing the incorrect *16 multiplier 
-                // which caused massive integer overflow and signal destruction.
-                const volumeOffset = finalSample; 
+                // 1:1 hardware volume-scaling limits and 14-bit resolved masking (BlastEm Aligned)
+                let value = finalSample;
+                if (value > 0x1FE0) {
+                    value = 0x1FE0; // Upper volume clamp
+                } else if (value < -0x1FF0) {
+                    value = -0x1FF0; // Lower volume clamp
+                } else {
+                    value &= 0x3FE0; // 9-bit resolution truncation (sign-magnitude layout)
+                    if (value & 0x2000) {
+                        value |= 0xC000; // Sign-extend 14-bit bounds
+                    }
+                }
 
-                if (this.chPanLeft[ch] !== 0)  lt += volumeOffset;
-                if (this.chPanRight[ch] !== 0) rt += volumeOffset;
+                // Apply discrete analog "Ladder Effect" crossover offset distortion
+                if (this.ladderEffectDisabled === 0) {
+                    if (value >= 0) {
+                        value += 0x70; // Hardwired zero offset shift (positive sign)
+                    } else {
+                        value -= 0x70; // Hardwired zero offset shift (negative sign)
+                    }
+                }
+
+                this.channelsOutput[ch] = value;
+
+                // Accumulate stereo channels
+                if (this.chPanLeft[ch] !== 0)  lt += this.channelsOutput[ch];
+                if (this.chPanRight[ch] !== 0) rt += this.channelsOutput[ch];
             }
 
-            // Clip the combined left/right streams to signed 16-bit limits (-32768 to 32767)
-            // before storing them into the Int16Array to prevent wrapping digital distortion.
+            // Clip the combined stereo streams safely to signed 16-bit boundaries
             if (lt > 32767) lt = 32767;
             else if (lt < -32768) lt = -32768;
             if (rt > 32767) rt = 32767;
