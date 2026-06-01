@@ -74,10 +74,15 @@ class M68kLogical {
                 const srcMode = (opcode >> 3) & 7;
                 const srcReg = opcode & 7;
 
-                // Skip if this opcode matches MULU/MULS, ABCD, SBCD or EXG groups
-                if ((opType === 0xC && (opMode === 3 || opMode === 7 || opMode === 4)) ||
-                    (opType === 0x8 && (opMode === 3 || opMode === 7 || opMode === 4))) {
+                // FIX: opMode === 4 is perfectly valid for AND/OR (It represents Byte Size to Memory!)
+                // Exclude only modes 3 and 7 (which belong to MUL, DIV, ABCD, SBCD instruction groups)
+                if (opMode === 3 || opMode === 7) {
                     continue; 
+                }
+                
+                // Extra protection: EXG (Exchange) overlaps with opType 0xC (AND) when opMode is 5 or 6 and srcMode is 1.
+                if (opType === 0xC && srcMode === 1 && (opMode === 5 || opMode === 6)) {
+                    continue;
                 }
 
                 opcodeTable[opcode] = () => {
@@ -127,7 +132,6 @@ class M68kLogical {
 
             // --- 3. EOR (Exclusive OR) Group ---
             // Format: [1011][reg:3][1][size_raw:2][mode:3][reg:3]
-            // FIX: Removed 0x1100 overlap check to prevent breaking MOVE.B instructions targeting A1/D1 registers!
             if ((opcode & 0xF100) === 0xB100) {
                 const reg = (opcode >> 9) & 7;
                 const sizeRaw = (opcode >> 6) & 3;

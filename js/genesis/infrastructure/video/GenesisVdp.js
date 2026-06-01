@@ -12,27 +12,41 @@
  */
 
 // ========================================================================
-// SEGA GENESIS VDP LOW-LEVEL UTILITY PORTED HELPER FUNCTIONS
+// SEGA GENESIS VDP LOW-LEVEL UTILITY HELPER FUNCTIONS
 // ========================================================================
 
+/**
+ * Calculates the absolute VRAM address for the Sprite Attribute Table (SAT).
+ */
 function GetSpriteTableAddress(state) {
     const mask = ~(0x1FF) << (state.h40Enabled ? 1 : 0);
     return (state.spriteTableAddress & mask) >>> 0;
 }
 
+/**
+ * Calculates the absolute VRAM address for the Window Plane.
+ */
 function GetWindowPlaneTableAddress(state) {
     const mask = ~(0x7FF) << (state.h40Enabled ? 1 : 0);
     return (state.windowAddress & mask) >>> 0;
 }
 
+/**
+ * Retrieves and decodes a sprite directly from VRAM.
+ * FIX: Replaced buggy write-interception cache with direct, real-time VRAM reads.
+ * Resolves scattered/dismembered sprites in games that use SAT Double Buffering (e.g., Castle of Illusion).
+ */
 function VDP_GetCachedSprite(state, spriteIndex) {
-    const cacheOffset = spriteIndex * 4;
-    const bytes = state.spriteTableCache;
+    const spriteTableBase = GetSpriteTableAddress(state) + (spriteIndex * 8);
 
-    const y = (bytes[cacheOffset] | ((bytes[cacheOffset + 1] & 3) << 8)) & (state.doubleResolutionEnabled ? 0x3FF : 0x1FF);
-    const link = bytes[cacheOffset + 2] & 0x7F;
-    const width = ((bytes[cacheOffset + 3] >> 2) & 3) + 1;
-    const height = (bytes[cacheOffset + 3] & 3) + 1;
+    // Read Word 0 (Y Coordinate)
+    const y = state.readVRAMWord(spriteTableBase) & (state.doubleResolutionEnabled ? 0x3FF : 0x1FF);
+    
+    // Read Word 1 (Size and Link)
+    const word1 = state.readVRAMWord(spriteTableBase + 2);
+    const link = word1 & 0x7F;
+    const width = ((word1 >> 10) & 3) + 1;
+    const height = ((word1 >> 8) & 3) + 1;
 
     return { y, link, width, height };
 }
@@ -43,8 +57,6 @@ class GenesisVdp {
         this.cram = new Uint16Array(64);     
         this.vsram = new Uint16Array(64);    
         this.vsramCache = new Uint16Array(2);
-
-        this.spriteTableCache = new Uint8Array(128 * 4); 
 
         this.spriteRowCacheTotal = new Uint8Array(256);
         this.spriteRowCacheTableIdx = new Uint8Array(256 * 20);
@@ -106,6 +118,7 @@ class GenesisVdp {
         this.vIntPending = false;  
         this.hblankToggle = false; 
         this.allowSpriteMasking = false;
+        this.spriteCollisionFlag = false; // Sprite collision flag (Bit 5 of Status Register)
 
         this.hscrollMask = 0;
         this.vscrollMode = 0; 
@@ -127,12 +140,14 @@ class GenesisVdp {
         this.initialise();
     }
 
+    /**
+     * Resets VDP state to power-on defaults.
+     */
     initialise() {
         this.vRam.fill(0);
         this.cram.fill(0);
         this.vsram.fill(0);
         this.vsramCache.fill(0);
-        this.spriteTableCache.fill(0);
 
         this.spriteRowCacheTotal.fill(0);
         this.spriteRowCacheTableIdx.fill(0);
@@ -190,9 +205,10 @@ class GenesisVdp {
         this.hIntInterval = 0;
         
         this.currentlyInVblank = true;
-        this.vIntPending = false;  // Reset V-Int pending status
+        this.vIntPending = false;  
         this.hblankToggle = false;
         this.allowSpriteMasking = false;
+        this.spriteCollisionFlag = false;
 
         this.hscrollMask = 0;
         this.vscrollMode = 0;
@@ -223,8 +239,9 @@ class GenesisVdp {
     getExtendedScreenWidthInTiles() { return this.getExtendedScreenWidthInTilePairs() * 2; }
     getExtendedScreenWidthInPixels() { return this.getExtendedScreenWidthInTiles() * 8; }
 
-    // FIX: Standard, robust 24-bit physical VRAM direct address mapping, 
-    // eliminating legacy and bug-prone XOR '^ 1' byte swapping.
+    /**
+     * Standard 24-bit physical VRAM direct address mapping.
+     */
     decodeVramAddress(address) {
         return address & 0xFFFF; 
     }
@@ -233,23 +250,20 @@ class GenesisVdp {
 
     writeVRAM(address, value) {
         const decoded = this.decodeVramAddress(address);
-        const spriteTableIndex = address - GetSpriteTableAddress(this);
-        const maxTiles = this.getExtendedScreenWidthInTiles();
-        
-        if (spriteTableIndex >= 0 && spriteTableIndex < maxTiles * 16 && (spriteTableIndex & 4) === 0) {
-            const cacheOffset = Math.floor(spriteTableIndex / 8) * 4;
-            const subByteIdx = spriteTableIndex & 3;
-            this.spriteTableCache[cacheOffset + subByteIdx] = value & 0xFF;
-            this.spriteRowCacheNeedsUpdating = true;
-        }
 
         if (decoded < 0x10000) {
             this.vRam[decoded] = value & 0xFF;
             this.pattern_chk(address);
+            
+            // FIX: Always invalidate sprite cache on any VRAM write. 
+            // Handles DMA transfers into SAT areas safely.
+            this.spriteRowCacheNeedsUpdating = true; 
         }
     }
 
-    // FIX: Big-Endian standard 16-bit word reading (high-byte first)
+    /**
+     * Big-Endian standard 16-bit word reading (high-byte first).
+     */
     readVRAMWord(address) {
         const decoded = this.decodeVramAddress(address);
         return (this.vRam[decoded] << 8) | this.vRam[(decoded + 1) & 0xFFFF];
@@ -259,19 +273,22 @@ class GenesisVdp {
         this.accessAddressRegister = (this.accessAddressRegister + this.accessIncrement) & 0x1FFFF;
     }
 
-    // FIX: Big-Endian standard 16-bit word writing (even-address gets high-byte, odd-address gets low-byte)
+    /**
+     * Big-Endian standard 16-bit word writing.
+     */
     writeAndIncrement(value, colorUpdatedCallback, callbackUserData) {
         switch (this.accessSelectedBuffer) {
-            case 0: 
+            case 0: // VRAM
                 this.writeVRAM(this.accessAddressRegister, (value >> 8) & 0xFF);
                 this.writeVRAM(this.accessAddressRegister + 1, value & 0xFF);
                 break;
 
-            case 1: { 
+            case 1: { // CRAM
                 const color = value & 0xEEE;
                 const cramIdx = Math.floor(this.accessAddressRegister / 2) % 64;
                 this.cram[cramIdx] = color;
 
+                // Pre-calculate Shadow & Highlight variations
                 const normalColor = color | ((color & 0x888) >> 3);
                 const shadowColor = color >> 1;
                 const highlightColor = 0x888 + (color >> 1);
@@ -282,10 +299,11 @@ class GenesisVdp {
                 break;
             }
 
-            case 2: { 
+            case 2: { // VSRAM
                 const vsramIdx = Math.floor(this.accessAddressRegister / 2) % 64;
                 if (vsramIdx < 40) {
                     const vscroll = value & 0x7FF;
+                    // Mirroring for specific indices
                     if (vsramIdx < 2) {
                         for (let i = 40 + vsramIdx; i < 64; i += 2) {
                             this.vsram[i] = vscroll;
@@ -304,19 +322,19 @@ class GenesisVdp {
         let value = this.previousDataWrites[0] | 0;
 
         switch (this.accessSelectedBuffer) {
-            case 0: 
+            case 0: // VRAM Word
                 value = this.readVRAMWord(wordAddress * 2);
                 break;
 
-            case 1: 
+            case 1: // CRAM
                 value = (value & ~0xEEE) | this.cram[wordAddress % 64];
                 break;
 
-            case 2: 
+            case 2: // VSRAM
                 value = (value & ~0x7FF) | this.vsram[wordAddress % 64];
                 break;
 
-            case 3: 
+            case 3: // VRAM Byte
                 value = (value & ~0xFF) | this.readVRAM(this.accessAddressRegister);
                 break;
         }
@@ -331,7 +349,8 @@ class GenesisVdp {
 
     /**
      * Reads the VDP Status Register.
-     * Aligned with MDTracer to handle V-Int pending status (Bit 7) and clear bits 10-15.
+     * Aligned with MDTracer to handle V-Int pending status (Bit 7), 
+     * Collision Flag (Bit 5), and clears bits 10-15.
      */
     readControl() {
         this.accessWritePending = false;
@@ -344,7 +363,15 @@ class GenesisVdp {
         const vIntFlag = this.vIntPending ? 1 : 0;
         this.vIntPending = false; 
         
-        return (1 << 9) | (0 << 8) | (vIntFlag << 7) | (0 << 6) | (0 << 5) | (0 << 4) | (this.currentlyInVblank ? 8 : 0) | (hblankFlag << 2) | 0;
+        return (1 << 9) | 
+               (0 << 8) | 
+               (vIntFlag << 7) | 
+               (0 << 6) | 
+               ((this.spriteCollisionFlag ? 1 : 0) << 5) | 
+               (0 << 4) | 
+               (this.currentlyInVblank ? 8 : 0) | 
+               (hblankFlag << 2) | 
+               0;
     }
 
     updateFakeFIFO(value) {
@@ -385,13 +412,13 @@ class GenesisVdp {
                 this.writeVRAM(this.accessAddressRegister ^ 1, fillByteHigh);
                 this.incrementAccessAddressRegister();
             } while (--loopCount > 0);
-        } else if (this.accessSelectedBuffer === 1) { 
+        } else if (this.accessSelectedBuffer === 1) { // CRAM Fill
             do {
                 const cramIdx = Math.floor(this.accessAddressRegister / 2) % 64;
                 this.cram[cramIdx] = value;
                 this.incrementAccessAddressRegister();
             } while (--loopCount > 0);
-        } else if (this.accessSelectedBuffer === 2) { 
+        } else if (this.accessSelectedBuffer === 2) { // VSRAM Fill
             do {
                 const vsramIdx = Math.floor(this.accessAddressRegister / 2) % 64;
                 if (vsramIdx < 40) {
@@ -407,7 +434,7 @@ class GenesisVdp {
         let loopCount = this.dmaLength === 0 ? 0x10000 : this.dmaLength;
         let sourceAddr = ((this.dmaSourceAddressHigh << 16) | this.dmaSourceAddressLow) & 0xFFFF;
 
-        if (this.accessSelectedBuffer === 0) { 
+        if (this.accessSelectedBuffer === 0) { // VRAM Copy
             do {
                 const val = this.readVRAM(sourceAddr);
                 this.writeVRAM(this.accessAddressRegister, val);
@@ -507,7 +534,10 @@ class GenesisVdp {
                 case 2: this.planeAAddress = (data & 0x78) << 10; break;
                 case 3: this.windowAddress = (data & 0x7E) << 10; break;
                 case 4: this.planeBAddress = (data & 0x0F) << 13; break;
-                case 5: this.spriteTableAddress = data << 9; break;
+                case 5: 
+                    this.spriteTableAddress = data << 9; 
+                    this.spriteRowCacheNeedsUpdating = true; // Invalidate row cache when SAT moves
+                    break;
                 case 6: this.spriteTileIndexRebase = (data & 0x20) !== 0; break;
                 case 7: this.backgroundColour = data & 0x3F; break;
                 case 10:
@@ -515,7 +545,8 @@ class GenesisVdp {
                     break;
                 case 11:
                     this.vscrollMode = (data & 4) !== 0 ? 1 : 0;
-                    this.hscrollMask = [0x00, 0x07, 0xF8, 0xFF][data & 3];
+                    // FIX: Mode 1 (invalid) defaults to 0x00 full screen. Stops background shearing.
+                    this.hscrollMask = [0x00, 0x00, 0xF8, 0xFF][data & 3]; 
                     break;
                 case 12:
                     this.h40Enabled = (data & 0x81) !== 0;
@@ -550,9 +581,7 @@ class GenesisVdp {
                 case 21: this.dmaSourceAddressLow = (this.dmaSourceAddressLow & 0xFF00) | data; break;
                 case 22: this.dmaSourceAddressLow = (this.dmaSourceAddressLow & 0x00FF) | (data << 8); break;
                 case 23:
-                    // FIX: Direct alignment with MDTracer's 23-5 DMA high source mask logic.
-                    // If bit 7 of register 23 is 0, the source maps 7 bits of ROM address (0x7F).
-                    // If bit 7 is 1, it maps 6 bits (0x3F).
+                    // Direct alignment with MDTracer's 23-5 DMA high source mask logic.
                     if ((data & 0x80) === 0) {
                         this.dmaSourceAddressHigh = data & 0x7F;
                     } else {
@@ -569,6 +598,10 @@ class GenesisVdp {
         this.vsramCache[1] = this.vsram[1];
     }
 
+    /**
+     * Parses the VDP SAT (Sprite Attribute Table) and builds a scanline-optimized 
+     * caching mechanism. Handles Sprite limits, dimensions, and the famous Sprite Drop Bug.
+     */
     updateSpriteCache() {
         if (!this.spriteRowCacheNeedsUpdating) return;
         this.spriteRowCacheNeedsUpdating = false;
@@ -581,9 +614,22 @@ class GenesisVdp {
 
         let spriteIndex = 0;
         let spritesRemaining = maxSprites;
+        let spriteMask1 = maxSprites; // Variable to simulate Sega Genesis Sprite masking
 
         do {
             const cached_sprite = VDP_GetCachedSprite(this, spriteIndex);
+            
+            // FIX: Sega Genesis Sprite Drop/Mask Bug Implementation
+            // If X coordinate == 0, hardware stops parsing sprites for this scanline!
+            const spriteTableBase = GetSpriteTableAddress(this) + (spriteIndex * 8);
+            const rawX = this.readVRAMWord(spriteTableBase + 6) & 0x1FF;
+            
+            if (rawX === 1) {
+                spriteMask1 = spriteIndex;
+            }
+            if (rawX === 0 && spriteMask1 !== maxSprites) {
+                break; // Masking triggered, effectively dropping remaining sprites in link chain
+            }
 
             const blankLines = 128 << this.doubleResolutionEnabled;
             const startY = Math.max(blankLines, cached_sprite.y);
@@ -591,17 +637,22 @@ class GenesisVdp {
 
             for (let i = startY; i < endY; i++) {
                 const rowIdx = i - blankLines;
-                const rowTotal = this.spriteRowCacheTotal[rowIdx];
+                
+                // Safeguard against out of bound access for massive off-screen sprites
+                if (rowIdx >= 0 && rowIdx < 256) {
+                    const rowTotal = this.spriteRowCacheTotal[rowIdx];
 
-                if (rowTotal < this.getScreenWidthInTilePairs()) {
-                    const cacheIndex = (rowIdx * 20) + rowTotal;
-                    
-                    this.spriteRowCacheTableIdx[cacheIndex] = spriteIndex;
-                    this.spriteRowCacheWidth[cacheIndex] = cached_sprite.width;
-                    this.spriteRowCacheHeight[cacheIndex] = cached_sprite.height;
-                    this.spriteRowCacheYInSprite[cacheIndex] = i - cached_sprite.y;
+                    // Respect the Genesis hardware limit of Sprites per scanline
+                    if (rowTotal < this.getScreenWidthInTilePairs()) {
+                        const cacheIndex = (rowIdx * 20) + rowTotal;
+                        
+                        this.spriteRowCacheTableIdx[cacheIndex] = spriteIndex;
+                        this.spriteRowCacheWidth[cacheIndex] = cached_sprite.width;
+                        this.spriteRowCacheHeight[cacheIndex] = cached_sprite.height;
+                        this.spriteRowCacheYInSprite[cacheIndex] = i - cached_sprite.y;
 
-                    this.spriteRowCacheTotal[rowIdx]++;
+                        this.spriteRowCacheTotal[rowIdx]++;
+                    }
                 }
             }
 
@@ -618,7 +669,10 @@ class GenesisVdp {
         }
     }
 
-    // Aligned with MDTracer: pre-flip VRAM on write
+    /**
+     * Aligned with MDTracer: Generates a pre-flipped VRAM map during writes.
+     * This avoids calculating horizontal/vertical flips pixel-by-pixel in the render loop.
+     */
     pattern_chk(address) {
         const w_address = address & 0xFFFE;
         const w_val = (this.vRam[w_address] << 8) | this.vRam[w_address + 1]; // Direct Big-Endian read
@@ -649,7 +703,7 @@ class GenesisVdp {
 
     /**
      * High-fidelity, pixel-perfect scanline rendering engine translated from MDTracer.
-     * Uses pre-flipped rendererVram memory map to draw sprites and backgrounds 100% bug-free.
+     * Uses pre-flipped rendererVram memory map to draw sprites and backgrounds bug-free.
      */
     endScanline(scanline, scanlineRenderedCallback, callbackUserData) {
         const w_display_xsize = this.getScreenWidthInPixels();
@@ -667,11 +721,10 @@ class GenesisVdp {
 
         // 1. Render Background Plane (Scroll B) Pixel-by-Pixel
         if (this.displayEnabled && !this.configPlanesDisabled[1]) {
-            const hscrollTableAddress = this.hscrollAddress + 2 + ((scanline >> this.doubleResolutionEnabled) & this.hscrollMask) * 4;
-            const hscrollB = this.readVRAMWord(hscrollTableAddress);
+            const hscrollTableAddress = this.hscrollAddress + ((scanline >> this.doubleResolutionEnabled) & this.hscrollMask) * 4;
+            // FIX: Added `& 0x3FF` 10-bit mask to avoid jagged backgrounds caused by dirty high-bytes
+            const hscrollB = this.readVRAMWord(hscrollTableAddress + 2) & 0x3FF;
 
-            // FIX: Subtracted horizontal scroll value with MDTracer's modular mask math
-            // to correctly orient the camera scrolling direction and prevent tile cutting.
             const w_view_xB = ((w_scroll_xcell << 3 << 2) - hscrollB) & w_scroll_xsize_mask;
 
             let w_view_x = w_view_xB;
@@ -728,10 +781,10 @@ class GenesisVdp {
 
         // 2. Render Foreground Plane (Scroll A / Window) Pixel-by-Pixel
         if (this.displayEnabled) {
-            const hscrollTableAddress = this.hscrollAddress + 0 + ((scanline >> this.doubleResolutionEnabled) & this.hscrollMask) * 4;
-            const hscrollA = this.readVRAMWord(hscrollTableAddress);
+            const hscrollTableAddress = this.hscrollAddress + ((scanline >> this.doubleResolutionEnabled) & this.hscrollMask) * 4;
+            // FIX: Added `& 0x3FF` 10-bit mask to hscrollA
+            const hscrollA = this.readVRAMWord(hscrollTableAddress + 0) & 0x3FF;
 
-            // FIX: Subtracted horizontal scroll value with MDTracer's modular mask math
             const w_view_xA = ((w_scroll_xcell << 3 << 2) - hscrollA) & w_scroll_xsize_mask;
 
             let w_view_x = w_view_xA;
@@ -850,9 +903,11 @@ class GenesisVdp {
 
                 const yInSpriteNonFlipped = this.spriteRowCacheYInSprite[spriteRowCacheEntryIdx];
                 const yInSprite = yFlip ? (height * 8) - yInSpriteNonFlipped - 1 : yInSpriteNonFlipped;
-                const pixelYInTile = yInSprite & 7;
+                
+                // Used non-flipped index to avoid mathematical double-flip with pre-cached inverted tiles
+                const pixelYInTile = yInSpriteNonFlipped & 7;
 
-                // Match MDTracer's sprite drawing
+                // Match MDTracer's sprite drawing logic mapping to pre-flipped arrays
                 const w_reverse = (xFlip ? 1 : 0) | (yFlip ? 2 : 0);
                 const w_reverse_addr = VRAM_DATASIZE * w_reverse;
 
@@ -884,23 +939,23 @@ class GenesisVdp {
                                 if (!this.shadowHighlightEnabled) {
                                     w_game_cmap[w_posx] = w_color;
                                     w_game_primap[w_posx] = w_priority;
-                                    this.g_vdp_status_5_collision = 1;
+                                    this.spriteCollisionFlag = true;
                                 } else if (w_color === 0x3E) {
-                                    const w_map = w_game_shadowmap[pixelIndex];
-                                    if (w_map < 2) w_game_shadowmap[pixelIndex] = w_map + 1;
+                                    const w_map = w_game_shadowmap[w_posx];
+                                    if (w_map < 2) w_game_shadowmap[w_posx] = w_map + 1;
                                 } else if (w_color === 0x3F) {
-                                    const w_map = w_game_shadowmap[pixelIndex];
-                                    if (w_map > 0) w_game_shadowmap[pixelIndex] = w_map - 1;
+                                    const w_map = w_game_shadowmap[w_posx];
+                                    if (w_map > 0) w_game_shadowmap[w_posx] = w_map - 1;
                                 } else if ((w_color & 0x0F) === 0x0E) {
                                     w_game_cmap[w_posx] = w_color;
                                     w_game_primap[w_posx] = w_priority;
                                     w_game_shadowmap[w_posx] = 0x1000;
-                                    this.g_vdp_status_5_collision = 1;
+                                    this.spriteCollisionFlag = true;
                                 } else {
                                     w_game_cmap[w_posx] = w_color;
                                     w_game_primap[w_posx] = w_priority;
                                     w_game_shadowmap[w_posx] |= w_priority;
-                                    this.g_vdp_status_5_collision = 1;
+                                    this.spriteCollisionFlag = true;
                                 }
                             }
                         }

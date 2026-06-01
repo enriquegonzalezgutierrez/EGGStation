@@ -122,7 +122,7 @@ class M68kDataTransfer {
                     let ea = 0;
                     let cycles = 12;
 
-                    // FIX: Direct alignment with MDTracer's verified memory sequencing
+                    // Direct alignment with MDTracer's verified memory sequencing
                     if (mode === 4) { // Pre-decrement -(An)
                         let currentEa = cpu.a[reg];
                         for (let i = 0; i < 16; i++) {

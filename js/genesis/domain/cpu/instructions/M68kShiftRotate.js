@@ -6,7 +6,8 @@
  * 
  * Implements the registration and execution logic for the entire M68K 
  * shift and rotate instruction family (LSL, LSR, ASL, ASR, ROL, ROR, ROXL, ROXR).
- * Handles both Register (dynamic count) and Memory (1-bit word) shifts.
+ * Aligned with MDTracer reference standards to ensure proper cycle consumption,
+ * iterative bit rotation, and correct CCR updates.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates register shift, sign extension, 
@@ -158,11 +159,14 @@ class M68kShiftRotate {
                         cpu.fC = lastBit;
                         if (opType !== 3) cpu.fX = lastBit; // ROL/ROR bypass X flag updates
                     } else {
-                        // If shift count is 0, C is cleared, X is unaffected
-                        cpu.fC = 0;
+                        // FIX: Aligned with Motorola 68000 ISA standards.
+                        // If shift count is 0: C is cleared, X is unaffected.
+                        // EXCEPTION: ROXL/ROXR copy X flag into C flag instead of clearing it.
+                        cpu.fC = (opType === 2) ? cpu.fX : 0;
                     }
 
-                    // Write back to register
+                    // Write back to register (strictly masked with unsigned 32-bit cast)
+                    val = val >>> 0;
                     if (size === 1) cpu.d[regDx] = (cpu.d[regDx] & 0xFFFFFF00) | val;
                     else if (size === 2) cpu.d[regDx] = (cpu.d[regDx] & 0xFFFF0000) | val;
                     else cpu.d[regDx] = val;
