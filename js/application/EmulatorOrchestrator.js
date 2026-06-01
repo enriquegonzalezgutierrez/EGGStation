@@ -278,7 +278,7 @@ class EmulatorOrchestrator {
         state.mmu.slot1Idx = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[1]);
         state.mmu.slot2Idx = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[2]);
 
-        // 4. Copy sound state
+        // 4. Copy sound state using dynamic parameter assignments
         state.psg.volregister.set(this.psg.volregister);
         state.psg.toneregister.set(this.psg.toneregister);
         state.psg.wavePos.set(this.psg.wavePos);
@@ -347,9 +347,12 @@ class EmulatorOrchestrator {
         if (state.mmu.slot1Idx !== -1) this.mmu.mapper.mapperSlots[1] = this.mmu.mapper.romBanks[state.mmu.slot1Idx];
         if (state.mmu.slot2Idx !== -1) this.mmu.mapper.mapperSlots[2] = this.mmu.mapper.romBanks[state.mmu.slot2Idx];
 
-        this.psg.volregister.set(state.psg.volregister);
-        this.psg.toneregister.set(state.psg.toneregister);
-        this.psg.wavePos.set(state.psg.wavePos);
+        // Safely restore sound register arrays element-by-element to avoid type prototype conflicts
+        for (let i = 0; i < 4; i++) {
+            this.psg.volregister[i] = state.psg.volregister[i];
+            this.psg.toneregister[i] = state.psg.toneregister[i];
+            this.psg.wavePos[i] = state.psg.wavePos[i];
+        }
         this.psg.chan2belatched = state.psg.chan2belatched;
         this.psg.what2latch = state.psg.what2latch;
         this.psg.internalClock = state.psg.internalClock;

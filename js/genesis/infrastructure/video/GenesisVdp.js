@@ -584,7 +584,9 @@ class GenesisVdp {
                     this.hscrollMask = [0x00, 0x00, 0xF8, 0xFF][data & 3]; 
                     break;
                 case 12:
-                    this.h40Enabled = (data & 0x81) !== 0;
+                    // Corrected hardware check: Evaluate H40 mode strictly using Bit 7.
+                    // Resolves forced H40 resolution mapping bugs during standard H32 gameplay.
+                    this.h40Enabled = (data & 0x80) !== 0;
                     this.shadowHighlightEnabled = (data & 0x08) !== 0;
                     this.doubleResolutionEnabled = ((data >> 1) & 3) === 3;
                     break;
@@ -843,6 +845,7 @@ class GenesisVdp {
                         const tileY = (scanline >> 3) & this.planeHeightBitmask;
                         const winTable = GetWindowPlaneTableAddress(this);
                         
+                        // Restored to utilize dynamic scroll-width properties as per hardware specifications.
                         const w_val = this.rendererVram[(winTable >> 1) + (tileY * w_scroll_xcell + tileX)];
                         w_priority = (w_val >> 15) & 1;
                         w_palette = ((w_val >> 13) & 3) << 4;
@@ -930,10 +933,6 @@ class GenesisVdp {
                 const tileIndexBase = word & 0x7FF;
                 const xFlip = (word & 0x0800) !== 0;
                 const yFlip = (word & 0x1000) !== 0;
-
-                if (tileIndexBase >= 20 && tileIndexBase <= 30) {
-                    console.log(`[VDP Debug] Sprite index ${tableIndex} | Tile: ${tileIndexBase} | Word2: 0x${word.toString(16).toUpperCase()} | H-Flip: ${xFlip} | Y-Flip: ${yFlip} | X-Pos: ${x}`);
-                }
 
                 const paletteLineMask = ((word >> 13) & 3) << 4;
                 const w_priority = (word >> 15) & 1;

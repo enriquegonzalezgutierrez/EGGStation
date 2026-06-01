@@ -113,10 +113,24 @@ class UIController {
         // 7. Mobile Virtual Gamepad Touch Mappings
         this.bindVirtualGamepadEvents();
 
-        // 8. Physical Gamepad Connection Listener (Diagnostic)
-        window.addEventListener("gamepadconnected", (e) => {
-            console.log(`UIController::Gamepad connected: [${e.gamepad.id}]`);
-        });
+        // 8. Physical Gamepad Connection Listener (Safe Global Binding to prevent event leaks)
+        if (!window.__eggstation_gamepad_listeners_bound__) {
+            window.__eggstation_gamepad_listeners_bound__ = true;
+
+            window.addEventListener("gamepadconnected", (e) => {
+                console.log(`UIController::Gamepad connected globally: [${e.gamepad.id}]`);
+                if (typeof activeController !== 'undefined' && activeController && activeController.showGamepadNotification) {
+                    activeController.showGamepadNotification(`Controller detected: ${e.gamepad.id.substring(0, 24)}...`);
+                }
+            });
+
+            window.addEventListener("gamepaddisconnected", (e) => {
+                console.log(`UIController::Gamepad disconnected globally: [${e.gamepad.id}]`);
+                if (typeof activeController !== 'undefined' && activeController && activeController.showGamepadNotification) {
+                    activeController.showGamepadNotification(`Controller disconnected: ${e.gamepad.id.substring(0, 24)}...`);
+                }
+            });
+        }
 
         // 9. Light Phaser Mouse & Touch Event Listeners
         const crtWrapper = document.getElementById('crt-wrapper');
@@ -325,34 +339,108 @@ class UIController {
     }
 
     /**
+     * Renders a custom floating toast notification when gamepads are added or removed.
+     * Styled to match EGGStation's signature synthwave retro neon aesthetic.
+     * @param {string} message - Text notification string.
+     */
+    showGamepadNotification(message) {
+        let toast = document.getElementById('eggstation-gamepad-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'eggstation-gamepad-toast';
+            toast.style.position = 'fixed';
+            toast.style.bottom = '24px';
+            toast.style.right = '24px';
+            toast.style.backgroundColor = 'rgba(20, 10, 35, 0.95)';
+            toast.style.border = '2px solid #ff007f';
+            toast.style.color = '#fff';
+            toast.style.padding = '14px 24px';
+            toast.style.borderRadius = '8px';
+            toast.style.fontFamily = 'monospace';
+            toast.style.fontSize = '0.9rem';
+            toast.style.fontWeight = 'bold';
+            toast.style.boxShadow = '0 0 20px rgba(255, 0, 127, 0.6)';
+            toast.style.zIndex = '99999';
+            toast.style.transition = 'opacity 0.3s ease, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+            toast.style.transform = 'translateY(100px)';
+            toast.style.opacity = '0';
+            document.body.appendChild(toast);
+        }
+        toast.innerHTML = `<span style="color: #ff007f;">[EGGStation]</span> ${message}`;
+        
+        // Execute animation sequence
+        requestAnimationFrame(() => {
+            toast.style.transform = 'translateY(0)';
+            toast.style.opacity = '1';
+        });
+
+        if (toast.timeoutId) {
+            clearTimeout(toast.timeoutId);
+        }
+        toast.timeoutId = setTimeout(() => {
+            toast.style.transform = 'translateY(100px)';
+            toast.style.opacity = '0';
+        }, 4000);
+    }
+
+    /**
      * Continuous polling loop for the HTML5 Gamepad API.
-     * Detects button and axis changes to trigger the emulator I/O chip.
+     * Scans the full array to map the first active gamepad, regardless of index slots.
      */
     pollGamepads() {
+        // Lifecycle Guard: Automatically release loop if the current active controller context changes.
+        // Modified to allow the first frame call when activeController is null during constructor execution.
+        if (typeof activeController !== 'undefined' && activeController !== null && activeController !== this) {
+            return;
+        }
+
         const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-        const gp = gamepads[0]; // Capture the first connected controller
+        let gp = null;
+
+        // Iterate dynamically to find the first non-null active gamepad lane
+        for (let i = 0; i < gamepads.length; i++) {
+            if (gamepads[i]) {
+                gp = gamepads[i];
+                break;
+            }
+        }
 
         if (gp && this.orchestrator.ioController) {
             const io = this.orchestrator.ioController;
             const DEADZONE = 0.5; // Threshold for analog stick drift
 
-            // Standard Gamepad Mapping
-            // D-Pad: 12 (Up), 13 (Down), 14 (Left), 15 (Right)
-            // Axes: 0 (Horizontal Left Stick), 1 (Vertical Left Stick)
-            const up = gp.buttons[12]?.pressed || gp.axes[1] < -DEADZONE;
-            const down = gp.buttons[13]?.pressed || gp.axes[1] > DEADZONE;
-            const left = gp.buttons[14]?.pressed || gp.axes[0] < -DEADZONE;
-            const right = gp.buttons[15]?.pressed || gp.axes[0] > DEADZONE;
+            // Advanced Fallback direction mapping for generic / ShanWan Gamepads under Linux
+            const leftStickH = gp.axes[0] || 0;
+            const leftStickV = gp.axes[1] || 0;
+            const dpadAxisH  = gp.axes[4] || gp.axes[6] || gp.axes[2] || 0;
+            const dpadAxisV  = gp.axes[5] || gp.axes[7] || gp.axes[3] || 0;
 
-            // Face Buttons: 0 (A/Cross), 1 (B/Circle), 2 (X/Square), 3 (Y/Triangle)
-            const btn1 = gp.buttons[0]?.pressed || gp.buttons[2]?.pressed; // Primary Fire
-            const btn2 = gp.buttons[1]?.pressed || gp.buttons[3]?.pressed; // Secondary Fire / Jump
+            const up    = gp.buttons[12]?.pressed || leftStickV < -DEADZONE || dpadAxisV < -DEADZONE;
+            const down  = gp.buttons[13]?.pressed || leftStickV > DEADZONE  || dpadAxisV > DEADZONE;
+            const left  = gp.buttons[14]?.pressed || leftStickH < -DEADZONE || dpadAxisH < -DEADZONE;
+            const right = gp.buttons[15]?.pressed || leftStickH > DEADZONE  || dpadAxisH > DEADZONE;
 
-            // Pause: 9 (Start button)
-            const pause = gp.buttons[9]?.pressed;
+            // Map standard buttons (0, 1, 2, 3) or bumpers (4, 5) to DB-9 fire triggers
+            const btn1 = gp.buttons[0]?.pressed || gp.buttons[2]?.pressed || gp.buttons[4]?.pressed; 
+            const btn2 = gp.buttons[1]?.pressed || gp.buttons[3]?.pressed || gp.buttons[5]?.pressed; 
 
-            // Rewind: 6 (Left Trigger / L2) or 4 (Left Bumper / L1)
-            const rewind = gp.buttons[6]?.pressed || gp.buttons[4]?.pressed;
+            // Pause: 9 (Start button) or 8 (Select button)
+            const pause = gp.buttons[9]?.pressed || gp.buttons[8]?.pressed;
+
+            // Rewind: 6 (Left Trigger / L2) or 7 (Right Trigger / R2)
+            const rewind = gp.buttons[6]?.pressed || gp.buttons[7]?.pressed;
+
+            // Diagnostic Logger: Emits active button and axis parameters to the host debugger console
+            for (let b = 0; b < gp.buttons.length; b++) {
+                if (gp.buttons[b]?.pressed) {
+                    console.log(`[EGGStation::SMS Diagnostics] Button ${b} is PRESSED`);
+                }
+            }
+            for (let a = 0; a < gp.axes.length; a++) {
+                if (Math.abs(gp.axes[a]) > DEADZONE) {
+                    console.log(`[EGGStation::SMS Diagnostics] Axis ${a} Value is active: ${gp.axes[a].toFixed(2)}`);
+                }
+            }
 
             // Helper to trigger hardware pins only on state change (edge detection)
             const triggerInput = (key, isPressed, onPress, onRelease) => {
@@ -381,7 +469,7 @@ class UIController {
                 this.gamepadState.pause = false;
             }
 
-            // Real-Time Rewind mapping handler
+            // Real-Time Gameplay Rewind mapping handler
             if (rewind && !this.gamepadState.rewind) {
                 this.orchestrator.isRewinding = true;
                 this.gamepadState.rewind = true;

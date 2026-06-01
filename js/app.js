@@ -75,6 +75,10 @@ let activeController = null;
 function bootConsole(consoleType) {
     console.log(`%c[EGGStation::Swapper] Purging hardware components for swap to ${consoleType}...`, "color: #7f00ff; font-weight: bold;");
 
+    // Nullify active controller reference first.
+    // This resolves constructor-stage race conditions in physical gamepad polling loops on hot-swaps.
+    activeController = null;
+
     // 1. Safe Teardown of the running console
     if (activeOrchestrator) {
         console.log(`[EGGStation::Swapper] Active orchestrator found. Cancelling animation loop ID: ${activeOrchestrator.animationFrameId}`);
@@ -113,7 +117,7 @@ function bootConsole(consoleType) {
     const newSelector = oldSelector.cloneNode(true);
     oldSelector.parentNode.replaceChild(newSelector, oldSelector);
 
-    // FIX: Clone the Debugger control buttons container synchronously during hot-swaps.
+    // Clone the Debugger control buttons container synchronously during hot-swaps.
     // This purges all old, accumulated Event Listeners of 'dbg-play', 'dbg-pause', and 'dbg-step' snychronously,
     // ensuring zero event conflicts between SMS and Genesis debugger states.
     const dbgSection = document.getElementById('dev-controls');

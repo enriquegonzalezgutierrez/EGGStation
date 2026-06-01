@@ -27,6 +27,9 @@ class GenesisUIController {
         // Dynamic key states dictionary (stores synchronous active states: true/false)
         this.keysActive = {};
 
+        // Dynamic gamepad states dictionary for active button mapping
+        this.gamepadState = {};
+
         this.bindEvents();
 
         // Synchronize initial slider states with GPU memory uniforms
@@ -34,6 +37,9 @@ class GenesisUIController {
 
         // Swap the registers panel DOM layout to support the 16 M68K registers
         this.swapTo68kRegisters();
+
+        // Initiate the physical gamepad polling loop
+        this.pollGamepads();
 
         // Periodically refresh the registers, disassembly terminal and VRAM tile viewer 
         // twice a second (every 500ms) only when the Developer Suite is expanded on screen.
@@ -171,7 +177,26 @@ class GenesisUIController {
             this.updateDebuggerUI();
         });
 
-        // 8. Inject the keyboard poller into the hardware Controller Manager (DIP)
+        // 8. Physical Gamepad Connection Listener (Safe Global Binding to prevent event leaks)
+        if (!window.__eggstation_gamepad_listeners_bound__) {
+            window.__eggstation_gamepad_listeners_bound__ = true;
+
+            window.addEventListener("gamepadconnected", (e) => {
+                console.log(`GenesisUIController::Gamepad connected globally: [${e.gamepad.id}]`);
+                if (typeof activeController !== 'undefined' && activeController && activeController.showGamepadNotification) {
+                    activeController.showGamepadNotification(`Controller detected: ${e.gamepad.id.substring(0, 24)}...`);
+                }
+            });
+
+            window.addEventListener("gamepaddisconnected", (e) => {
+                console.log(`GenesisUIController::Gamepad disconnected globally: [${e.gamepad.id}]`);
+                if (typeof activeController !== 'undefined' && activeController && activeController.showGamepadNotification) {
+                    activeController.showGamepadNotification(`Controller disconnected: ${e.gamepad.id.substring(0, 24)}...`);
+                }
+            });
+        }
+
+        // 9. Inject the keyboard and gamepad poller into the hardware Controller Manager (DIP)
         if (this.orchestrator && this.orchestrator.controllerManager) {
             this.orchestrator.controllerManager.bindInputPoller((playerId, buttonId) => {
                 return this.inputRequested(playerId, buttonId);
@@ -259,7 +284,119 @@ class GenesisUIController {
     }
 
     /**
-     * Reads the current keyboard states and returns true if pressed.
+     * Renders a custom floating toast notification when gamepads are added or removed.
+     * Styled to match EGGStation's signature synthwave retro neon aesthetic.
+     * @param {string} message - Text notification string.
+     */
+    showGamepadNotification(message) {
+        let toast = document.getElementById('eggstation-gamepad-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'eggstation-gamepad-toast';
+            toast.style.position = 'fixed';
+            toast.style.bottom = '24px';
+            toast.style.right = '24px';
+            toast.style.backgroundColor = 'rgba(20, 10, 35, 0.95)';
+            toast.style.border = '2px solid #ff007f';
+            toast.style.color = '#fff';
+            toast.style.padding = '14px 24px';
+            toast.style.borderRadius = '8px';
+            toast.style.fontFamily = 'monospace';
+            toast.style.fontSize = '0.9rem';
+            toast.style.fontWeight = 'bold';
+            toast.style.boxShadow = '0 0 20px rgba(255, 0, 127, 0.6)';
+            toast.style.zIndex = '99999';
+            toast.style.transition = 'opacity 0.3s ease, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+            toast.style.transform = 'translateY(100px)';
+            toast.style.opacity = '0';
+            document.body.appendChild(toast);
+        }
+        toast.innerHTML = `<span style="color: #ff007f;">[EGGStation]</span> ${message}`;
+        
+        // Execute animation sequence
+        requestAnimationFrame(() => {
+            toast.style.transform = 'translateY(0)';
+            toast.style.opacity = '1';
+        });
+
+        if (toast.timeoutId) {
+            clearTimeout(toast.timeoutId);
+        }
+        toast.timeoutId = setTimeout(() => {
+            toast.style.transform = 'translateY(100px)';
+            toast.style.opacity = '0';
+        }, 4000);
+    }
+
+    /**
+     * Continuous polling loop for the HTML5 Gamepad API.
+     * Scans the full array to map the first active gamepad, regardless of index slots.
+     */
+    pollGamepads() {
+        // Lifecycle Guard: Automatically release loop if the current active controller context changes.
+        // Modified to allow the first frame call when activeController is null during constructor execution.
+        if (typeof activeController !== 'undefined' && activeController !== null && activeController !== this) {
+            return;
+        }
+
+        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+        let gp = null;
+
+        // Iterate dynamically to find the first non-null active gamepad lane
+        for (let i = 0; i < gamepads.length; i++) {
+            if (gamepads[i]) {
+                gp = gamepads[i];
+                break;
+            }
+        }
+
+        if (gp) {
+            const DEADZONE = 0.5; // Threshold for analog stick drift
+
+            // Advanced Fallback direction mapping for generic / ShanWan Gamepads under Linux
+            const leftStickH = gp.axes[0] || 0;
+            const leftStickV = gp.axes[1] || 0;
+            const dpadAxisH  = gp.axes[4] || gp.axes[6] || gp.axes[2] || 0;
+            const dpadAxisV  = gp.axes[5] || gp.axes[7] || gp.axes[3] || 0;
+
+            this.gamepadState[GENESIS_CONTROLLER_UP]     = gp.buttons[12]?.pressed || leftStickV < -DEADZONE || dpadAxisV < -DEADZONE;
+            this.gamepadState[GENESIS_CONTROLLER_DOWN]   = gp.buttons[13]?.pressed || leftStickV > DEADZONE  || dpadAxisV > DEADZONE;
+            this.gamepadState[GENESIS_CONTROLLER_LEFT]   = gp.buttons[14]?.pressed || leftStickH < -DEADZONE || dpadAxisH < -DEADZONE;
+            this.gamepadState[GENESIS_CONTROLLER_RIGHT]  = gp.buttons[15]?.pressed || leftStickH > DEADZONE  || dpadAxisH > DEADZONE;
+
+            // Generic button-mappings fallbacks (A, B, C, X, Y, Z, Start, Mode)
+            this.gamepadState[GENESIS_CONTROLLER_A]      = gp.buttons[0]?.pressed === true || gp.buttons[2]?.pressed === true; // Cross or Square
+            this.gamepadState[GENESIS_CONTROLLER_B]      = gp.buttons[1]?.pressed === true || gp.buttons[3]?.pressed === true; // Circle or Triangle
+            this.gamepadState[GENESIS_CONTROLLER_C]      = gp.buttons[5]?.pressed === true; // Right Bumper / R1
+            this.gamepadState[GENESIS_CONTROLLER_X]      = gp.buttons[4]?.pressed === true; // Left Bumper / L1
+            this.gamepadState[GENESIS_CONTROLLER_Y]      = gp.buttons[6]?.pressed === true; // Left Trigger / L2
+            this.gamepadState[GENESIS_CONTROLLER_Z]      = gp.buttons[7]?.pressed === true; // Right Trigger / R2
+            
+            this.gamepadState[GENESIS_CONTROLLER_START]  = gp.buttons[9]?.pressed === true; // Start button
+            this.gamepadState[GENESIS_CONTROLLER_MODE]   = gp.buttons[8]?.pressed === true; // Select button
+
+            // Diagnostic Logger: Emits active button and axis parameters to the host debugger console
+            for (let b = 0; b < gp.buttons.length; b++) {
+                if (gp.buttons[b]?.pressed) {
+                    console.log(`[EGGStation::MD Diagnostics] Button ${b} is PRESSED`);
+                }
+            }
+            for (let a = 0; a < gp.axes.length; a++) {
+                if (Math.abs(gp.axes[a]) > DEADZONE) {
+                    console.log(`[EGGStation::MD Diagnostics] Axis ${a} Value is active: ${gp.axes[a].toFixed(2)}`);
+                }
+            }
+        } else {
+            // Nullify dictionary cache to prevent input lock states on controller unplug
+            this.gamepadState = {};
+        }
+
+        // Loop execution synced to the browser's refresh rate
+        requestAnimationFrame(() => this.pollGamepads());
+    }
+
+    /**
+     * Reads the current keyboard or gamepad states and returns true if pressed.
      * Invoked automatically as a callback by the active Controller Manager.
      * Note: Uses GENESIS_CONTROLLER_* constants defined in GenesisControllerManager.js
      * 
@@ -269,7 +406,12 @@ class GenesisUIController {
      */
     inputRequested(playerId, buttonId) {
         if (playerId !== 0) {
-            return false; // Port 1 only mapped for standard keyboard input
+            return false; // Port 1 only mapped for standard keyboard/gamepad input
+        }
+
+        // Query physical gamepad state registers
+        if (this.gamepadState && this.gamepadState[buttonId] === true) {
+            return true;
         }
 
         // Cross-browser fallback checks added to handle older/alternative keyboard layouts
