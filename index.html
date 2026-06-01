@@ -107,7 +107,7 @@
                 </button>
             </div>
 
-            <!-- Master System Specific Configuration (Hidden when Genesis is active) -->
+            <!-- Master System Specific Configuration (ONLY Signal Standard remains here) -->
             <div id="sms-config-section">
                 <div class="panel-section">
                     <h3>Hardware Config</h3>
@@ -119,64 +119,69 @@
                             <option value="PAL">PAL (50 Hz)</option>
                         </select>
                     </div>
+                </div>
+            </div>
 
-                    <div class="control-group">
-                        <label>Video Synthesizer</label>
-                        <select id="postProcessSelector">
-                            <option value="0">Raw Pixel (Sharp)</option>
-                            <option value="1">Bilinear (Soft)</option>
-                            <option value="2">Scale2X CPU</option>
-                            <option value="3">Scanlines 50% CPU</option>
-                            <option value="4">Scale4X HD CPU</option>
-                            <option value="5">NTSC Bleed CPU</option>
-                            <option value="6">CRT-Royale Extreme GPU</option>
-                            <option value="7">Anaglyph 3-D Glasses</option>
-                        </select>
-                    </div>
+            <!-- Common Video & Audio Synthesizer Configuration (Visible for both SMS and Genesis) -->
+            <div class="panel-section">
+                <h3>Hardware Config</h3>
 
-                    <div class="control-group">
-                        <label>Audio DSP</label>
-                        <select id="audioFilterSelector">
-                            <option value="0">Line-Out (Dry Mono)</option>
-                            <option value="1">Arcade Cabinet (Warm LP)</option>
-                            <option value="2">Lush 3D (Haas Stereo)</option>
-                            <option value="3">Spatial Atmos (Convolution)</option>
-                        </select>
-                    </div>
+                <div class="control-group">
+                    <label>Video Synthesizer</label>
+                    <select id="postProcessSelector">
+                        <option value="0">Raw Pixel (Sharp)</option>
+                        <option value="1">Bilinear (Soft)</option>
+                        <option value="2">Scale2X CPU</option>
+                        <option value="3">Scanlines 50% CPU</option>
+                        <option value="4">Scale4X HD CPU</option>
+                        <option value="5">NTSC Bleed CPU</option>
+                        <option value="6">CRT-Royale Extreme GPU</option>
+                        <option value="7">Anaglyph 3-D Glasses</option>
+                    </select>
                 </div>
 
-                <!-- WebGL2 CRT Shader Tuning Sliders -->
-                <div class="panel-section">
-                    <h3>CRT Shader Tuning</h3>
-                    
-                    <div class="control-group">
-                        <div class="slider-header">
-                            <label>Screen Curvature</label>
-                        </div>
-                        <!-- Range: 0 to 150 (Default 90 corresponds to 1.0 multiplier in JS) -->
-                        <input type="range" id="sh-curvature" min="0" max="150" value="90">
-                    </div>
+                <div class="control-group">
+                    <label>Audio DSP</label>
+                    <select id="audioFilterSelector">
+                        <option value="0">Line-Out (Dry Mono)</option>
+                        <option value="1">Arcade Cabinet (Warm LP)</option>
+                        <option value="2">Lush 3D (Haas Stereo)</option>
+                        <option value="3">Spatial Atmos (Convolution)</option>
+                    </select>
+                </div>
+            </div>
 
-                    <div class="control-group">
-                        <div class="slider-header">
-                            <label>Scanline Strength</label>
-                        </div>
-                        <input type="range" id="sh-scanlines" min="0" max="100" value="38">
+            <!-- WebGL2 CRT Shader Tuning Sliders (Visible for both SMS and Genesis) -->
+            <div class="panel-section">
+                <h3>CRT Shader Tuning</h3>
+                
+                <div class="control-group">
+                    <div class="slider-header">
+                        <label>Screen Curvature</label>
                     </div>
+                    <!-- Range: 0 to 150 (Default 90 corresponds to 1.0 multiplier in JS) -->
+                    <input type="range" id="sh-curvature" min="0" max="150" value="90">
+                </div>
 
-                    <div class="control-group">
-                        <div class="slider-header">
-                            <label>Phosphor Triad</label>
-                        </div>
-                        <input type="range" id="sh-phosphor" min="0" max="100" value="25">
+                <div class="control-group">
+                    <div class="slider-header">
+                        <label>Scanline Strength</label>
                     </div>
+                    <input type="range" id="sh-scanlines" min="0" max="100" value="38">
+                </div>
 
-                    <div class="control-group">
-                        <div class="slider-header">
-                            <label>Halation Bloom</label>
-                        </div>
-                        <input type="range" id="sh-bloom" min="0" max="100" value="15">
+                <div class="control-group">
+                    <div class="slider-header">
+                        <label>Phosphor Triad</label>
                     </div>
+                    <input type="range" id="sh-phosphor" min="0" max="100" value="25">
+                </div>
+
+                <div class="control-group">
+                    <div class="slider-header">
+                        <label>Halation Bloom</label>
+                    </div>
+                    <input type="range" id="sh-bloom" min="0" max="100" value="15">
                 </div>
             </div>
 
@@ -308,6 +313,11 @@
     <script src="js/genesis/infrastructure/audio/GenesisCdda.js"></script>
     <script src="js/genesis/infrastructure/audio/GenesisYm2612.js"></script>
     <script src="js/genesis/infrastructure/video/GenesisVdp.js"></script>
+    
+    <!-- NEW: GPU-Accelerated Sega Genesis Post-Processing Filter Pipeline -->
+    <!-- Loaded snychronously before GenesisOrchestrator to resolve core execution dependencies -->
+    <script src="js/genesis/infrastructure/video/GenesisPostProcessor.js"></script>
+    
     <script src="js/genesis/domain/controller/GenesisControllerManager.js"></script>
     <script src="js/genesis/domain/controller/GenesisIoPort.js"></script>
     <script src="js/genesis/domain/bus/GenesisBusZ80.js"></script>

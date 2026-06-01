@@ -2,7 +2,7 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: Genesis Secondary Z80 CPU Memory Bus
+ * Domain Layer: Genesis Secondary Z80 CPU Memory Bus (CPU Compatibility Wrappers)
  * 
  * Emulates the memory address bus and port control logic of the secondary 
  * Zilog Z80 processor. Handles local 8KB RAM, FM YM2612 register bindings, 
@@ -187,5 +187,35 @@ class GenesisBusZ80 {
                 }
                 break;
         }
+    }
+
+    // ========================================================================
+    // BACKWARD COMPATIBILITY WRAPPERS (ZilogZ80 Core Compatibility)
+    // Bridges the shared SMS Z80 core with the secondary Genesis memory bus.
+    // ========================================================================
+    readAddr(address) {
+        return this.read(address, 0); 
+    }
+
+    writeAddr(address, data) {
+        this.write(address, data, 0);
+    }
+
+    readAddr16bit(address) {
+        return this.read(address, 0) | (this.read(address + 1, 0) << 8);
+    }
+
+    writeAddr16bit(address, word) {
+        this.write(address, word & 0xFF, 0);
+        this.write(address + 1, (word >> 8) & 0xFF, 0);
+    }
+
+    readPort(port) {
+        // I/O ports are not populated on Genesis (it uses memory mapped I/O at 0x4000)
+        return 0xFF; 
+    }
+
+    writePort(port, data) {
+        // Unused on Genesis
     }
 }

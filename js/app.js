@@ -2,7 +2,7 @@
  * Project: EGGStation - Sega Multi-System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Entry Point: Composition Root, Welcome Banner, & Console Swapper
+ * Application Entry Point: Composition Root, Welcome Banner, & Console Swapper (Dev Mode Enabled)
  * 
  * This file serves as the system Bootstrapper. It coordinates the hot-swapping 
  * between the Sega Master System and Sega Genesis emulators dynamically, 
@@ -155,6 +155,7 @@ function bootConsole(consoleType) {
             document.getElementById('sms-config-section').classList.remove('hidden');
             document.getElementById('dev-toggle-btn').classList.remove('hidden');
 
+            // UNTOUCHED: SMS Initialization remains letter-for-letter identical to original code
             activeOrchestrator = new EmulatorOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");
                 if (fpsElement) fpsElement.textContent = `${fps} FPS`;
@@ -171,7 +172,11 @@ function bootConsole(consoleType) {
         try {
             // Hide Master System configurations (not used in Genesis standard mode)
             document.getElementById('sms-config-section').classList.add('hidden');
-            document.getElementById('dev-toggle-btn').classList.add('hidden'); // Dev mode is for SMS
+            
+            // FIX: Removed the line that hid 'dev-toggle-btn' on Genesis mode.
+            // This synchronously enables the "DEV MODE" toggle button for the Sega Genesis 
+            // as well, allowing full access to real-time 68K CPU diagnostics.
+            document.getElementById('dev-toggle-btn').classList.remove('hidden'); 
             
             // Collapse developer diagnostics suite to preserve mobile/desktop grid spaces
             const devSuite = document.getElementById('developer-suite');
@@ -186,7 +191,9 @@ function bootConsole(consoleType) {
             glCanvas.style.position = "absolute";
             videoCanvas.classList.remove('hidden');
 
-            activeOrchestrator = new GenesisOrchestrator(videoContext, (fps) => {
+            // Pass glContext to the GenesisOrchestrator constructor 
+            // to enable dynamic GPU-accelerated CRT Shader compilation and filters
+            activeOrchestrator = new GenesisOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");
                 if (fpsElement) fpsElement.textContent = `${fps} FPS`;
             });

@@ -2,11 +2,13 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Layer: Sega Genesis Master System Orchestrator (DRC & Dynamic Pacing)
+ * Application Layer: Sega Genesis Orchestrator (Debugger and VRAM Inspector Integration)
  * 
  * Coordinates the master system synchronization, clock cycle divisions, 
  * frame pacing, and maps physical CPU buses to the VDP, PSG, and FM coprocessors.
- * Handles synchronous Web Audio stereo mixing and low-pass filter passes.
+ * Handles synchronous Web Audio stereo mixing, low-pass filters, and delegates 
+ * full-frame image rendering to the GenesisPostProcessor.
+ * Incorporates real-time 68K instruction debugging, breakpoints, and VRAM visualizers.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates loop orchestration, frame 
@@ -18,16 +20,22 @@
 class GenesisOrchestrator {
     /**
      * @param {CanvasRenderingContext2D} videoContext - Standard 2D Canvas context.
+     * @param {WebGL2RenderingContext} glContext - GPU WebGL2 rendering context.
      * @param {Function} onFpsUpdate - Callback to update the FPS display.
      */
-    constructor(videoContext, onFpsUpdate) {
+    constructor(videoContext, glContext, onFpsUpdate) {
         this.videoContext = videoContext;
+        this.glContext = glContext;
         this.onFpsUpdate = onFpsUpdate;
 
         // Emulation state machine
         this.isRunning = false;
         this.isPaused = false;
         this.fastForward = false;
+
+        // Debugger execution states (Synced snychronously with top-bar controls)
+        this.isDebugging = false;
+        this.breakpointAddress = null;
 
         this.tvStandard = 0; // 0 = NTSC (60Hz), 1 = PAL (50Hz)
 
@@ -46,6 +54,7 @@ class GenesisOrchestrator {
         this.lastTime = 0;
         this.accumulatedTime = 0;
         this.framesRendered = 0;
+        this.lastDeltaTime = 0; // Tracks live delta-time for real-time FPS calculations
 
         // Hardware Domain & Infrastructure Instantiation (DIP: Injecting Dependencies)
         this.vdp = new GenesisVdp();
@@ -83,6 +92,14 @@ class GenesisOrchestrator {
         this.currentScanline = 0;
         this.currentCycle = 0;
 
+        // Persistent full-frame buffers and Post-Processing selectors (Max bounds: 320x240)
+        this.glbFrameBuffer = new Uint8ClampedArray(320 * 240 * 4);
+        this.prevFrameBuffer = new Uint8ClampedArray(320 * 240 * 4);
+        this.postProcessMode = 0; // Default: Bilinear
+
+        // Initialize dedicated Genesis post-processor
+        this.postProcessor = new GenesisPostProcessor(this.vdp, this.glContext);
+
         // Hard-bind loop to preserve 'this' context inside requestAnimationFrame closures
         this.loop = this.loop.bind(this);
     }
@@ -95,6 +112,10 @@ class GenesisOrchestrator {
         this.currentCycle = 0;
         this.accumulatedTime = 0;
         this.framesRendered = 0;
+        this.lastDeltaTime = 0;
+
+        this.glbFrameBuffer.fill(0);
+        this.prevFrameBuffer.fill(0);
 
         // Synchronously purge memory buffers and reset processors
         this.vdp.initialise();
@@ -111,6 +132,21 @@ class GenesisOrchestrator {
      */
     setTvStandard(standard) {
         this.tvStandard = standard === "PAL" ? 1 : 0;
+        
+        // Synchronize the TV standard with the master memory bus 
+        // to ensure games can dynamically read the correct hardware region bits.
+        if (this.bus) {
+            this.bus.tvStandard = this.tvStandard;
+        }
+    }
+
+    /**
+     * Updates the active post processing shader uniforms.
+     */
+    updateShaderUniforms(curvature, scanlines, phosphor, bloom) {
+        if (this.postProcessor) {
+            this.postProcessor.updateShaderUniforms(curvature, scanlines, phosphor, bloom);
+        }
     }
 
     /**
@@ -201,6 +237,8 @@ class GenesisOrchestrator {
 
         this.isRunning = true;
         this.isPaused = false;
+        this.isDebugging = false;
+        this.breakpointAddress = null;
         this.lastTime = performance.now();
         this.accumulatedTime = 0;
 
@@ -226,7 +264,13 @@ class GenesisOrchestrator {
      * @param {number} currentTime - High-resolution timestamp provided by the browser.
      */
     loop(currentTime) {
-        if (!this.isRunning || this.isPaused) return;
+        if (!this.isRunning || this.isPaused || this.isDebugging) {
+            if (this.isDebugging) {
+                this.lastTime = currentTime;
+                this.animationFrameId = requestAnimationFrame(this.loop);
+            }
+            return;
+        }
 
         // Silent auto-resume handshake on any user interaction/loop tick.
         // Bypasses browser autoplay restrictions completely without modifying HTML/CSS.
@@ -244,6 +288,9 @@ class GenesisOrchestrator {
         if (deltaTime > 100) {
             deltaTime = targetFrameTime;
         }
+
+        // Cache the delta time snychronously for performance and FPS monitor scaling
+        this.lastDeltaTime = deltaTime;
 
         if (this.fastForward) {
             // Uncap FPS, process 4 hardware frames per V-Sync display tick
@@ -306,14 +353,17 @@ class GenesisOrchestrator {
                         this.m68k.irqPending = 6;
                     }
 
-                    // FIX: Trigger V-Blank Interrupt on the Z80 secondary CPU thread!
-                    // Drives the sound playback driver (driving music/SFX on level loads).
+                    // Trigger standard maskable interrupt on the Z80 secondary CPU thread.
+                    // This uses the correct silicon-accurate hardware line method to snychronously 
+                    // drive the music/sound effects driver, resolving the silent audio driver issue.
                     if (!this.z80Bus.isZ80Frozen()) {
-                        if (typeof this.z80.interrupt === 'function') {
-                            this.z80.interrupt(0x38); // Standard Z80 Mode 1 V-Blank Interrupt
-                        } else if (typeof this.z80.requestInterrupt === 'function') {
-                            this.z80.requestInterrupt(0x38);
-                        }
+                        this.z80.raiseMaskableInterrupt();
+                    }
+                } else if (scanline === activeHeight + 1) {
+                    // Clears the level-triggered Z80 interrupt line after exactly 1 scanline.
+                    // This matches CPU_Z80.set_irq_line(false) in vdp.cpp.
+                    if (!this.z80Bus.isZ80Frozen()) {
+                        this.z80.maskableInterruptWaiting = false;
                     }
                 }
                 
@@ -332,10 +382,31 @@ class GenesisOrchestrator {
             }
         }
         
+        // End of frame: Blit the persistent 1D buffer to the screen using our post-processor!
+        // This is perfectly aligned with Master System's hardware timing pipeline.
+        const activeWidth = this.vdp.h40Enabled ? 320 : 256;
+        if (this.postProcessor) {
+            this.postProcessor.blit(
+                this.videoContext, 
+                this.glbFrameBuffer, 
+                activeWidth, 
+                activeHeight, 
+                this.postProcessMode, 
+                this.prevFrameBuffer
+            );
+        }
+
+        // Copy current frame to the previous frame buffer (needed for stereoscopic 3D glasses)
+        const activeLength = activeWidth * activeHeight * 4;
+        this.prevFrameBuffer.set(this.glbFrameBuffer.subarray(0, activeLength));
+
         // Update FPS Stats
         this.framesRendered++;
         if (this.framesRendered % 10 === 0 && this.onFpsUpdate) {
-            this.onFpsUpdate(this.fastForward ? "FFWD" : (this.tvStandard === 1 ? "50 FPS" : "60 FPS"));
+            // Calculate and format the actual real-time frames-per-second dynamically 
+            // based on the captured delta-time, rather than displaying a hardcoded static text.
+            const currentFps = (this.lastDeltaTime > 0) ? (1000 / this.lastDeltaTime).toFixed(1) : (this.tvStandard === 1 ? "50.0" : "60.0");
+            this.onFpsUpdate(this.fastForward ? "FFWD" : currentFps);
         }
     }
 
@@ -344,7 +415,15 @@ class GenesisOrchestrator {
      * @param {number} m68kCycles - Motorola 68000 clock ticks to execute.
      */
     stepCPUs(m68kCycles) {
-        if (!this.isRunning || this.isPaused) return;
+        if (!this.isRunning || this.isPaused || this.isDebugging) return;
+
+        // Check snychronous breakpoint assertion prior to executing CPU instructions
+        if (this.breakpointAddress !== null && this.m68k.pc === this.breakpointAddress) {
+            this.isDebugging = true;
+            this.isPaused = false;
+            window.dispatchEvent(new CustomEvent('genesis-debugger-break'));
+            return;
+        }
 
         // Step Primary 68000 CPU
         this.m68k.execute(m68kCycles);
@@ -363,58 +442,111 @@ class GenesisOrchestrator {
     }
 
     /**
-     * Copies the rasterized pixel row to the main canvas context via ImageData buffering.
-     * @param {number} line - The target Y coordinate on the canvas.
+     * Executes precisely one instruction on the Motorola 68000 CPU (Step Into).
+     */
+    stepInstruction() {
+        if (!this.isRunning || !this.m68k) return;
+
+        // Executing for a minimum baseline of 4 cycles is the 68K standard 
+        // to execute exactly one instruction from the PC.
+        this.m68k.execute(4);
+
+        // Safely step the secondary Z80 audio thread snychronously to keep them in phase
+        if (!this.z80Bus.isZ80Frozen()) {
+            const z80Cycles = 2; 
+            let elapsed = 0;
+            while (elapsed < z80Cycles) {
+                elapsed += this.z80.executeOne();
+            }
+        }
+
+        this.fm.update(4);
+    }
+
+    /**
+     * Decodes and rasterizes 4bpp Sega Genesis VRAM pattern tiles onto the diagnostic Canvas.
+     */
+    rasterizeVramTiles(ctx) {
+        if (!this.vdp) return;
+        
+        const imgData = ctx.createImageData(128, 192); // 16 columns * 8px = 128px, 24 rows * 8px = 192px
+        const vram = this.vdp.vRam;
+
+        for (let tileIdx = 0; tileIdx < 384; tileIdx++) {
+            const tileX = tileIdx % 16;
+            const tileY = Math.floor(tileIdx / 16);
+            const destBaseX = tileX * 8;
+            const destBaseY = tileY * 8;
+
+            for (let row = 0; row < 8; row++) {
+                const rowAddr = tileIdx * 32 + row * 4;
+                for (let col = 0; col < 8; col++) {
+                    const byteOffset = rowAddr + Math.floor(col / 2);
+                    const byte = vram[byteOffset & 0xFFFF];
+                    
+                    // Extract the 4-bit pixel nibble (Sega Genesis tiles are stored as 4bpp)
+                    const pixelNibble = (col % 2 === 0) ? (byte >> 4) : (byte & 0x0F);
+                    
+                    // Convert 4-bit pixel value to a 24-bit grayscale value for diagnostic preview
+                    const r = pixelNibble * 17;
+                    const g = pixelNibble * 17;
+                    const b = pixelNibble * 17;
+
+                    const pixelX = destBaseX + col;
+                    const pixelY = destBaseY + row;
+                    const destIdx = (pixelX + (pixelY * 128)) * 4;
+
+                    imgData.data[destIdx]     = r;
+                    imgData.data[destIdx + 1] = g;
+                    imgData.data[destIdx + 2] = b;
+                    imgData.data[destIdx + 3] = 255;
+                }
+            }
+        }
+        ctx.putImageData(imgData, 0, 0);
+    }
+
+    /**
+     * Copies the rasterized pixel row into the persistent 1D frame buffer.
+     * @param {number} line - The target Y coordinate.
      * @param {Uint8Array} pixels - Raw 8-bit palette indices for the scanline.
      * @param {Uint8Array} shadowMap - Shadows/Highlights mapping bits.
      * @param {number} width - Total active VDP screen width.
      * @param {number} height - Total active VDP screen height.
      */
     renderScanline(line, pixels, shadowMap, width, height) {
-        if (this.videoContext) {
-            const canvas = this.videoContext.canvas;
-            
-            // Dynamically resize the internal width and height of the shared <canvas> element.
-            // When switching to Genesis (320px or 256px wide), this prevents the browser from 
-            // clipping/cutting off the right side of the screen, whilst keeping the shared HTML/CSS intact.
-            if (canvas.width !== width || canvas.height !== height) {
-                canvas.width = width;
-                canvas.height = height;
-            }
+        const shadowEnabled = this.vdp.shadowHighlightEnabled;
+        
+        // Calculate dynamic line offset in the 1D frame buffer array (256px or 320px width)
+        const destOffset = line * width * 4;
 
-            const imgData = this.videoContext.createImageData(width, 1);
-            const shadowEnabled = this.vdp.shadowHighlightEnabled;
+        for (let i = 0; i < width; i++) {
+            let colorIdx = pixels[i] & 0x3F;
             
-            // Fast direct 1D array pixel pushing
-            for (let i = 0; i < width; i++) {
-                let colorIdx = pixels[i] & 0x3F;
-                
-                // Default CRAM palette offset
-                let cramOffset = 0x000; 
+            // Default CRAM palette offset
+            let cramOffset = 0x000; 
 
-                if (shadowEnabled) {
-                    const shadowStatus = shadowMap[i];
-                    if (shadowStatus === 0) {
-                        cramOffset = 0x040; // Apply shadow palette offset (1/2 luminance)
-                    } else if (shadowStatus === 2) {
-                        cramOffset = 0x080; // Apply highlight palette offset (double luminance)
-                    }
+            if (shadowEnabled) {
+                const shadowStatus = shadowMap[i];
+                if (shadowStatus === 0) {
+                    cramOffset = 0x040; // Apply shadow palette offset (1/2 luminance)
+                } else if (shadowStatus === 2) {
+                    cramOffset = 0x080; // Apply highlight palette offset (double luminance)
                 }
-
-                const rgb = this.vdp.cram[cramOffset + colorIdx]; // Fetch the calculated RGB color
-
-                // Convert SEGA RGB444 to standard 24-bit HTML5 RGB
-                const r = ((rgb & 0x00E) >> 1) * 36;
-                const g = ((rgb & 0x0E0) >> 5) * 36;
-                const b = ((rgb & 0xE00) >> 9) * 36;
-
-                const dest = i * 4;
-                imgData.data[dest]     = r;
-                imgData.data[dest + 1] = g;
-                imgData.data[dest + 2] = b;
-                imgData.data[dest + 3] = 255;
             }
-            this.videoContext.putImageData(imgData, 0, line);
+
+            const rgb = this.vdp.cram[cramOffset + colorIdx]; // Fetch the calculated RGB color
+
+            // Convert SEGA RGB444 to standard 24-bit HTML5 RGB
+            const r = ((rgb & 0x00E) >> 1) * 36;
+            const g = ((rgb & 0x0E0) >> 5) * 36;
+            const b = ((rgb & 0xE00) >> 9) * 36;
+
+            const dest = destOffset + (i * 4);
+            this.glbFrameBuffer[dest]     = r;
+            this.glbFrameBuffer[dest + 1] = g;
+            this.glbFrameBuffer[dest + 2] = b;
+            this.glbFrameBuffer[dest + 3] = 255;
         }
     }
 }

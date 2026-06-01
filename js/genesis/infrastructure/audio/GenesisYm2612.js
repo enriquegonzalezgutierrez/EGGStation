@@ -2,7 +2,7 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain / Infrastructure Layer: Sega Genesis Yamaha YM2612 FM Synthesizer
+ * Domain / Infrastructure Layer: Sega Genesis Yamaha YM2612 FM Synthesizer (Volume Scale Fix)
  * 
  * Emulates the central 6-channel frequency modulation (FM) synthesizer chip 
  * of the Sega Genesis system bus. Handles 4-operator voice algorithms, 
@@ -615,11 +615,8 @@ class GenesisYm2612 {
             }
         }
 
-        // FIX: Step Timer A and Timer B synchronously on the CPU execution thread.
-        // This ensures the timers decrement while the CPU is executing tight polling wait loops!
-        // YM2612 internal clock is the Master CPU clock / 2.
-        // Timer A decrements every 72 internal YM clocks (144 CPU cycles).
-        // Timer B decrements every 1152 internal YM clocks (2304 CPU cycles).
+        // Step Timer A and Timer B synchronously on the CPU execution thread.
+        // This ensures the timers decrement while the CPU is executing tight polling wait loops.
         this.timerCycleAccumulator += cycles;
 
         while (this.timerCycleAccumulator >= 144) {
@@ -737,6 +734,7 @@ class GenesisYm2612 {
 
     /**
      * Mixer core: Runs all algorithm routes per active channel.
+     * Generates stereo audio signals and writes them directly to the sound buffer.
      * @param {Int16Array} sampleBuffer - Interactive signed 16-bit audio block.
      * @param {number} totalFrames - Total frames to process on this step.
      */
@@ -753,6 +751,9 @@ class GenesisYm2612 {
 
             const rawVal = (this.dacSample ^ 0x100) & 0x1FF;
             const dacSampleValue = (rawVal & 0x100) !== 0 ? rawVal - 512 : rawVal;
+
+            let lt = 0;
+            let rt = 0;
 
             for (let ch = 0; ch < 6; ++ch) {
                 const baseOp = ch * 4;
@@ -816,13 +817,24 @@ class GenesisYm2612 {
                     finalSample = 0;
                 }
 
-                const volumeOffset = (finalSample * 128) / 8; 
+                // FIX: Map channel outputs directly to the stereo mixing accumulators 
+                // in their native amplitude scale, removing the incorrect *16 multiplier 
+                // which caused massive integer overflow and signal destruction.
+                const volumeOffset = finalSample; 
 
-                if (this.chPanLeft[ch] !== 0)  sampleBuffer[ptr]     = (sampleBuffer[ptr] + volumeOffset) | 0;
-                if (this.chPanRight[ch] !== 0) sampleBuffer[ptr + 1] = (sampleBuffer[ptr + 1] + volumeOffset) | 0;
+                if (this.chPanLeft[ch] !== 0)  lt += volumeOffset;
+                if (this.chPanRight[ch] !== 0) rt += volumeOffset;
             }
 
-            // Note: Timers are now processed synchronously inside update() to match hardware execution lines.
+            // Clip the combined left/right streams to signed 16-bit limits (-32768 to 32767)
+            // before storing them into the Int16Array to prevent wrapping digital distortion.
+            if (lt > 32767) lt = 32767;
+            else if (lt < -32768) lt = -32768;
+            if (rt > 32767) rt = 32767;
+            else if (rt < -32768) rt = -32768;
+
+            sampleBuffer[ptr] = lt;
+            sampleBuffer[ptr + 1] = rt;
 
             ptr += 2;
         }

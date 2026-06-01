@@ -2,7 +2,7 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: M68K CPU Arithmetic Instruction Registry
+ * Domain Layer: M68K CPU Arithmetic Instruction Registry (Compiler Flow Fix)
  * 
  * Implements the registration and execution logic for the entire M68K 
  * arithmetic instruction family. Aligned with MDTracer's boolean algebraic 
@@ -28,22 +28,18 @@ class M68kArithmetic {
             // --- 1. ADD / ADDA / SUB / SUBA Group ---
             // Format: [opType:4][reg:3][opMode:3][src_mode:3][src_reg:3]
             const opType = (opcode >> 12) & 0xF;
-            if (opType === 0xD || opType === 0x9) { // ADD = 0xD, SUB = 0x9
+            const opMode = (opcode >> 6) & 7;
+            
+            // Safe Hardware Filter: ADDX/SUBX strictly require bit 8 as 1 and bits 4-5 as 0
+            const isAddxSubx = (opType === 0xD || opType === 0x9) && (opMode !== 3 && opMode !== 7) && (opcode & 0x0130) === 0x0100;
+
+            if ((opType === 0xD || opType === 0x9) && !isAddxSubx) { 
                 const reg = (opcode >> 9) & 7;
-                const opMode = (opcode >> 6) & 7;
                 const srcMode = (opcode >> 3) & 7;
                 const srcReg = opcode & 7;
                 
                 const isAdd = (opType === 0xD);
 
-                // Safe Hardware Filter: ADDX/SUBX strictly require bit 8 as 1 and bits 4-5 as 0
-                // FIX: Ensure it doesn't match ADDA/SUBA (opMode 3 or 7) where bit 8 could also be 1
-                const isAddxSubx = (opMode !== 3 && opMode !== 7) && (opcode & 0x0130) === 0x0100;
-
-                if (isAddxSubx) {
-                    continue; // Skip and let the specialized ADDX/SUBX block handle this opcode
-                }
-                
                 if (opMode === 3 || opMode === 7) {
                     // ADDA / SUBA: Destination is always an Address Register
                     opcodeTable[opcode] = () => {
@@ -59,7 +55,6 @@ class M68kArithmetic {
                         
                         return size === 3 ? 8 : 6;
                     };
-                    continue;
                 } else {
                     // Standard ADD / SUB
                     opcodeTable[opcode] = () => {
@@ -115,14 +110,12 @@ class M68kArithmetic {
                         
                         return size === 3 ? 8 : 4;
                     };
-                    continue;
                 }
             }
 
             // --- 2. CMP / CMPA / CMPM (Compare) Group ---
-            if (opType === 0xB) {
+            else if (opType === 0xB) {
                 const reg = (opcode >> 9) & 7;
-                const opMode = (opcode >> 6) & 7;
                 const srcMode = (opcode >> 3) & 7;
                 const srcReg = opcode & 7;
 
@@ -150,7 +143,6 @@ class M68kArithmetic {
                         
                         return 6;
                     };
-                    continue;
                 } else if ((opcode & 0x0138) === 0x0108) {
                     // CMPM (Compare Memory)
                     const sizeRaw = (opcode >> 6) & 3;
@@ -182,7 +174,6 @@ class M68kArithmetic {
 
                             return size === 3 ? 20 : 12;
                         };
-                        continue;
                     }
                 } else {
                     // Standard CMP
@@ -212,12 +203,11 @@ class M68kArithmetic {
 
                         return size === 3 ? 6 : 4;
                     };
-                    continue;
                 }
             }
 
             // --- 3. CMPI (Compare Immediate) Group ---
-            if ((opcode & 0xFF00) === 0x0C00) {
+            else if ((opcode & 0xFF00) === 0x0C00) {
                 const sizeRaw = (opcode >> 6) & 3;
                 if (sizeRaw !== 3) {
                     const mode = (opcode >> 3) & 7;
@@ -251,12 +241,11 @@ class M68kArithmetic {
 
                         return size === 3 ? 14 : 8;
                     };
-                    continue;
                 }
             }
 
             // --- 4. ADDQ / SUBQ (Add/Subtract Quick) Group ---
-            if (opType === 0x5) {
+            else if (opType === 0x5) {
                 const valRaw = (opcode >> 9) & 7;
                 const value = valRaw === 0 ? 8 : valRaw;
                 const isSub = (opcode & 0x0100) !== 0;
@@ -303,11 +292,10 @@ class M68kArithmetic {
                         return size === 3 ? 8 : 4;
                     };
                 }
-                continue;
             }
 
             // --- 5. ADDX / SUBX (Add/Subtract with Extend) Group ---
-            if ((opcode & 0xF130) === 0xD100 || (opcode & 0xF130) === 0x9100) {
+            else if ((opcode & 0xF130) === 0xD100 || (opcode & 0xF130) === 0x9100) {
                 const isSub = ((opcode >> 12) & 0xF) === 0x9;
                 const rx = (opcode >> 9) & 7;
                 const sizeRaw = (opcode >> 6) & 3;
@@ -365,12 +353,11 @@ class M68kArithmetic {
 
                         return isMemory ? (size === 3 ? 30 : 18) : (size === 3 ? 8 : 4);
                     };
-                    continue;
                 }
             }
 
             // --- 6. MULU / MULS (Multiply) Group ---
-            if (opType === 0xC) {
+            else if (opType === 0xC) {
                 const reg = (opcode >> 9) & 7;
                 const isSigned = (opcode & 0x0100) !== 0;
                 const opMode = (opcode >> 6) & 7;
@@ -400,12 +387,11 @@ class M68kArithmetic {
 
                         return 70; 
                     };
-                    continue;
                 }
             }
 
             // --- 7. DIVU / DIVS (Divide) Group ---
-            if (opType === 0x8) {
+            else if (opType === 0x8) {
                 const reg = (opcode >> 9) & 7;
                 const isSigned = (opcode & 0x0100) !== 0;
                 const opMode = (opcode >> 6) & 7;
@@ -459,12 +445,11 @@ class M68kArithmetic {
 
                         return 140; 
                     };
-                    continue;
                 }
             }
 
             // --- 8. EXT (Sign Extend) Group ---
-            if ((opcode & 0xFEF8) === 0x4880) { // EXT.W
+            else if ((opcode & 0xFEF8) === 0x4880) { // EXT.W
                 const reg = opcode & 7;
                 opcodeTable[opcode] = () => {
                     const val = cpu.d[reg] & 0xFF;
@@ -477,9 +462,8 @@ class M68kArithmetic {
                     cpu.fC = 0;
                     return 4;
                 };
-                continue;
             }
-            if ((opcode & 0xFEF8) === 0x48C0) { // EXT.L
+            else if ((opcode & 0xFEF8) === 0x48C0) { // EXT.L
                 const reg = opcode & 7;
                 opcodeTable[opcode] = () => {
                     const val = cpu.d[reg] & 0xFFFF;
@@ -492,11 +476,10 @@ class M68kArithmetic {
                     cpu.fC = 0;
                     return 4;
                 };
-                continue;
             }
 
             // --- 9. ABCD / SBCD (Binary Coded Decimal Math) Group ---
-            if ((opcode & 0xF1F0) === 0xC100 || (opcode & 0xF1F0) === 0x8100) {
+            else if ((opcode & 0xF1F0) === 0xC100 || (opcode & 0xF1F0) === 0x8100) {
                 const isSub = ((opcode >> 12) & 0xF) === 0x8;
                 const rx = (opcode >> 9) & 7;
                 const isMemory = (opcode & 0x0008) !== 0;
@@ -568,11 +551,10 @@ class M68kArithmetic {
 
                     return isMemory ? 18 : 6;
                 };
-                continue;
             }
 
             // --- 10. ADDI / SUBI (Add/Subtract Immediate) Group ---
-            if ((opcode & 0xFF00) === 0x0600 || (opcode & 0xFF00) === 0x0400) {
+            else if ((opcode & 0xFF00) === 0x0600 || (opcode & 0xFF00) === 0x0400) {
                 const isSub = (opcode & 0x0200) === 0;
                 const sizeRaw = (opcode >> 6) & 3;
                 
@@ -617,7 +599,6 @@ class M68kArithmetic {
 
                         return size === 3 ? 16 : 8;
                     };
-                    continue;
                 }
             }
         }

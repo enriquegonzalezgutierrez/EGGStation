@@ -2,7 +2,7 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: Genesis Primary M68K CPU Master Memory Bus
+ * Domain Layer: Genesis Primary M68K CPU Master Memory Bus (Double-Swap Fix)
  * 
  * Emulates the central physical memory bus of the Motorola 68000 processor. 
  * Decodes 24-bit physical address lines and routes synchronous data cycles 
@@ -55,6 +55,9 @@ class GenesisBusM68k {
         // On-board I/O line status registers (Sega 315-5309 Controllers Chip)
         this.ioCtrl = new Uint8Array(3); // Ctrl 1, Ctrl 2, Ctrl 3 (0 = Input, 1 = Output)
         this.ioData = new Uint8Array([0xFF, 0xFF, 0xFF]); // Data 1, Data 2, Data 3 (Default: 0xFF VCC pull-up)
+
+        // Hardware region standard register (0 = NTSC, 1 = PAL)
+        this.tvStandard = 0; 
     }
 
     /**
@@ -83,16 +86,19 @@ class GenesisBusM68k {
      */
     setCartridge(romBuffer) {
         if (romBuffer) {
-            // Sega Genesis ROMs are stored in Big-Endian. 
-            // Byte-swap is required to read correct 16-bit words on little-endian host systems.
-            const rawBytes = new Uint8Array(romBuffer);
+            // FIX: Clone the ArrayBuffer using .slice(0) to prevent mutating the original 
+            // cached browser reference in-place, which would cause corrupt double byte-swapping 
+            // on subsequent loads of the same file.
+            const clonedBuffer = romBuffer.slice(0); 
+
+            const rawBytes = new Uint8Array(clonedBuffer);
             for (let i = 0; i < rawBytes.length; i += 2) {
                 const temp = rawBytes[i];
                 rawBytes[i] = rawBytes[i + 1];
                 rawBytes[i + 1] = temp;
             }
 
-            this.cartridgeRom = new Uint16Array(romBuffer);
+            this.cartridgeRom = new Uint16Array(clonedBuffer);
             this.cartridgeLength = this.cartridgeRom.length;
             this.setupExternalRam();
         } else {
@@ -175,10 +181,12 @@ class GenesisBusM68k {
                     const offset = address & 0x00FF;
                     switch (offset) {
                         case 0: case 1: { // Version Register (physically on address odd 0xA10001)
-                            const overseas = 1; 
-                            const pal = 0;      
+                            const overseas = 1; // 1 = Export (USA/Europe), 0 = Domestic (Japan)
+                            const pal = this.tvStandard;      
                             const noCD = this.megaCdEnabled ? 0 : 1;
-                            return (overseas << 7) | (pal << 6) | (noCD << 5); // Return in low byte
+                            
+                            const hardwareVer = 1; 
+                            return (overseas << 7) | (pal << 6) | (noCD << 5) | hardwareVer; // Return in low byte
                         }
 
                         // Gamepad Data Ports (Handshaked and filtered dynamically by active CTRL registers)
@@ -201,7 +209,7 @@ class GenesisBusM68k {
                     }
                 } else if (ioSubChunk === 0x11) { // 0xA11100 - 0xA11200: System Control
                     if ((address & 0xFF00) === 0xA11100) {
-                        // FIX: Non-inverted Z80 BUSREQ status.
+                        // Non-inverted Z80 BUSREQ status.
                         // Bit 8 must be 0 if the Z80 is frozen (68K has the bus), and 1 if the Z80 is running.
                         // Mapped directly with open-bus pull-up (0xFF) on the lower byte.
                         const z80Running = this.z80Bus.isZ80Frozen() ? 0 : 1;
@@ -309,11 +317,11 @@ class GenesisBusM68k {
                         switch (offset) {
                             case 2: case 3: // Data 1
                                 this.ioData[0] = lowByte;
-                                this.controllerManager.write(0, lowByte);
+                                this.controllerManager.write(0, targetCycle, lowByte); 
                                 break;
                             case 4: case 5: // Data 2
                                 this.ioData[1] = lowByte;
-                                this.controllerManager.write(1, lowByte);
+                                this.controllerManager.write(1, targetCycle, lowByte);
                                 break;
                             case 6: case 7: // Data 3 / EXT
                                 this.ioData[2] = lowByte;
@@ -359,8 +367,6 @@ class GenesisBusM68k {
                         break;
 
                     case 2: case 3:
-                        // Corrected callback invocation parameters. Wraps standard writeControl parameters 
-                        // ensuring that the bound readCallback properly maps (userData, addr, cycle) inputs.
                         this.vdp.writeControl(
                             value, 
                             () => {}, 
