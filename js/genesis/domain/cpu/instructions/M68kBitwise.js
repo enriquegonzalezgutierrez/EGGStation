@@ -2,12 +2,19 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: M68K CPU Bitwise Instruction Registry
+ * Domain Layer: M68K CPU Bitwise Instruction Registry (BlastEm Aligned)
  * 
  * Implements the registration and execution logic for the entire M68K 
  * bitwise manipulation instruction family (BTST, BSET, BCLR, BCHG).
- * Fully aligned with MDTracer reference standards to ensure proper Z flag 
- * updating on single-bit tests, resolving critical static opcode mapping.
+ * 
+ * Aligned with hardware standards observed in BlastEm to resolve:
+ * 1. Modulo 32 vs Modulo 8 Bit Selection: Restricts the active bit mask to 
+ *    modulo 32 for register direct targets, and modulo 8 for memory targets.
+ * 2. Strict Z-Flag Isolation: Updates only the Zero (Z) flag to the complement 
+ *    of the tested bit, keeping Negative (N), Overflow (V), Carry (C), and 
+ *    Extend (X) flags completely unaffected.
+ * 3. Exact Immediate Offset Decoders: Decodes the static immediate bit offset 
+ *    using sequential 16-bit word fetches from the program counter.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates direct single-bit testing 
@@ -56,7 +63,7 @@ class M68kBitwise {
                     // Test bit: Z flag is set to the complement of the tested bit
                     cpu.fZ = (val & mask) === 0 ? 1 : 0;
 
-                    // Note: CCR N, V, C flags are entirely UNAFFECTED by bitwise operations
+                    // Note: CCR N, V, C, X flags are entirely UNAFFECTED by bitwise operations
 
                     if (opType === 1) { // BCHG (Bit Change - Toggle)
                         cpu.writeEA(destEa, (val ^ mask) & maskLimit, size);
@@ -65,9 +72,8 @@ class M68kBitwise {
                     } else if (opType === 3) { // BSET (Bit Set - Force 1)
                         cpu.writeEA(destEa, (val | mask) & maskLimit, size);
                     }
-                    // Note: opType === 0 is BTST (Only tests, does not write back to memory/register)
 
-                    // Timing cycles derived from MDTracer standards
+                    // Timing cycles derived from BlastEm/Motorola standards
                     if (opType === 0) { // BTST
                         return isRegister ? 6 : 8;
                     } else { // BCHG, BCLR, BSET
@@ -80,7 +86,6 @@ class M68kBitwise {
             // --- 2. Static Bit Operations (Immediate bit number value) ---
             // Format: [0000][1000][00][opType:2][mode:3][dest_reg:3]
             // opType: 0 = BTST, 1 = BCHG, 2 = BCLR, 3 = BSET
-            // FIX: Corrected mask with 0xFF00 to register static BCHG, BCLR and BSET correctly
             if ((opcode & 0xFF00) === 0x0800) {
                 const opType = (opcode >> 6) & 3;
                 const mode = (opcode >> 3) & 7;

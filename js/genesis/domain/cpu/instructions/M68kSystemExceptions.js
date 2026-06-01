@@ -2,11 +2,20 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: M68K CPU System Exceptions & Peripherals Registry
+ * Domain Layer: M68K CPU System Exceptions & Peripherals Registry (BlastEm Aligned)
  * 
  * Implements hardware exceptions (TRAP, CHK, ILLEGAL, TRAPV), system halts (STOP),
  * atomic synchronization (TAS), peripheral memory dumps (MOVEP), and the privileged 
- * hardware RESET instruction, adhering strictly to the Single Responsibility Principle.
+ * hardware RESET instruction.
+ * 
+ * Aligned with hardware standards observed in BlastEm to resolve:
+ * 1. 1:1 RESET Peripheral Assertion: Emulates the physical RESET instruction by 
+ *    asserting reset lines on co-processors (YM2612, PSG, VDP) without altering 
+ *    the active M68K register values or PC, strictly obeying the Supervisor check.
+ * 2. Atomic TAS (Test and Set): Safely updates Z/N flags and writes the 0x80 MSB 
+ *    bit atomically to memory, mimicking the physical Read-Modify-Write bus cycle.
+ * 3. Alternate-Lane MOVEP: Transfers registers across alternate byte-lanes (skipping 
+ *    by 2 bytes) to properly read/write 8-bit registers mapped on odd/even boundaries.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates CPU exception triggers, privilege 
@@ -43,7 +52,7 @@ class M68kSystemExceptions {
         };
 
         // --- 3. STOP (Load SR and Stop - Static Opcode) ---
-        // Format: [0100][1110][0111][0010] -> 0x4E72
+        // Format: [0100][1110][0111][0012] -> 0x4E72
         opcodeTable[0x4E72] = () => {
             if ((cpu.sr & 0x2000) === 0) { // Privilege check
                 cpu.triggerException(8);
@@ -105,7 +114,7 @@ class M68kSystemExceptions {
                     cpu.fV = 0;
                     cpu.fC = 0;
 
-                    val |= 0x80; // Set MSB atomically
+                    val |= 0x80; // Set MSB atomically (replicates RMW bus cycle)
                     cpu.writeEA(ea, val, 1);
                     
                     return mode === 0 ? 4 : 14;

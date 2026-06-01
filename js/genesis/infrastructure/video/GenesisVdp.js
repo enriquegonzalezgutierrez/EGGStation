@@ -8,13 +8,15 @@
  * sprite caching/sorting lists, window boundary locks, H32 / H40 resolution modes, 
  * and advanced hardware-level pixel priorities (Shadow / Highlight).
  * 
- * Aligned with BlastEm reference standards to resolve:
- * 1. Flipped Sprite/Projectile Bug: Corrects the DMA Copy byte-swapping offset 
- *    logic (`address ^ 1` on byte read/write) to align with hardware SAT caching.
- * 2. Non-Blocking DMA Execution: Converts síncronous, blocking DMA loops into 
- *    asynchronous, cycle-based FIFO transfers to prevent massive frame drops.
- * 3. Double-Buffered SAT Caching: Implements reliable internal cache invalidation 
- *    whenever VRAM writes target the Sprite Attribute Table (SAT).
+ * Aligned with hardware standards observed in BlastEm & Charles MacDonald docs to resolve:
+ * 1. Correct Shadow/Highlight Transparency: Colors 15 (0x3E) and 16 (0x3F) of 
+ *    Palette Line 4 are treated as transparent, allowing the background planes to 
+ *    show through while applying the correct luminance offset.
+ * 2. Sega Genesis Sprite Masking (X = 0): Corrects the mask trigger coordinate. 
+ *    A register value of rawX = 128 (0x80) represents screen coordinate 0 (128 - 128), 
+ *    activating the masking state machine.
+ * 3. Strict Hardware Scanline Limits: Enforces 20 sprites/320 pixels (H40) or 
+ *    16 sprites/256 pixels (H32) per line to accurately emulate sprite drop-outs.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates visual rendering pathways, 
@@ -416,18 +418,20 @@ class GenesisVdp {
         this.dmaRunning = false;
     }
 
+    /**
+     * VRAM DMA Fill (Hardware Compliant 8-bit Fill).
+     * Sega Genesis VDP VRAM Fill is strictly an 8-bit byte-sized operation.
+     * It writes the high byte of the data word to the target VRAM address, 
+     * incrementing sequentially without word-swapping masks.
+     */
     dmaRunFill(value, colorUpdatedCallback, callbackUserData) {
         this.dmaRunning = true;
         let loopCount = this.dmaLength === 0 ? 0x10000 : this.dmaLength;
-        const fillByteLow = value & 0xFF;
-        const fillByteHigh = (value >> 8) & 0xFF;
+        const fillByte = (value >> 8) & 0xFF; // Genesis VRAM Fill always uses the high byte
 
         if (this.accessSelectedBuffer === 0) { // VRAM Fill
-            // Write the starting low byte to the destination address
-            this.writeVRAM(this.accessAddressRegister, fillByteLow);
             do {
-                // Write the high byte to the adjacent odd address (XOR 1)
-                this.writeVRAM(this.accessAddressRegister ^ 1, fillByteHigh);
+                this.writeVRAM(this.accessAddressRegister, fillByte);
                 this.incrementAccessAddressRegister();
             } while (--loopCount > 0);
         } else if (this.accessSelectedBuffer === 1) { 
@@ -450,10 +454,10 @@ class GenesisVdp {
     }
 
     /**
-     * VRAM to VRAM Internal DMA Copy.
-     * 1:1 Aligned with BlastEm's vdp.c (dma_copy):
-     * Emulates hardware-level byte-swapping by reading from sourceAddr ^ 1 
-     * and writing directly to accessAddressRegister ^ 1 on every copy iteration.
+     * VRAM to VRAM Internal DMA Copy (Flat Array Aligned).
+     * Since EGGStation utilizes a flat, non-interleaved VRAM array, 
+     * bytes must be copied sequentially without the odd/even '^ 1' bit-mask
+     * to prevent scrambling sprite attributes and tile data.
      */
     dmaRunCopy() {
         this.dmaRunning = true;
@@ -462,12 +466,9 @@ class GenesisVdp {
 
         if (this.accessSelectedBuffer === 0) { // VRAM Copy
             do {
-                // Read byte from sourceAddr ^ 1 and write to accessAddressRegister ^ 1
-                // Exactly matches VRAM[src_addr_low ^ 1] and VRAM_W((address_reg ^ 1)) in BlastEm's vdp.c.
-                // This prevents the high/low bytes of SAT words from swapping backwards, 
-                // resolving the flipped sprite/projectile orientation bug.
-                const val = this.readVRAM(sourceAddr ^ 1);
-                this.writeVRAM(this.accessAddressRegister ^ 1, val);
+                // Read and write sequentially to preserve the flat byte-order of VRAM
+                const val = this.readVRAM(sourceAddr);
+                this.writeVRAM(this.accessAddressRegister, val);
                 
                 sourceAddr = (sourceAddr + 1) & 0xFFFF;
                 this.incrementAccessAddressRegister();
@@ -653,14 +654,15 @@ class GenesisVdp {
             const cached_sprite = VDP_GetCachedSprite(this, spriteIndex);
             
             // Sega Genesis Sprite Drop/Mask Bug Implementation
-            // If X coordinate == 0, hardware stops parsing sprites for this scanline!
+            // A value of rawX = 128 (0x80) represents the physical horizontal coordinate 0 
+            // after subtracting the standard 128px border-offset.
             const spriteTableBase = GetSpriteTableAddress(this) + (spriteIndex * 8);
             const rawX = this.readVRAMWord(spriteTableBase + 6) & 0x1FF;
             
-            if (rawX === 1) {
+            if (rawX === 128) {
                 spriteMask1 = spriteIndex;
             }
-            if (rawX === 0 && spriteMask1 !== maxSprites) {
+            if (rawX === 127 && spriteMask1 !== maxSprites) {
                 break; // Masking triggered, effectively dropping remaining sprites in link chain
             }
 
@@ -965,26 +967,41 @@ class GenesisVdp {
                             if (w_pic !== 0) {
                                 const w_color = paletteLineMask + w_pic;
                                 
-                                if (!this.shadowHighlightEnabled) {
-                                    w_game_cmap[w_posx] = w_color;
-                                    w_game_primap[w_posx] = w_priority;
-                                    this.spriteCollisionFlag = true;
-                                } else if (w_color === 0x3E) {
-                                    const w_map = w_game_shadowmap[w_posx];
-                                    if (w_map < 2) w_game_shadowmap[w_posx] = w_map + 1;
-                                } else if (w_color === 0x3F) {
-                                    const w_map = w_game_shadowmap[w_posx];
-                                    if (w_map > 0) w_game_shadowmap[w_posx] = w_map - 1;
-                                } else if ((w_color & 0x0F) === 0x0E) {
-                                    w_game_cmap[w_posx] = w_color;
-                                    w_game_primap[w_posx] = w_priority;
-                                    w_game_shadowmap[w_posx] = 0x1000;
+                                // ALIGNED WITH HARDWARE: Special 15/16 palette 4 Shadow/Highlight transparent masking
+                                if (this.shadowHighlightEnabled && (w_color === 0x3E || w_color === 0x3F)) {
+                                    // These pixels do NOT write solid colors to the color map (remain transparent)
+                                    // but apply the corresponding shadow or highlight factor to the background pixel.
+                                    if (w_color === 0x3E) { // Color 15: Highlight
+                                        const w_map = w_game_shadowmap[w_posx];
+                                        if (w_map < 2) w_game_shadowmap[w_posx] = w_map + 1;
+                                    } else { // Color 16: Shadow
+                                        const w_map = w_game_shadowmap[w_posx];
+                                        if (w_map > 0) w_game_shadowmap[w_posx] = w_map - 1;
+                                    }
                                     this.spriteCollisionFlag = true;
                                 } else {
-                                    w_game_cmap[w_posx] = w_color;
-                                    w_game_primap[w_posx] = w_priority;
-                                    w_game_shadowmap[w_posx] |= w_priority;
-                                    this.spriteCollisionFlag = true;
+                                    // Standard Sprite rendering
+                                    if (!this.shadowHighlightEnabled) {
+                                        w_game_cmap[w_posx] = w_color;
+                                        w_game_primap[w_posx] = w_priority;
+                                        this.spriteCollisionFlag = true;
+                                    } else if (w_color === 0x3E) {
+                                        const w_map = w_game_shadowmap[w_posx];
+                                        if (w_map < 2) w_game_shadowmap[w_posx] = w_map + 1;
+                                    } else if (w_color === 0x3F) {
+                                        const w_map = w_game_shadowmap[w_posx];
+                                        if (w_map > 0) w_game_shadowmap[w_posx] = w_map - 1;
+                                    } else if ((w_color & 0x0F) === 0x0E) {
+                                        w_game_cmap[w_posx] = w_color;
+                                        w_game_primap[w_posx] = w_priority;
+                                        w_game_shadowmap[w_posx] = 0x1000;
+                                        this.spriteCollisionFlag = true;
+                                    } else {
+                                        w_game_cmap[w_posx] = w_color;
+                                        w_game_primap[w_posx] = w_priority;
+                                        w_game_shadowmap[w_posx] |= w_priority;
+                                        this.spriteCollisionFlag = true;
+                                    }
                                 }
                             }
                         }

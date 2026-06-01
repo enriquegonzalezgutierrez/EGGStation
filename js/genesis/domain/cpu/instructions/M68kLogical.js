@@ -2,12 +2,20 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: M68K CPU Logical Instruction Registry
+ * Domain Layer: M68K CPU Logical Instruction Registry (BlastEm Aligned)
  * 
  * Implements the registration and execution logic for the entire M68K 
- * logical instruction family (AND, OR, EOR, NOT, TST, CLR, NEG, ANDI, ORI, EORI).
- * Fully aligned with MDTracer reference standards to ensure proper privilege 
- * checking and correct status flags (CCR) updates, resolving critical MOVE.B overlap.
+ * logical instruction family (AND, OR, EOR, NOT, TST, CLR, NEG, NEGX, ANDI, ORI, EORI).
+ * 
+ * Aligned with hardware standards observed in BlastEm to resolve:
+ * 1. 68000-Compliant TST Restrictions: Excludes Address Register Direct (An) 
+ *    mode from TST instruction registration, forcing an Illegal Instruction 
+ *    exception on 68000-only legacy compilers.
+ * 2. Privilege Checks on SR Updates: Restricts immediate logical operations 
+ *    targeting the Status Register (SR) to Supervisor mode (triggering 
+ *    Privilege Violation on Vector 8 otherwise).
+ * 3. Exclusive EXG/AND Opcode Overlaps: Safe filtering masks prevent logical 
+ *    instructions from incorrectly overriding registers during exchange execution.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates logical and bitwise algebraic 
@@ -26,7 +34,7 @@ class M68kLogical {
         
         for (let opcode = 0; opcode < 65536; opcode++) {
             
-            // --- 1. Immediate to CCR / SR (CRITICAL FOR INTERRUPTS) ---
+            // --- 1. Immediate to CCR / SR (ORI, ANDI, EORI to Status Registers) ---
             // Format ORI/ANDI/EORI to CCR = 0x003C, 0x023C, 0x0A3C (Byte size)
             // Format ORI/ANDI/EORI to SR  = 0x007C, 0x027C, 0x0A7C (Word size)
             if (opcode === 0x003C || opcode === 0x007C || opcode === 0x023C || opcode === 0x027C || opcode === 0x0A3C || opcode === 0x0A7C) {
@@ -74,7 +82,6 @@ class M68kLogical {
                 const srcMode = (opcode >> 3) & 7;
                 const srcReg = opcode & 7;
 
-                // FIX: opMode === 4 is perfectly valid for AND/OR (It represents Byte Size to Memory!)
                 // Exclude only modes 3 and 7 (which belong to MUL, DIV, ABCD, SBCD instruction groups)
                 if (opMode === 3 || opMode === 7) {
                     continue; 
@@ -219,24 +226,28 @@ class M68kLogical {
                     const mode = (opcode >> 3) & 7;
                     const reg = opcode & 7;
 
-                    opcodeTable[opcode] = () => {
-                        const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
-                        const ea = cpu.resolveEA(mode, reg, size);
-                        let val = cpu.readEA(ea, size);
+                    // Standard 68000 Rule: TST does NOT support Address Register Direct (An) mode (mode === 1).
+                    // If mode === 1, we skip registration to let the core throw an Illegal Instruction exception.
+                    if (mode !== 1) {
+                        opcodeTable[opcode] = () => {
+                            const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
+                            const ea = cpu.resolveEA(mode, reg, size);
+                            let val = cpu.readEA(ea, size);
 
-                        const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
-                        const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
+                            const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
+                            const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
 
-                        val &= mask;
+                            val &= mask;
 
-                        // Update CCR Status Flags
-                        cpu.fV = 0;
-                        cpu.fC = 0;
-                        cpu.fZ = val === 0 ? 1 : 0;
-                        cpu.fN = (val & signBit) !== 0 ? 1 : 0;
-                        
-                        return 4;
-                    };
+                            // Update CCR Status Flags
+                            cpu.fV = 0;
+                            cpu.fC = 0;
+                            cpu.fZ = val === 0 ? 1 : 0;
+                            cpu.fN = (val & signBit) !== 0 ? 1 : 0;
+                            
+                            return 4;
+                        };
+                    }
                 }
                 continue;
             }

@@ -2,12 +2,20 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: M68K CPU Shift and Rotate Instruction Registry
+ * Domain Layer: M68K CPU Shift and Rotate Instruction Registry (BlastEm Aligned)
  * 
  * Implements the registration and execution logic for the entire M68K 
  * shift and rotate instruction family (LSL, LSR, ASL, ASR, ROL, ROR, ROXL, ROXR).
- * Aligned with MDTracer reference standards to ensure proper cycle consumption,
- * iterative bit rotation, and correct CCR updates.
+ * 
+ * Aligned with hardware standards observed in BlastEm to resolve:
+ * 1. Cycle-Accurate Shift Count = 0 Handshake: If the shift/rotate count evaluates 
+ *    to 0, the Carry (C) flag is cleared for standard shifts, but is set to the 
+ *    Extend (X) flag's status for ROXL/ROXR.
+ * 2. Persistent ASL Sign-Change Overflow: Iteratively evaluates the sign-bit 
+ *    changes on each step of the shift, setting the Overflow (V) flag if the 
+ *    sign bit toggles at any point of the execution.
+ * 3. Exact Bitwise Masking on Registers: Restricts shift results to Byte (8-bit), 
+ *    Word (16-bit), or Long (32-bit) boundaries before updating destination registers.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates register shift, sign extension, 
@@ -32,10 +40,9 @@ class M68kShiftRotate {
                 const opType = (opcode >> 3) & 3; // 0=AS, 1=LS, 2=ROX, 3=RO
                 const dir = (opcode >> 8) & 1;    // 0=Right, 1=Left
                 
-                // --- 1. MEMORY SHIFTS ---
+                // --- 1. MEMORY SHIFTS (Operates on memory words, shift count is always 1) ---
                 // If size is 3, it's a memory shift (Always Word sized, always 1 bit shift)
                 if (sizeRaw === 3) {
-                    // Memory shifts have opType in bits 9-10 instead of 3-4
                     const memOpType = (opcode >> 9) & 3;
                     const mode = (opcode >> 3) & 7;
                     const reg = opcode & 7;
@@ -69,9 +76,9 @@ class M68kShiftRotate {
                             
                             if (memOpType === 0) { // ASR
                                 const sign = val & 0x8000;
-                                val = ((val >>> 1) | sign) & 0xFFFF; // Explicit logical right shift
+                                val = ((val >>> 1) | sign) & 0xFFFF; 
                             } else if (memOpType === 1) { // LSR
-                                val = (val >>> 1) & 0xFFFF; // Logical shift right (zero fill)
+                                val = (val >>> 1) & 0xFFFF; 
                             } else if (memOpType === 2) { // ROXR
                                 const oldX = cpu.fX;
                                 val = ((val >>> 1) | (oldX << 15)) & 0xFFFF;
@@ -159,7 +166,7 @@ class M68kShiftRotate {
                         cpu.fC = lastBit;
                         if (opType !== 3) cpu.fX = lastBit; // ROL/ROR bypass X flag updates
                     } else {
-                        // FIX: Aligned with Motorola 68000 ISA standards.
+                        // Aligned with Motorola 68000 ISA standards.
                         // If shift count is 0: C is cleared, X is unaffected.
                         // EXCEPTION: ROXL/ROXR copy X flag into C flag instead of clearing it.
                         cpu.fC = (opType === 2) ? cpu.fX : 0;

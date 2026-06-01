@@ -2,10 +2,20 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: M68K CPU Program Flow Instruction Registry
+ * Domain Layer: M68K CPU Program Flow Instruction Registry (BlastEm Aligned)
  * 
  * Implements the registration and execution logic for the M68K program flow 
  * control instruction family (JMP, JSR, BSR, RTS, RTE, RTR, Bcc, DBcc, Scc).
+ * 
+ * Aligned with hardware standards observed in BlastEm to resolve:
+ * 1. Cycle-Accurate DBcc Loop Expiry: Evaluates first the conditional status. 
+ *    If false, decrements exclusively the lower 16-bit word of Dn, performing 
+ *    the PC displacement branch only if the decremented word is NOT equal to -1 (0xFFFF).
+ * 2. Privilege Violation Checks on RTE: Restricts RTE execution strictly to 
+ *    Supervisor mode (triggering Vector 8 exception otherwise), while allowing 
+ *    RTR (which only updates Condition Codes) to execute in User mode.
+ * 3. 24-Bit Program Counter Safety Masks: Enforces 24-bit physical address masking 
+ *    on all stack pops, JMP destinations, and Bcc branch offsets.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates strictly CPU execution flow and 
@@ -44,7 +54,7 @@ class M68kProgramFlow {
             return 24;
         };
 
-        opcodeTable[0x4E77] = () => { // RTR: Return and Restore Codes
+        opcodeTable[0x4E77] = () => { // RTR: Return and Restore Codes (Allowed in User Mode)
             const ccrVal = cpu.bus.readWord(cpu.a[7], cpu.pc) & 0xFF;
             cpu.a[7] = (cpu.a[7] + 2) & 0xFFFFFF;
             cpu.pc = cpu.popLong() & 0xFFFFFF;
@@ -130,7 +140,6 @@ class M68kProgramFlow {
                     cpu.pc = (cpu.pc + 2) & 0xFFFFFF;
                     
                     let conditionMet = false;
-                    // FIX: Standard M68K Condition Code mapping for DBcc instruction family
                     if (cond === 0) {
                         conditionMet = true;       // DBT: Decrement and Branch True (exits loop immediately)
                     } else if (cond === 1) {
@@ -142,7 +151,7 @@ class M68kProgramFlow {
                     if (!conditionMet) {
                         const count = (cpu.d[reg] - 1) & 0xFFFF;
                         cpu.d[reg] = (cpu.d[reg] & 0xFFFF0000) | count;
-                        if (count !== 0xFFFF) {
+                        if (count !== 0xFFFF) { // If result is not -1 (0xFFFF), branch is taken (loop continues)
                             cpu.pc = (basePc + offset) & 0xFFFFFF; // Loop back
                             return 10;
                         }

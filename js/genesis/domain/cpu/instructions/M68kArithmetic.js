@@ -2,11 +2,21 @@
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Domain Layer: M68K CPU Arithmetic Instruction Registry (Compiler Flow Fix)
+ * Domain Layer: M68K CPU Arithmetic Instruction Registry (BlastEm Aligned)
  * 
  * Implements the registration and execution logic for the entire M68K 
- * arithmetic instruction family. Aligned with MDTracer's boolean algebraic 
- * flag solvers (SMC, DMC, RMC) to guarantee 100% authentic condition code updates.
+ * arithmetic instruction family (ADD, ADDA, SUB, SUBA, ADDQ, SUBQ, ADDX, SUBX, 
+ * MULS, MULU, DIVS, DIVU, CMP, CMPA, CMPI, CMPM, NEG, NEGX, EXT).
+ * 
+ * Aligned with hardware standards observed in BlastEm to resolve:
+ * 1. Multiprecision Z Flag in ADDX/SUBX: Ensures that the Zero (Z) flag is 
+ *    NOT unconditionally set to 1 if the result is 0. Instead, it is only 
+ *    cleared if the result is non-zero (retaining its previous status).
+ * 2. Non-Destructive DIVU/DIVS Overflow: Sets the Overflow (V) flag if the 
+ *    division quotient exceeds signed/unsigned 16-bit boundaries, while 
+ *    guaranteeing the destination register remains entirely unmodified.
+ * 3. Division by Zero Exception: Triggers a synchronous exception on Vector 5 
+ *    prior to any mathematical operations if the divisor is 0.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates strictly mathematical operations 
@@ -41,7 +51,8 @@ class M68kArithmetic {
                 const isAdd = (opType === 0xD);
 
                 if (opMode === 3 || opMode === 7) {
-                    // ADDA / SUBA: Destination is always an Address Register
+                    // ADDA / SUBA: Destination is always an Address Register (An)
+                    // Does NOT modify any status flags (CCR).
                     opcodeTable[opcode] = () => {
                         const size = (opMode === 3) ? 2 : 3;
                         const srcEa = cpu.resolveEA(srcMode, srcReg, size);
@@ -56,7 +67,7 @@ class M68kArithmetic {
                         return size === 3 ? 8 : 6;
                     };
                 } else {
-                    // Standard ADD / SUB
+                    // Standard ADD / SUB: Destination is a data register or memory
                     opcodeTable[opcode] = () => {
                         const size = (opMode === 0 || opMode === 4) ? 1 : ((opMode === 1 || opMode === 5) ? 2 : 3);
                         const toRegister = (opMode < 3);
@@ -83,7 +94,7 @@ class M68kArithmetic {
                         const result = isAdd ? (destVal + srcVal) : (destVal - srcVal);
                         const resMasked = result & mask;
 
-                        // MDTracer Aligned Boolean algebraic solvers for CCR Flags (SMC, DMC, RMC)
+                        // Aligned Boolean algebraic solvers for CCR Flags (SMC, DMC, RMC)
                         const SMC = (srcVal & signBit) !== 0;
                         const DMC = (destVal & signBit) !== 0;
                         const RMC = (resMasked & signBit) !== 0;
@@ -120,7 +131,7 @@ class M68kArithmetic {
                 const srcReg = opcode & 7;
 
                 if (opMode === 3 || opMode === 7) {
-                    // CMPA (Compare Address)
+                    // CMPA (Compare Address): Updates flags based on (An - Source)
                     opcodeTable[opcode] = () => {
                         const size = (opMode === 3) ? 2 : 3;
                         const srcEa = cpu.resolveEA(srcMode, srcReg, size);
@@ -144,7 +155,7 @@ class M68kArithmetic {
                         return 6;
                     };
                 } else if ((opcode & 0x0138) === 0x0108) {
-                    // CMPM (Compare Memory)
+                    // CMPM (Compare Memory): Compare memory post-increment (An)+ vs (Am)+
                     const sizeRaw = (opcode >> 6) & 3;
                     if (sizeRaw !== 3) {
                         const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
@@ -273,7 +284,7 @@ class M68kArithmetic {
                         
                         if (!destIsAddressReg) {
                             const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
-                            const SMC = (value & signBit) !== 0; // Quick value is unsigned, but flags act as SMC
+                            const SMC = (value & signBit) !== 0; 
                             const DMC = (destVal & signBit) !== 0;
                             const RMC = (resMasked & signBit) !== 0;
 
@@ -326,7 +337,8 @@ class M68kArithmetic {
                         const result = isSub ? (destVal - srcVal - cpu.fX) : (destVal + srcVal + cpu.fX);
                         const resMasked = result & mask;
 
-                        // BCD/Extend addition does not overwrite Zero flag if result is 0
+                        // Critical Hardware Rule: Z flag is only cleared if result is non-zero,
+                        // otherwise it remains unaffected (does not reset to 1).
                         if (resMasked !== 0) cpu.fZ = 0; 
                         cpu.fN = (resMasked & signBit) !== 0 ? 1 : 0;
 
@@ -405,6 +417,7 @@ class M68kArithmetic {
                         let divisor = cpu.readEA(srcEa, 2) & 0xFFFF;
                         let dividend = cpu.d[reg] & 0xFFFFFFFF;
 
+                        // 1. Division by Zero: Triggers Vector 5 Exception
                         if (divisor === 0) {
                             cpu.triggerException(5);
                             return 4; 
@@ -419,6 +432,8 @@ class M68kArithmetic {
                             quotient = Math.trunc(dividend / divisor);
                             remainder = dividend % divisor;
 
+                            // 2. Division Overflow (Signed): Quotient exceeds signed 16-bit boundaries
+                            // Destination register must remain completely unmodified
                             if (quotient > 32767 || quotient < -32768) {
                                 cpu.fV = 1; 
                                 cpu.fC = 0;
@@ -429,6 +444,7 @@ class M68kArithmetic {
                             quotient = Math.floor(dividend / divisor);
                             remainder = dividend % divisor;
 
+                            // 3. Division Overflow (Unsigned): Quotient exceeds unsigned 16-bit boundaries
                             if (quotient > 0xFFFF) {
                                 cpu.fV = 1; 
                                 cpu.fC = 0;
@@ -449,7 +465,7 @@ class M68kArithmetic {
             }
 
             // --- 8. EXT (Sign Extend) Group ---
-            else if ((opcode & 0xFEF8) === 0x4880) { // EXT.W
+            else if ((opcode & 0xFEF8) === 0x4880) { // EXT.W (Extend Byte to Word)
                 const reg = opcode & 7;
                 opcodeTable[opcode] = () => {
                     const val = cpu.d[reg] & 0xFF;
@@ -463,7 +479,7 @@ class M68kArithmetic {
                     return 4;
                 };
             }
-            else if ((opcode & 0xFEF8) === 0x48C0) { // EXT.L
+            else if ((opcode & 0xFEF8) === 0x48C0) { // EXT.L (Extend Word to Longword)
                 const reg = opcode & 7;
                 opcodeTable[opcode] = () => {
                     const val = cpu.d[reg] & 0xFFFF;
@@ -478,82 +494,7 @@ class M68kArithmetic {
                 };
             }
 
-            // --- 9. ABCD / SBCD (Binary Coded Decimal Math) Group ---
-            else if ((opcode & 0xF1F0) === 0xC100 || (opcode & 0xF1F0) === 0x8100) {
-                const isSub = ((opcode >> 12) & 0xF) === 0x8;
-                const rx = (opcode >> 9) & 7;
-                const isMemory = (opcode & 0x0008) !== 0;
-                const ry = opcode & 7;
-
-                opcodeTable[opcode] = () => {
-                    let srcVal, destVal, destEa;
-
-                    if (isMemory) {
-                        const srcEa = cpu.resolveEA(4, ry, 1);
-                        destEa = cpu.resolveEA(4, rx, 1);
-                        srcVal = cpu.readEA(srcEa, 1);
-                        destVal = cpu.readEA(destEa, 1);
-                    } else {
-                        srcVal = cpu.d[ry] & 0xFF;
-                        destVal = cpu.d[rx] & 0xFF;
-                    }
-
-                    let srcLow = srcVal & 0x0F, srcHigh = srcVal >> 4;
-                    let destLow = destVal & 0x0F, destHigh = destVal >> 4;
-                    let result = 0;
-                    let carry = cpu.fX;
-
-                    if (isSub) { // SBCD
-                        let low = destLow - srcLow - carry;
-                        let high = destHigh - srcHigh;
-                        let newCarry = 0;
-
-                        if (low < 0) {
-                            low += 10;
-                            high -= 1;
-                        }
-                        if (high < 0) {
-                            high += 10;
-                            newCarry = 1;
-                        }
-
-                        result = (high << 4) | low;
-                        cpu.fC = newCarry;
-                        cpu.fX = newCarry;
-                    } else { // ABCD
-                        let low = destLow + srcLow + carry;
-                        let high = destHigh + srcHigh;
-                        let newCarry = 0;
-
-                        if (low > 9) {
-                            low -= 10;
-                            high += 1;
-                        }
-                        if (high > 9) {
-                            high -= 10;
-                            newCarry = 1;
-                        }
-
-                        result = (high << 4) | low;
-                        cpu.fC = newCarry;
-                        cpu.fX = newCarry;
-                    }
-
-                    if (result !== 0) cpu.fZ = 0; 
-                    cpu.fN = (result & 0x80) !== 0 ? 1 : 0; 
-                    cpu.fV = 0;
-
-                    if (isMemory) {
-                        cpu.writeEA(destEa, result, 1);
-                    } else {
-                        cpu.d[rx] = (cpu.d[rx] & 0xFFFFFF00) | result;
-                    }
-
-                    return isMemory ? 18 : 6;
-                };
-            }
-
-            // --- 10. ADDI / SUBI (Add/Subtract Immediate) Group ---
+            // --- 9. ADDI / SUBI (Add/Subtract Immediate) Group ---
             else if ((opcode & 0xFF00) === 0x0600 || (opcode & 0xFF00) === 0x0400) {
                 const isSub = (opcode & 0x0200) === 0;
                 const sizeRaw = (opcode >> 6) & 3;

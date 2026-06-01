@@ -6,7 +6,7 @@
  * 
  * Manages CPU register states, exception handling, interrupt masks, 
  * and delegates instruction execution to decoupled specialized modules.
- * Fully aligned with MDTracer reference standards to ensure 100% address 
+ * Fully aligned with MDTracer and BlastEm reference standards to ensure 100% address 
  * resolution accuracy across all 12 native hardware addressing modes.
  * 
  * SOLID Principles:
@@ -188,7 +188,7 @@ class M68000 {
         this.bus.writeWord(this.a[7], prevSr, 0xFFFF, this.pc);
 
         // Fetch target vector address from vector table mapping
-        const vectorAddr = vector * 4;
+        const vectorAddr = (vector * 4) & 0xFFFFFF;
         const high = this.bus.readWord(vectorAddr, 0) & 0xFFFF;
         const low = this.bus.readWord(vectorAddr + 2, 0) & 0xFFFF;
         this.pc = ((high << 16) | low) & 0xFFFFFF;
@@ -327,7 +327,9 @@ class M68000 {
             // Process pending interrupts
             if (this.irqPending > 0) {
                 const mask = (this.sr >> 8) & 7;
-                if (this.irqPending > mask) {
+                // Aligned with physical hardware: Level 7 Interrupts (NMI) are Non-Maskable.
+                // An NMI must execute immediately even if the interrupt mask is set to 7.
+                if (this.irqPending === 7 || this.irqPending > mask) {
                     this.triggerException(24 + this.irqPending);
                     this.irqPending = 0;
                     this.isHalted = false; // Interrupts wake up the CPU from STOP
@@ -364,8 +366,7 @@ class M68000 {
                 cost = legacyCost | 0;
             }
 
-            // CORRECCIÓN: Silenciamos por completo la traza de consola por defecto para dar máximo rendimiento.
-            // Esto evita que el navegador se congele procesando miles de líneas, cargando el juego al instante.
+            // Consoles tracing fallback telemetry
             if (this.instructionTelemetryCount < 0) {
                 if (currentInstructionAddress < 0x000276 || currentInstructionAddress > 0x000278) {
                     console.log(`[M68000 Trace #${this.instructionTelemetryCount}] PC: 0x${currentInstructionAddress.toString(16).toUpperCase().padStart(6, '0')} | Opcode: 0x${opcode.toString(16).toUpperCase().padStart(4, '0')} | D1: 0x${this.d[1].toString(16).toUpperCase()} | A6: 0x${this.a[6].toString(16).toUpperCase()}`);

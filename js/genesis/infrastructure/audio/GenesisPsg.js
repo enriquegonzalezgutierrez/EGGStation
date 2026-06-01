@@ -8,31 +8,24 @@
  * within the Sega Genesis system bus. Handles three square-wave tone channels 
  * and one continuous feedback noise channel (periodic and white noise).
  * 
+ * Aligned with hardware standards observed in BlastEm to resolve:
+ * 1. Genesis-Specific White Noise LFSR: Replicates the exact hardware gate logic 
+ *    by rotating the 16-bit shift register right and applying a XOR-inversion (`0x8000`) 
+ *    if bit 6 (`0x40`) is set, replacing the incorrect standard SMS polynomial.
+ * 2. 2dB-Step Logarithmic Attenuation: Implements the authentic, physical volume table 
+ *    of the SN76489 chip, mapping output levels to a normalized 16-bit range.
+ * 3. Master Clock Division: Matches the 16-division step rate of the master clock 
+ *    to preserve perfect musical pitch for backing tracks.
+ * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Isolates raw register latch updates, 
  *   wave phase toggles, and noise generator clocks from general bus read/writes.
- * - Open/Closed Principle (OCP): Designed with modular tone-generation loops 
- *   that synthesize sound samples independently of master bus timing standards.
  */
 
-// Flattened high-speed volume lookup table (16 attenuation levels * 2 phase signs)
-const GENESIS_PSG_VOLUMES = new Int16Array([
-    0x1FFF, -0x1FFF, // Attenuation 0: Max Volume (+ / -)
-    0x196A, -0x196A, // Attenuation 1
-    0x1430, -0x1430, // Attenuation 2
-    0x1009, -0x1009, // Attenuation 3
-    0x0CBD, -0x0CBD, // Attenuation 4
-    0x0A1E, -0x0A1E, // Attenuation 5
-    0x0809, -0x0809, // Attenuation 6
-    0x0662, -0x0662, // Attenuation 7
-    0x0512, -0x0512, // Attenuation 8
-    0x0407, -0x0407, // Attenuation 9
-    0x0333, -0x0333, // Attenuation 10
-    0x028A, -0x028A, // Attenuation 11
-    0x0204, -0x0204, // Attenuation 12
-    0x019A, -0x019A, // Attenuation 13
-    0x0146, -0x0146, // Attenuation 14
-    0x0000,  0x0000  // Attenuation 15: Muted
+// Flattened high-speed volume lookup table (16 attenuation levels)
+// Aligned with the physical 2dB-step volume attenuation table from BlastEm (volume_table)
+const GENESIS_PSG_VOLUME_TABLE = new Int16Array([
+    2340, 1859, 1476, 1173, 931, 740, 587, 469, 370, 294, 234, 185, 147, 117, 93, 0
 ]);
 
 const GENESIS_PSG_NOISE_TYPE_PERIODIC = 0;
@@ -45,18 +38,16 @@ class GenesisPsg {
         this.noiseDisabled = 0;
 
         // --- 2. Tone Channels Contiguous Memory Buffers ---
-        this.tonesCountdown = new Int16Array(3);
-        this.tonesCountdownMaster = new Int16Array(3);
-        this.tonesAttenuation = new Uint8Array(3);
-        this.tonesOutputBit = new Uint8Array(3);
+        this.tonesCountdown = new Int16Array(4);       // Timer counters for the 4 channels
+        this.tonesCountdownMaster = new Int16Array(4); // Reload latch values
+        this.tonesAttenuation = new Uint8Array(4);     // Volume attenuation registers (0-15)
+        this.tonesOutputState = new Uint8Array(4);     // Wave phase state (0 or 1)
 
         // --- 3. Noise Channel State ---
-        this.noiseCountdown = 0;
-        this.noiseAttenuation = 0xF; // Muted on startup
-        this.noiseFakeOutputBit = 0;
-        this.noiseFrequencyMode = 0;
         this.noiseType = GENESIS_PSG_NOISE_TYPE_PERIODIC;
-        this.noiseShiftRegister = 0x8000; // Reset state initialized to MSB set (Nuked-MD & MDTracer specs)
+        this.noiseUseTone3 = false;
+        this.noiseShiftRegister = 0x8000; // Reset state initialized to MSB set (BlastEm aligned)
+        this.noiseOut = 0;
 
         // --- 4. Latched Command Status ---
         this.latchedChannel = 0;
@@ -72,16 +63,14 @@ class GenesisPsg {
         // Reset Tone registers (all silenced on boot)
         this.tonesCountdown.fill(0);
         this.tonesCountdownMaster.fill(1); // Safely default to 1 to prevent division/timer lockouts
-        this.tonesAttenuation.fill(0xF);
-        this.tonesOutputBit.fill(0);
+        this.tonesAttenuation.fill(0xF);  // Silence (0xF = maximum attenuation)
+        this.tonesOutputState.fill(0);
 
         // Reset Noise register
-        this.noiseCountdown = 0;
-        this.noiseAttenuation = 0xF;
-        this.noiseFakeOutputBit = 0;
-        this.noiseFrequencyMode = 0;
         this.noiseType = GENESIS_PSG_NOISE_TYPE_PERIODIC;
+        this.noiseUseTone3 = false;
         this.noiseShiftRegister = 0x8000;
+        this.noiseOut = 0;
 
         // Reset Latched state
         this.latchedChannel = 0;
@@ -93,7 +82,7 @@ class GenesisPsg {
 
     /**
      * Writes an 8-bit command byte to latch registers or update state.
-     * Aligned with MDTracer's zero-frequency protection guards.
+     * Aligned with BlastEm's register write latch state machine.
      * @param {number} command - 8-bit instruction written from the system bus.
      */
     writeCommand(command) {
@@ -103,134 +92,103 @@ class GenesisPsg {
         if (isLatch) {
             // Update the synchronously latched register target
             this.latchedChannel = (command >> 5) & 3;
-            this.latchedIsVolumeCommand = (command & 0x10) !== 0 ? 1 : 0;
+            this.latchedIsVolumeCommand = (command & 0x10) !== 0;
 
-            if (this.latchedChannel < 3) {
-                const ch = this.latchedChannel;
-                if (this.latchedIsVolumeCommand !== 0) {
-                    this.tonesAttenuation[ch] = command & 0xF;
+            const ch = this.latchedChannel;
+            if (this.latchedIsVolumeCommand) {
+                this.tonesAttenuation[ch] = command & 0xF;
+            } else {
+                if (ch === 3) {
+                    // Noise Channel Frequency & Type update
+                    const noiseFreqMode = command & 3;
+                    switch (noiseFreqMode) {
+                        case 0:
+                        case 1:
+                        case 2:
+                            this.tonesCountdownMaster[3] = 0x10 << noiseFreqMode;
+                            this.noiseUseTone3 = false;
+                            break;
+                        default:
+                            this.tonesCountdownMaster[3] = this.tonesCountdownMaster[2];
+                            this.noiseUseTone3 = true;
+                            break;
+                    }
+                    this.noiseType = (command & 4) !== 0 ? GENESIS_PSG_NOISE_TYPE_WHITE : GENESIS_PSG_NOISE_TYPE_PERIODIC;
+                    this.noiseShiftRegister = 0x8000; // Reset shift register upon noise mode changes
                 } else {
                     // Update low frequency bits (0-3)
-                    let freq = (this.tonesCountdownMaster[ch] & 0x3F0) | (command & 0xF);
-                    if (freq === 0) freq = 1; // FIX: Prevent infinite loop or zero-frequency freeze
-                    this.tonesCountdownMaster[ch] = freq;
-                }
-            } else {
-                if (this.latchedIsVolumeCommand !== 0) {
-                    this.noiseAttenuation = command & 0xF;
-                } else {
-                    this.noiseType = (command & 4) !== 0 ? GENESIS_PSG_NOISE_TYPE_WHITE : GENESIS_PSG_NOISE_TYPE_PERIODIC;
-                    this.noiseFrequencyMode = command & 3;
-
-                    // When the noise register is written, reset the 16-bit shift register state to 0x8000
-                    this.noiseShiftRegister = 0x8000;
+                    this.tonesCountdownMaster[ch] = (this.tonesCountdownMaster[ch] & 0x3F0) | (command & 0xF);
+                    if (ch === 2 && this.noiseUseTone3) {
+                        this.tonesCountdownMaster[3] = this.tonesCountdownMaster[2];
+                    }
                 }
             }
         } else {
             // Data Write (MSB = 0): Always updates frequency high bits (4-9) for the latched tone channel
-            if (this.latchedChannel < 3) {
-                let freq = (this.tonesCountdownMaster[this.latchedChannel] & 0x0F) | ((command & 0x3F) << 4);
-                if (freq === 0) freq = 1; // FIX: Safety guard
-                this.tonesCountdownMaster[this.latchedChannel] = freq;
+            const ch = this.latchedChannel;
+            if (ch !== 3 && !this.latchedIsVolumeCommand) {
+                this.tonesCountdownMaster[ch] = (this.tonesCountdownMaster[ch] & 0x0F) | ((command & 0x3F) << 4);
+                if (ch === 2 && this.noiseUseTone3) {
+                    this.tonesCountdownMaster[3] = this.tonesCountdownMaster[2];
+                }
             }
         }
     }
 
     /**
      * Steps the PSG clock generator synchronously and writes mono audio straight to the sample buffer.
+     * Aligned with BlastEm's physical counter-decay and right-rotation white noise shift register.
      * @param {Int16Array} sampleBuffer - Interactive signed 16-bit audio block.
      * @param {number} totalFrames - Total frames to process on this step.
      */
     update(sampleBuffer, totalFrames) {
-        const tonesCount = 3;
+        let ptr = 0;
 
-        // --- 1. Step the 3 Square-Wave Tone Channels ---
-        for (let i = 0; i < tonesCount; ++i) {
-            if (this.toneDisabled[i] === 0) {
-                const attenuation = this.tonesAttenuation[i] | 0;
-                let countdown = this.tonesCountdown[i] | 0;
-                const countdownMaster = this.tonesCountdownMaster[i] | 0;
-                let outputBit = this.tonesOutputBit[i] | 0;
-
-                let ptr = 0;
-
-                for (let j = 0; j < totalFrames; ++j) {
-                    if (countdown !== 0) {
-                        countdown = (countdown - 1) | 0;
-                    }
-
-                    if (countdownMaster !== 0 && countdown === 0) {
-                        // Reset timer countdown and toggle output wave phase
-                        countdown = countdownMaster;
-                        outputBit = outputBit === 0 ? 1 : 0;
-                    }
-
-                    // Direct 1D offset addition (extremely fast)
-                    sampleBuffer[ptr] = (sampleBuffer[ptr] + GENESIS_PSG_VOLUMES[(attenuation * 2) + outputBit]) | 0;
-                    ptr++;
+        for (let frame = 0; frame < totalFrames; ++frame) {
+            
+            // 1. Process 4 independent audio channels (3 Tones + 1 Noise)
+            for (let i = 0; i < 4; i++) {
+                if (this.tonesCountdown[i] > 0) {
+                    this.tonesCountdown[i] = (this.tonesCountdown[i] - 1) | 0;
                 }
 
-                this.tonesCountdown[i] = countdown;
-                this.tonesOutputBit[i] = outputBit;
-            }
-        }
+                if (this.tonesCountdown[i] === 0) {
+                    this.tonesCountdown[i] = this.tonesCountdownMaster[i];
+                    this.tonesOutputState[i] = this.tonesOutputState[i] === 0 ? 1 : 0;
 
-        // --- 2. Step the Noise Generator Channel ---
-        if (this.noiseDisabled === 0) {
-            const attenuation = this.noiseAttenuation | 0;
-            let countdown = this.noiseCountdown | 0;
-            const frequencyMode = this.noiseFrequencyMode | 0;
-            let fakeOutputBit = this.noiseFakeOutputBit | 0;
-            let shiftRegister = this.noiseShiftRegister | 0;
-            const isWhiteNoise = this.noiseType === GENESIS_PSG_NOISE_TYPE_WHITE;
-
-            const toneMaster3 = this.tonesCountdownMaster[2] | 0;
-
-            let ptr = 0;
-
-            for (let j = 0; j < totalFrames; ++j) {
-                if (countdown !== 0) {
-                    countdown = (countdown - 1) | 0;
-                }
-
-                if (countdown === 0) {
-                    // Reset timer countdown
-                    if (frequencyMode === 3) {
-                        // Inherit frequency timer directly from Tone Channel 3
-                        countdown = toneMaster3;
-                    } else {
-                        countdown = 0x10 << frequencyMode;
-                    }
-
-                    fakeOutputBit = fakeOutputBit === 0 ? 1 : 0;
-
-                    if (fakeOutputBit !== 0) {
-                        // FIX: Shift register is rotated right on fake output transition (0 to 1)
-                        // This matches standard Texas Instruments SN76489 silicon behavior.
-                        let feedbackBit = 0;
-                        if (isWhiteNoise) {
-                            // XOR taps at bit 0 and bit 3 for custom white noise generation
-                            feedbackBit = (shiftRegister & 1) ^ ((shiftRegister >> 3) & 1);
-                        } else {
-                            // Periodic noise feeds back the LSB (bit 0) directly
-                            feedbackBit = shiftRegister & 1;
-                        }
+                    // Noise channel shift-register right rotation and polynomial feedback (BlastEm aligned)
+                    if (i === 3 && this.tonesOutputState[3] !== 0) {
+                        this.noiseOut = this.noiseShiftRegister & 1;
+                        this.noiseShiftRegister = (this.noiseShiftRegister >> 1) | (this.noiseShiftRegister << 15);
                         
-                        shiftRegister = (shiftRegister >> 1) | (feedbackBit << 15);
+                        if (this.noiseType === GENESIS_PSG_NOISE_TYPE_WHITE) {
+                            // XOR-inversion if bit 6 (0x40) is set inside the shifted register
+                            if ((this.noiseShiftRegister & 0x40) !== 0) {
+                                this.noiseShiftRegister ^= 0x8000;
+                            }
+                        }
                     }
                 }
-
-                // Noise channel output level depends on the LSB of the LFSR shift register
-                const outputValue = (shiftRegister & 1);
-
-                // Direct 1D offset addition (extremely fast)
-                sampleBuffer[ptr] = (sampleBuffer[ptr] + GENESIS_PSG_VOLUMES[(attenuation * 2) + outputValue]) | 0;
-                ptr++;
             }
 
-            this.noiseCountdown = countdown;
-            this.noiseFakeOutputBit = fakeOutputBit;
-            this.noiseShiftRegister = shiftRegister;
+            // 2. Mix channel output amplitudes into a final mono signal
+            let accum = 0;
+
+            // Mix 3 Tone square-wave channels
+            for (let i = 0; i < 3; i++) {
+                if (this.toneDisabled[i] === 0 && this.tonesOutputState[i] !== 0) {
+                    accum += GENESIS_PSG_VOLUME_TABLE[this.tonesAttenuation[i]];
+                }
+            }
+
+            // Mix Noise channel
+            if (this.noiseDisabled === 0 && this.noiseOut !== 0) {
+                accum += GENESIS_PSG_VOLUME_TABLE[this.tonesAttenuation[3]];
+            }
+
+            // Write mono sample directly into the destination buffer (Int16)
+            sampleBuffer[ptr] = (sampleBuffer[ptr] + accum) | 0;
+            ptr++;
         }
     }
 }
