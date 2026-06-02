@@ -18,9 +18,7 @@
     <!-- Main Grid App Container -->
     <div id="app-container">
 
-        <!-- ========================================================= -->
-        <!-- HEADER (Branding & Global Console Selectors)              -->
-        <!-- ========================================================= -->
+        <!-- HEADER: Branding & Global Console Selectors -->
         <header id="top-bar">
             <div class="brand">
                 <img src="img/eggstation-visualizer.png" alt="EGGStation Logo" class="brand-logo">
@@ -38,14 +36,12 @@
             </div>
         </header>
 
-        <!-- ========================================================= -->
-        <!-- STAGE (Dual CRT Viewports & ROM Overlay)                  -->
-        <!-- ========================================================= -->
+        <!-- STAGE: CRT Viewport & ROM Overlay -->
         <main id="stage">
             <div id="crt-wrapper">
-                <!-- Hardware 2D Canvas (Software render & scalers) -->
+                <!-- Hardware 2D Canvas (Primary output) -->
                 <canvas id="smsdisplay"></canvas>
-                <!-- WebGL2 Canvas (CRT-Royale Shaders & GPU effects) -->
+                <!-- WebGL2 Canvas (CRT-Royale / Advanced Shaders) -->
                 <canvas id="webgldisplay" class="hidden"></canvas>
                 
                 <!-- Overlay ROM Uploader -->
@@ -80,14 +76,12 @@
             </section>
         </main>
 
-        <!-- ========================================================= -->
-        <!-- SIDEBAR (Settings, Scaling and Savestates)                -->
-        <!-- ========================================================= -->
+        <!-- SIDEBAR: Settings & Hardware Toggles -->
         <aside id="settings-panel" class="glass-panel">
             <div class="panel-section">
                 <h3>System Configuration</h3>
                 
-                <!-- Sega Specific Settings -->
+                <!-- Sega Specific Config -->
                 <div class="control-group" id="sms-config-section">
                     <label>Video Standard</label>
                     <select id="vdpModeSelector">
@@ -96,7 +90,7 @@
                     </select>
                 </div>
 
-                <!-- SNES Specific Settings -->
+                <!-- SNES Specific Config -->
                 <div class="control-group hidden" id="snes-config-section">
                     <label>Cartridge Mode</label>
                     <select id="ishirom-toggle">
@@ -160,9 +154,7 @@
             </div>
         </aside>
 
-        <!-- ========================================================= -->
-        <!-- DEVELOPER SUITE (Execution states & diagnostics logs)     -->
-        <!-- ========================================================= -->
+        <!-- DEVELOPER SUITE: Hardware Diagnostics -->
         <footer id="developer-suite" class="glass-panel hidden">
             <div class="dev-section">
                 <h4>Execution Core</h4>
@@ -252,7 +244,16 @@
     
     <!-- 2. Domain Layer (Encapsulated Hardware Entities) -->
     <script src="js/snes/domain/cartridge/SnesCartridge.js"></script>
+    
+    <!-- Decoupled CPU ALU, Addressing, Operations, Flow, Decoder & Instructions Set Sub-Domain -->
+    <script src="js/snes/domain/cpu/SnesCpuAlu.js"></script>
+    <script src="js/snes/domain/cpu/SnesCpuAddressing.js"></script> 
+    <script src="js/snes/domain/cpu/SnesCpuOperations.js"></script>
+    <script src="js/snes/domain/cpu/SnesCpuFlow.js"></script>
+    <script src="js/snes/domain/cpu/SnesCpuDecoder.js"></script> <!-- ADDED: Correctly registered the instruction decoder -->
+    <script src="js/snes/domain/cpu/SnesCpuInstructions.js"></script>
     <script src="js/snes/domain/cpu/SnesCpu.js"></script>
+    
     <script src="js/snes/domain/video/SnesPpu.js"></script>
     <script src="js/snes/domain/audio/SnesSpc.js"></script>
     <script src="js/snes/domain/audio/SnesDsp.js"></script>
