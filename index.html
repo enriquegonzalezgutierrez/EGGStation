@@ -8,22 +8,19 @@
     <!-- Synthwave / Glassmorphism Stylesheet -->
     <link rel="stylesheet" href="css/main.css">
     
-    <!-- External Zip/Deflate libraries -->
-    <script src="lib/zip.js"></script>
-    <script src="lib/inflate.js"></script>
-    <script src="lib/deflate.js"></script>
+    <!-- External Zip/Deflate libraries (Shared across systems) -->
+    <script src="js/snes/lib/zip.js"></script>
+    <script src="js/snes/lib/inflate.js"></script>
+    <script src="js/snes/lib/deflate.js"></script>
 </head>
 <body>
 
     <!-- Main Grid Container -->
     <div id="app-container">
 
-        <!-- ========================================================= -->
-        <!-- HEADER (Branding & Global Controls)                       -->
-        <!-- ========================================================= -->
+        <!-- HEADER: Branding & Global System Selection -->
         <header id="top-bar">
             <div class="brand">
-                <!-- Using the provided visualizer image as the brand logo -->
                 <img src="img/eggstation-visualizer.png" alt="EGGStation Logo" class="brand-logo">
                 <h1>EGG<span>Station</span></h1>
             </div>
@@ -39,14 +36,12 @@
             </div>
         </header>
 
-        <!-- ========================================================= -->
-        <!-- STAGE (CRT Viewport & ROM Uploader)                       -->
-        <!-- ========================================================= -->
+        <!-- STAGE: CRT Viewport & ROM Uploader -->
         <main id="stage">
             <div id="crt-wrapper">
-                <!-- Hardware 2D Canvas (Pixel-perfect / Bilinear) -->
+                <!-- Hardware 2D Canvas (Primary output) -->
                 <canvas id="smsdisplay"></canvas>
-                <!-- WebGL2 Canvas (CRT-Royale Shader) -->
+                <!-- WebGL2 Canvas (CRT-Royale / Advanced Shaders) -->
                 <canvas id="webgldisplay" class="hidden"></canvas>
                 
                 <!-- Overlay ROM Uploader -->
@@ -59,7 +54,7 @@
                 </div>
             </div>
 
-            <!-- Virtual Gamepad for Mobile (Hidden on Desktop) -->
+            <!-- Virtual Gamepad for Mobile -->
             <section id="virtual-gamepad">
                 <div class="d-pad">
                     <button class="v-dir" id="v-up"></button>
@@ -81,12 +76,12 @@
             </section>
         </main>
 
-        <!-- ========================================================= -->
-        <!-- SIDEBAR (Settings & Savestates)                           -->
-        <!-- ========================================================= -->
+        <!-- SIDEBAR: Settings & Hardware Toggles -->
         <aside id="settings-panel" class="glass-panel">
             <div class="panel-section">
                 <h3>System Configuration</h3>
+                
+                <!-- Sega Specific Config -->
                 <div class="control-group" id="sms-config-section">
                     <label>Video Standard</label>
                     <select id="vdpModeSelector">
@@ -94,17 +89,25 @@
                         <option value="PAL">PAL (50Hz)</option>
                     </select>
                 </div>
+
+                <!-- SNES Specific Config -->
+                <div class="control-group hidden" id="snes-config-section">
+                    <label>Cartridge Mode</label>
+                    <select id="ishirom-toggle">
+                        <option value="false">LoROM (Standard)</option>
+                        <option value="true">HiROM (Enhanced)</option>
+                    </select>
+                </div>
+
                 <div class="control-group">
                     <label>Audio DSP Filter</label>
                     <select id="audioFilterSelector">
                         <option value="0">Studio Clean (Bypass)</option>
                         <option value="1">Low-Pass RF Filter (3.5KHz)</option>
                         <option value="2">Analog Stereo Width</option>
-                        <option value="3">Haas Effect + Reverb</option>
                     </select>
                 </div>
                 
-                <!-- Redesigned Hardware-style Eject Cartridge button -->
                 <button id="ejectBtn" class="btn eject-btn-retro mt-3">
                     <svg class="icon-eject" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M5 17h14v2H5zM12 5l-7 8h14z"/>
@@ -129,19 +132,12 @@
                     </select>
                 </div>
                 
-                <!-- WebGL2 Live Shader Tuning -->
+                <!-- Shader Tuner -->
                 <div class="control-group shader-tuner">
                     <label>CRT Curvature</label>
                     <input type="range" id="sh-curvature" min="0" max="200" value="90">
-                    
                     <label>Scanline Weight</label>
                     <input type="range" id="sh-scanlines" min="0" max="100" value="38">
-                    
-                    <label>Phosphor Triad</label>
-                    <input type="range" id="sh-phosphor" min="0" max="100" value="25">
-                    
-                    <label>Bloom Halation</label>
-                    <input type="range" id="sh-bloom" min="0" max="100" value="15">
                 </div>
             </div>
 
@@ -151,54 +147,36 @@
                     <img id="savestateImg" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="Savestate Empty">
                 </div>
                 <div class="savestate-actions">
-                    <button id="btn-save" class="btn outline-btn" onclick="activeController.orchestrator.saveState(); setTimeout(()=>activeController.updateSaveStatePreview(), 200);">SAVE (F2)</button>
-                    <button id="btn-load" class="btn outline-btn" onclick="activeController.orchestrator.loadState();">LOAD (F3)</button>
+                    <button id="btn-save" class="btn outline-btn">SAVE (F2)</button>
+                    <button id="btn-load" class="btn outline-btn">LOAD (F3)</button>
                 </div>
-                <p class="panel-footer mt-2">Hold <strong>Backspace</strong> (or L2/LT) to Rewind Time.</p>
             </div>
         </aside>
 
-        <!-- ========================================================= -->
-        <!-- DEVELOPER SUITE (Registers, CPU, VRAM)                    -->
-        <!-- ========================================================= -->
+        <!-- DEVELOPER SUITE: Hardware Diagnostics -->
         <footer id="developer-suite" class="glass-panel hidden">
             <div class="dev-section">
                 <h4>Execution Core</h4>
                 <div class="dev-btn-group">
                     <button id="dbg-play" class="btn dev-btn">▶ PLAY</button>
                     <button id="dbg-pause" class="btn dev-btn">⏸ PAUSE</button>
-                    <button id="dbg-step" class="btn dev-btn">⏭ STEP-INTO (1 Cycle)</button>
-                    <input type="text" id="dbg-breakpoint" placeholder="HEX Breakpoint (e.g. 0038)" maxlength="4">
                 </div>
             </div>
-
-            <div class="dev-section">
-                <h4>Disassembly Terminal</h4>
-                <div id="disasm-output" class="terminal-box"></div>
-            </div>
-
             <div class="dev-section">
                 <h4>Hardware Registers</h4>
-                <div class="registers-grid">
-                    <!-- Injected dynamically by the active UI Controller (Z80 / M68K / 65816) -->
-                </div>
+                <div class="registers-grid" id="reg-grid"></div>
             </div>
-
             <div class="dev-section">
-                <h4>VRAM Pattern Inspector</h4>
-                <div class="vram-preview-wrapper">
-                    <canvas id="vram-canvas" width="128" height="192"></canvas>
-                </div>
+                <h4>System Logs</h4>
+                <div id="log" class="terminal-box"></div>
             </div>
         </footer>
 
     </div>
 
     <!-- ========================================================= -->
-    <!-- DOMAIN, INFRASTRUCTURE, AND APPLICATION SCRIPTS           -->
+    <!-- SEGA MASTER SYSTEM CORE                                   -->
     <!-- ========================================================= -->
-
-    <!-- SEGA MASTER SYSTEM CORE -->
     <script src="js/sms/domain/bus/SegaMasterSystemBus.js"></script>
     <script src="js/sms/domain/cartridge/SegaMasterSystemCartridge.js"></script>
     <script src="js/sms/domain/cartridge/mappers/BaseMapper.js"></script>
@@ -228,7 +206,9 @@
     <script src="js/sms/application/EmulatorOrchestrator.js"></script>
     <script src="js/sms/presentation/UIController.js"></script>
 
-    <!-- SEGA GENESIS CORE -->
+    <!-- ========================================================= -->
+    <!-- SEGA GENESIS CORE                                         -->
+    <!-- ========================================================= -->
     <script src="js/genesis/domain/bus/GenesisBusZ80.js"></script>
     <script src="js/genesis/domain/bus/GenesisBusM68k.js"></script>
     <script src="js/genesis/domain/controller/GenesisIoPort.js"></script>
@@ -253,39 +233,30 @@
     <script src="js/genesis/application/GenesisOrchestrator.js"></script>
     <script src="js/genesis/presentation/GenesisUIController.js"></script>
 
-    <!-- SUPER NINTENDO (SNES) CORE -->
-    <script src="js/snes/domain/cpu/CpuRegisters.js"></script>
-    <script src="js/snes/domain/cpu/CpuAlu.js"></script>
-    <script src="js/snes/domain/cpu/CpuAddressing.js"></script>
-    <script src="js/snes/domain/cpu/Cpu.js"></script>
-    
-    <!-- Decoupled SNES Instruction Sub-Modules -->
-    <script src="js/snes/domain/cpu/SnesCpuSystem.js"></script>
-    <script src="js/snes/domain/cpu/SnesCpuDataTransfer.js"></script>
-    <script src="js/snes/domain/cpu/SnesCpuArithmetic.js"></script>
-    <script src="js/snes/domain/cpu/SnesCpuLogical.js"></script>
-    <script src="js/snes/domain/cpu/SnesCpuShiftRotate.js"></script>
-    <script src="js/snes/domain/cpu/SnesCpuProgramFlow.js"></script>
-    
-    <!-- Aggregator Entry Point -->
-    <script src="js/snes/domain/cpu/CpuInstructions.js"></script>
-
-    <script src="js/snes/domain/apu/Spc700Registers.js"></script>
-    <script src="js/snes/domain/apu/Spc700Alu.js"></script>
-    <script src="js/snes/domain/apu/Spc700.js"></script>
-    <script src="js/snes/domain/apu/Spc700Instructions.js"></script>
-    <script src="js/snes/domain/cartridge/SnesCartridge.js"></script>
-    <script src="js/snes/domain/cartridge/SnesMapper.js"></script>
-    <script src="js/snes/domain/bus/SnesBus.js"></script>
-    <script src="js/snes/infrastructure/video/SnesPpu.js"></script>
-    <script src="js/snes/infrastructure/video/SnesPpuRenderer.js"></script>
+    <!-- ========================================================= -->
+    <!-- SUPER NINTENDO (SNES) CORE - Standardized Infrastructure  -->
+    <!-- ========================================================= -->
+    <!-- 1. Infrastructure First (Compatibility, Video & Audio Adapters) -->
+    <script src="js/snes/infrastructure/SnesCompatibilityLayer.js"></script>
     <script src="js/snes/infrastructure/video/SnesPostProcessor.js"></script>
-    <script src="js/snes/infrastructure/audio/SnesApu.js"></script>
-    <script src="js/snes/infrastructure/audio/SnesDsp.js"></script>
+    <script src="js/snes/infrastructure/audio/SnesAudioProcessor.js"></script>
+    
+    <!-- 2. Hardware Core (Domain) -->
+    <script src="js/snes/apu.js"></script>
+    <script src="js/snes/cart.js"></script>
+    <script src="js/snes/cpu.js"></script>
+    <script src="js/snes/dsp.js"></script>
+    <script src="js/snes/pipu.js"></script>
+    <script src="js/snes/snes.js"></script>
+    <script src="js/snes/spc.js"></script>
+    
+    <!-- 3. Application & Presentation (Mediators) -->
     <script src="js/snes/application/SnesOrchestrator.js"></script>
     <script src="js/snes/presentation/SnesUIController.js"></script>
 
-    <!-- SYSTEM BOOTSTRAPPER (Composition Root) -->
+    <!-- ========================================================= -->
+    <!-- SYSTEM BOOTSTRAPPER (Composition Root)                    -->
+    <!-- ========================================================= -->
     <script src="js/app.js"></script>
 </body>
 </html>
