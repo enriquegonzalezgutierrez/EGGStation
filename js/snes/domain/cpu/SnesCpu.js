@@ -1,12 +1,13 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesCpu (Ricoh 5A22 CPU - Decoupled & Scoped)
+ * Component: SnesCpu (Ricoh 5A22 CPU - Scoped & GC-Free Version)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
  * Manages the state, memory access, stack, and cycle-accurate loop execution 
- * of the SNES Ricoh 5A22 processor. Uses a centralized high-speed switch 
- * statement for opcode decoding, bypassing slow procedural binders.
+ * of the SNES Ricoh 5A22 processor. 
+ * OPTIMIZED: Uses pre-allocated class properties (resolvedAdr, resolvedAdrh) 
+ * in its hot loop execution to prevent temporary memory allocations entirely.
  * 
  * SOLID Principles:
  * - SRP: Handles only CPU execution states, registers, and memory lookups,
@@ -130,6 +131,10 @@ class SnesCpu {
         this.modes = CPU_MODES;
         this.cycles = CPU_CYCLES;
 
+        // Pre-allocated static properties to achieve complete GC-Free executions
+        this.resolvedAdr = 0;
+        this.resolvedAdrh = 0;
+
         this.bindInstructionMap();
         this.reset();
     }
@@ -169,6 +174,8 @@ class SnesCpu {
         this.waiting = false;
 
         this.cyclesLeft = 7;
+        this.resolvedAdr = 0;
+        this.resolvedAdrh = 0;
     }
 
     /**
@@ -200,11 +207,11 @@ class SnesCpu {
                     mode = this.modes[instr];
                 }
 
-                // UNIFIED DECODER: Decodes addressing modes through SnesCpuAddressing static service
-                const adrs = SnesCpuAddressing.getAdr(this, instr, mode);
+                // UNIFIED DECODER: Decodes addressing modes dynamically directly into this.resolvedAdr
+                SnesCpuAddressing.resolve(this, instr, mode);
                 
                 // JIT-Optimized Jump Table execution (delegates to SnesCpuDecoder)
-                SnesCpuDecoder.execute(this, instr, adrs[0], adrs[1]);
+                SnesCpuDecoder.execute(this, instr, this.resolvedAdr, this.resolvedAdrh);
             } else {
                 if (this.abortWanted || this.irqWanted || this.nmiWanted) {
                     this.waiting = false;
@@ -402,7 +409,7 @@ class SnesCpu {
 
     abo() {
         SnesCpuOperations.pushByte(this, this.r[CPU_REG_K]);
-        SnesCpuOperations.pushWord(this, this.br[CPU_REG_PC]);
+        SnesCpuOperations.pushWord(this, cpu.br[CPU_REG_PC]);
         SnesCpuOperations.pushByte(this, this.getP());
         this.cyclesLeft++;
         this.i = true;
@@ -441,7 +448,7 @@ class SnesCpu {
         this.br[CPU_REG_PC] = pullPc;
     }
 
-    // Standardized register transfer operations (ADDED BACK)
+    // Standardized register transfer operations
     tcd() {
         this.br[CPU_REG_DPR] = this.br[CPU_REG_A];
         this.setZandN(this.br[CPU_REG_DPR], false);
