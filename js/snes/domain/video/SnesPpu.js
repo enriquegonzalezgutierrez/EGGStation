@@ -1,19 +1,19 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesPpu (Picture Processing Unit Entity)
+ * Component: SnesPpu (Picture Processing Unit - GC-Free Edition)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
- * Represents the physical SNES Picture Processing Unit (PPU). It handles 
- * background layer rendering (BG1-BG4), sprite evaluations, window clipping, 
- * color math transformations (addition/subtraction), and Mode 7 affine projections.
+ * Represents the physical SNES Picture Processing Unit (PPU).
+ * OPTIMIZED: Implements high-speed state injection on hot pixel rendering paths.
+ * Eliminates up to 6.8 million array allocations per second by caching
+ * pixel layers resolution into pre-allocated class fields (resolvedColor, etc.).
  * 
  * SOLID Principles:
- * - SRP: Exclusively handles scanline pixel rendering, sprite sorting, and video RAM access.
- * - DIP: Injects parent coordinate system (Snes) to decouple core timings.
+ * - SRP: Exclusively handles scanline pixel rendering and video RAM access.
  */
 
-// Module-scoped Constants (Zero allocation, high performance lookup boundaries)
+// Module-scoped Constants (Zero allocation lookups)
 const LAYERS_PER_MODE = Object.freeze([
     4, 0, 1, 4, 0, 1, 4, 2, 3, 4, 2, 3,
     4, 0, 1, 4, 0, 1, 4, 2, 4, 2, 5, 5,
@@ -82,22 +82,21 @@ class SnesPpu {
     constructor(snes) {
         this.snes = snes;
 
-        // VRAM (32KW / 64KB)
         this.vram = new Uint16Array(0x8000);
-
-        // CGRAM / Palettes (256 words)
         this.cgram = new Uint16Array(0x100);
-
-        // OAM / Sprites (256 words base + 16 words high)
         this.oam = new Uint16Array(0x100);
         this.highOam = new Uint16Array(0x10);
 
-        // Scanline evaluation buffers
         this.spriteLineBuffer = new Uint8Array(256);
         this.spritePrioBuffer = new Uint8Array(256);
 
         this.mode7Xcoords = new Int32Array(256);
         this.mode7Ycoords = new Int32Array(256);
+
+        // Pre-allocated properties for GC-Free pixel rendering pipeline
+        this.resolvedColor = 0;
+        this.resolvedLayer = 0;
+        this.resolvedPixel = 0;
 
         // Primary internal RGB screen buffer (512x240 pixels)
         this.pixelOutput = new Uint16Array(512 * 3 * 240);
@@ -105,9 +104,6 @@ class SnesPpu {
         this.reset();
     }
 
-    /**
-     * Complete PPU reset. Zeroes buffers and resets registers.
-     */
     reset() {
         this.vram.fill(0);
         this.cgram.fill(0);
@@ -121,19 +117,21 @@ class SnesPpu {
         this.mode7Xcoords.fill(0);
         this.mode7Ycoords.fill(0);
 
+        this.resolvedColor = 0;
+        this.resolvedLayer = 0;
+        this.resolvedPixel = 0;
+
         // CGRAM State registers
         this.cgramAdr = 0;
         this.cgramSecond = false;
         this.cgramBuffer = 0;
 
-        // VRAM Address remappings
         this.vramInc = 0;
         this.vramRemap = 0;
         this.vramIncOnHigh = false;
         this.vramAdr = 0;
         this.vramReadBuffer = 0;
 
-        // Background configurations
         this.tilemapWider = [false, false, false, false];
         this.tilemapHigher = [false, false, false, false];
         this.tilemapAdr = [0, 0, 0, 0];
@@ -148,19 +146,16 @@ class SnesPpu {
         this.layer3Prio = false;
         this.bigTiles = [false, false, false, false];
 
-        // Mosaic Toggles
         this.mosaicEnabled = [false, false, false, false, false];
         this.mosaicSize = 1;
         this.mosaicStartLine = 1;
 
-        // Display visibility
         this.mainScreenEnabled = [false, false, false, false, false];
         this.subScreenEnabled = [false, false, false, false, false];
 
         this.forcedBlank = true;
         this.brightness = 0;
 
-        // OAM internal states
         this.oamAdr = 0;
         this.oamRegAdr = 0;
         this.oamInHigh = false;
@@ -186,14 +181,12 @@ class SnesPpu {
         this.frameInterlace = false;
         this.evenFrame = false;
 
-        // Latches counters
         this.latchedHpos = 0;
         this.latchedVpos = 0;
         this.latchHsecond = false;
         this.latchVsecond = false;
         this.countersLatched = false;
 
-        // Mode 7 Parameters registers
         this.mode7Hoff = 0;
         this.mode7Voff = 0;
         this.mode7A = 0;
@@ -210,7 +203,6 @@ class SnesPpu {
         this.mode7FlipX = false;
         this.mode7FlipY = false;
 
-        // Hardware Window Clipping structures
         this.window1Inversed = [false, false, false, false, false, false];
         this.window1Enabled = [false, false, false, false, false, false];
         this.window2Inversed = [false, false, false, false, false, false];
@@ -223,7 +215,6 @@ class SnesPpu {
         this.mainScreenWindow = [false, false, false, false, false];
         this.subScreenWindow = [false, false, false, false, false];
 
-        // Color clip & mathematics math properties
         this.colorClip = 0;
         this.preventMath = 0;
         this.addSub = false;
@@ -236,7 +227,6 @@ class SnesPpu {
         this.fixedColorG = 0;
         this.fixedColorR = 0;
 
-        // Fetching caching buffers
         this.tilemapBuffer = [0, 0, 0, 0];
         this.tileBufferP1 = [0, 0, 0, 0];
         this.tileBufferP2 = [0, 0, 0, 0];
@@ -249,9 +239,6 @@ class SnesPpu {
         this.lastOrigTileX = [-1, -1];
     }
 
-    /**
-     * Latches the active vertical overscan limit (225 NTSC or 240 PAL lines).
-     */
     checkOverscan(line) {
         if (line === 225 && this.overscan) {
             this.frameOverscan = true;
@@ -260,6 +247,7 @@ class SnesPpu {
 
     /**
      * Generates all pixels for the requested active scanline.
+     * GC-FREE: Reads pixel colors directly from properties to prevent thrashing.
      */
     renderLine(line) {
         const heightLimit = this.frameOverscan ? 240 : 225;
@@ -289,7 +277,6 @@ class SnesPpu {
                 this.generateMode7Coords(line);
             }
 
-            // Reset tile fetch trackers
             this.lastTileFetchedX.fill(-1);
             this.lastTileFetchedY.fill(-1);
             this.optHorBuffer.fill(0);
@@ -304,8 +291,11 @@ class SnesPpu {
                 let r2 = 0, g2 = 0, b2 = 0;
 
                 if (!this.forcedBlank) {
-                    const colLay = this.getColor(false, i, line);
-                    const color = colLay[0];
+                    // GC-FREE: Write result directly on class fields
+                    this.resolveColor(false, i, line);
+                    const color = this.resolvedColor;
+                    const layer1 = this.resolvedLayer;
+                    const pixel1 = this.resolvedPixel;
 
                     r2 = color & 0x1f;
                     g2 = (color & 0x3e0) >> 5;
@@ -317,27 +307,33 @@ class SnesPpu {
                         r2 = 0; g2 = 0; b2 = 0;
                     }
 
-                    let secondLay = [0, 5, 0];
+                    let secColor = 0;
+                    let secLayer = 5;
+
                     if (this.mode === 5 || this.mode === 6 || this.pseudoHires ||
-                        (this.getMathEnabled(i, colLay[1], colLay[2]) && this.addSub)) {
-                        secondLay = this.getColor(true, i, line);
-                        r1 = secondLay[0] & 0x1f;
-                        g1 = (secondLay[0] & 0x3e0) >> 5;
-                        b1 = (secondLay[0] & 0x7c00) >> 10;
+                        (this.getMathEnabled(i, layer1, pixel1) && this.addSub)) {
+                        
+                        this.resolveColor(true, i, line);
+                        secColor = this.resolvedColor;
+                        secLayer = this.resolvedLayer;
+
+                        r1 = secColor & 0x1f;
+                        g1 = (secColor & 0x3e0) >> 5;
+                        b1 = (secColor & 0x7c00) >> 10;
                     }
 
-                    if (this.getMathEnabled(i, colLay[1], colLay[2])) {
+                    if (this.getMathEnabled(i, layer1, pixel1)) {
                         if (this.subtractColors) {
-                            r2 -= (this.addSub && secondLay[1] < 5) ? r1 : this.fixedColorR;
-                            g2 -= (this.addSub && secondLay[1] < 5) ? g1 : this.fixedColorG;
-                            b2 -= (this.addSub && secondLay[1] < 5) ? b1 : this.fixedColorB;
+                            r2 -= (this.addSub && secLayer < 5) ? r1 : this.fixedColorR;
+                            g2 -= (this.addSub && secLayer < 5) ? g1 : this.fixedColorG;
+                            b2 -= (this.addSub && secLayer < 5) ? b1 : this.fixedColorB;
                         } else {
-                            r2 += (this.addSub && secondLay[1] < 5) ? r1 : this.fixedColorR;
-                            g2 += (this.addSub && secondLay[1] < 5) ? g1 : this.fixedColorG;
-                            b2 += (this.addSub && secondLay[1] < 5) ? b1 : this.fixedColorB;
+                            r2 += (this.addSub && secLayer < 5) ? r1 : this.fixedColorR;
+                            g2 += (this.addSub && secLayer < 5) ? g1 : this.fixedColorG;
+                            b2 += (this.addSub && secLayer < 5) ? b1 : this.fixedColorB;
                         }
 
-                        if (this.halfColors && (secondLay[1] < 5 || !this.addSub)) {
+                        if (this.halfColors && (secLayer < 5 || !this.addSub)) {
                             r2 >>= 1; g2 >>= 1; b2 >>= 1;
                         }
 
@@ -371,8 +367,9 @@ class SnesPpu {
 
     /**
      * Resolves background pixel layers priorities.
+     * GC-FREE: Writes results directly on class fields (resolvedColor, resolvedLayer, resolvedPixel)
      */
-    getColor(sub, x, y) {
+    resolveColor(sub, x, y) {
         let modeIndex = this.layer3Prio && this.mode === 1 ? 96 : 12 * this.mode;
         modeIndex = this.mode7ExBg && this.mode === 7 ? 108 : modeIndex;
         const count = LAYER_COUNT_PER_MODE[this.mode];
@@ -458,7 +455,10 @@ class SnesPpu {
             color = (b << 10) | (g << 5) | r;
         }
 
-        return [color, layer, pixel];
+        // Writes result directly on instance fields to secure 0 alocations
+        this.resolvedColor = color;
+        this.resolvedLayer = layer;
+        this.resolvedPixel = pixel;
     }
 
     getMathEnabled(x, l, pal) {
@@ -1080,6 +1080,8 @@ class SnesPpu {
                 this.overscan = (value & 0x04) > 0;
                 this.objInterlace = (value & 0x02) > 0;
                 this.interlace = (value & 0x01) > 0;
+                break;
+            default:
                 break;
         }
     }

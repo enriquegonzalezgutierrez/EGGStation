@@ -1,12 +1,14 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: Snes (Motherboard Bus Aggregate Root - Robust Version)
+ * Component: SnesSystemBus (Motherboard Bus Aggregate Root - JIT Optimized)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
  * Represents the main motherboard of the Super Nintendo. It acts as the central 
  * System Bus, routing memory accesses, managing DMA/HDMA channels, latching 
  * controller inputs, and synchronizing execution timings between CPU, PPU, and APU.
+ * OPTIMIZED: Inlines access timing calculations inside read/write methods to
+ * completely eliminate redundant function context calls and bit-shifting math.
  * 
  * SOLID Principles:
  * - SRP: Exclusively orchestrates component communication, memory maps, and DMA.
@@ -371,7 +373,7 @@ class Snes {
                         } else {
                             if (this.dmaFromB[i]) {
                                 this.write(
-                                    (this.dmaAadrBank[i] << 16) | this.hdmaTableAdr[i],
+                                    (this.hdmaAadrBank[i] << 16) | this.hdmaTableAdr[i],
                                     this.readBBus((this.dmaBadr[i] + DMA_OFFS[tableOff]) & 0xff), 
                                     true
                                 );
@@ -651,32 +653,112 @@ class Snes {
             }
             if (offset >= 0x4200 && offset < 0x4380) return this.readReg(offset);
         }
-        // PROTECTION: Ensure we only read from cartridge memory if mounted, preventing early reset failures
         if (this.cart) {
             return this.cart.read(bank, offset);
         }
         return this.openBus;
     }
 
+    /**
+     * UNIFIED JIT READ ROUTER (Access Time pre-evaluated dynamically inside)
+     * Optimizes performance by removing redundant getAccessTime calculations.
+     */
     read(adr, dma = false) {
+        const address = adr & 0xffffff;
+        const bank = address >> 16;
+        const offset = address & 0xffff;
+
         if (!dma) {
             this.cpuMemOps++;
-            this.cpuCyclesLeft += this.getAccessTime(adr);
+            
+            // Optimized JIT Inlined Access Time calculation
+            let accessTime = 8;
+            if (bank >= 0x40 && bank < 0x80) {
+                accessTime = 8;
+            } else if (bank >= 0xc0) {
+                accessTime = this.fastMem ? 6 : 8;
+            } else if (offset < 0x2000) {
+                accessTime = 8;
+            } else if (offset < 0x4000) {
+                accessTime = 6;
+            } else if (offset < 0x4200) {
+                accessTime = 12;
+            } else if (offset < 0x6000) {
+                accessTime = 6;
+            } else if (offset < 0x8000) {
+                accessTime = 8;
+            } else {
+                accessTime = (this.fastMem && bank >= 0x80) ? 6 : 8;
+            }
+
+            this.cpuCyclesLeft += accessTime;
         }
-        const val = this.rread(adr);
+
+        // Standard rread process using local variables
+        let val;
+        if (bank === 0x7e || bank === 0x7f) {
+            val = this.ram[((bank & 0x1) << 16) | offset];
+        } else if (offset < 0x8000 && (bank < 0x40 || (bank >= 0x80 && bank < 0xc0))) {
+            if (offset < 0x2000) {
+                val = this.ram[offset & 0x1fff];
+            } else if (offset >= 0x2100 && offset < 0x2200) {
+                val = this.readBBus(offset & 0xff);
+            } else if (offset === 0x4016) {
+                val = this.joypad1Val & 0x1;
+                this.joypad1Val = (this.joypad1Val >> 1) | 0x8000;
+            } else if (offset === 0x4017) {
+                val = this.joypad2Val & 0x1;
+                this.joypad2Val = (this.joypad2Val >> 1) | 0x8000;
+            } else if (offset >= 0x4200 && offset < 0x4380) {
+                val = this.readReg(offset);
+            } else {
+                val = this.openBus;
+            }
+        } else if (this.cart) {
+            val = this.cart.read(bank, offset);
+        } else {
+            val = this.openBus;
+        }
+
         this.openBus = val;
         return val;
     }
 
+    /**
+     * UNIFIED JIT WRITE ROUTER
+     */
     write(adr, value, dma = false) {
-        if (!dma) {
-            this.cpuMemOps++;
-            this.cpuCyclesLeft += this.getAccessTime(adr);
-        }
-        this.openBus = value;
         const address = adr & 0xffffff;
         const bank = address >> 16;
         const offset = address & 0xffff;
+
+        if (!dma) {
+            this.cpuMemOps++;
+            
+            // Optimized JIT Inlined Access Time calculation
+            let accessTime = 8;
+            if (bank >= 0x40 && bank < 0x80) {
+                accessTime = 8;
+            } else if (bank >= 0xc0) {
+                accessTime = this.fastMem ? 6 : 8;
+            } else if (offset < 0x2000) {
+                accessTime = 8;
+            } else if (offset < 0x4000) {
+                accessTime = 6;
+            } else if (offset < 0x4200) {
+                accessTime = 12;
+            } else if (offset < 0x6000) {
+                accessTime = 6;
+            } else if (offset < 0x8000) {
+                accessTime = 8;
+            } else {
+                accessTime = (this.fastMem && bank >= 0x80) ? 6 : 8;
+            }
+
+            this.cpuCyclesLeft += accessTime;
+        }
+
+        this.openBus = value;
 
         if (bank === 0x7e || bank === 0x7f) {
             this.ram[((bank & 0x1) << 16) | offset] = value;
