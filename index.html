@@ -2,356 +2,290 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <!-- Viewport configuration for native App feel: disables zooming and scaling on mobile devices -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>EGGStation | Sega Multi-System Emulator</title>
+    <title>EGGStation | Ultimate Web Emulator</title>
     
-    <!-- Meta tags for iOS/Android Progressive Web App (PWA) capabilities -->
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#09090e">
-    
-    <!-- Primary Application Stylesheet -->
+    <!-- Synthwave / Glassmorphism Stylesheet -->
     <link rel="stylesheet" href="css/main.css">
+    
+    <!-- External Zip/Deflate libraries -->
+    <script src="lib/zip.js"></script>
+    <script src="lib/inflate.js"></script>
+    <script src="lib/deflate.js"></script>
 </head>
 <body>
 
-    <!-- Main Application Grid Container -->
+    <!-- Main Grid Container -->
     <div id="app-container">
-        
+
         <!-- ========================================================= -->
-        <!-- HEADER / NAVIGATION BAR                                   -->
+        <!-- HEADER (Branding & Global Controls)                       -->
         <!-- ========================================================= -->
         <header id="top-bar">
             <div class="brand">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="url(#grad1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <defs>
-                        <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
-                            <stop offset="0%" style="stop-color:#ff007f;stop-opacity:1" />
-                            <stop offset="100%" style="stop-color:#7f00ff;stop-opacity:1" />
-                        </linearGradient>
-                    </defs>
-                    <rect x="2" y="6" width="20" height="12" rx="2" ry="2"></rect>
-                    <path d="M6 12h4m-2-2v4m8-4a1 1 0 100 2 1 1 0 000-2zm-2 2a1 1 0 100 2 1 1 0 000-2z"></path>
-                </svg>
+                <!-- Using the provided visualizer image as the brand logo -->
+                <img src="img/eggstation-visualizer.png" alt="EGGStation Logo" class="brand-logo">
                 <h1>EGG<span>Station</span></h1>
-                
-                <!-- Dynamic Console Engine Selector -->
-                <div class="console-selector-wrapper" style="margin-left: 20px;">
-                    <select id="consoleSelector" style="padding: 6px 12px; font-size: 0.85rem; border-radius: 4px; border: 1px solid var(--glass-border); background: var(--bg-surface); color: var(--text-main); outline: none;">
-                        <option value="SMS">Sega Master System</option>
-                        <option value="GEN">Sega Genesis / Mega Drive</option>
-                    </select>
-                </div>
             </div>
             
             <div class="system-stats">
-                <button id="dev-toggle-btn" class="btn outline-btn" style="width:auto; padding: 6px 14px;">DEV MODE</button>
-                <span id="fpsSpan">60.0 FPS</span>
-                <!-- Mobile Menu Hamburger Toggle (Visible only on narrow screens) -->
-                <button id="mobile-menu-btn" class="icon-btn mobile-only">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-                </button>
+                <select id="consoleSelector" class="sys-selector">
+                    <option value="SMS">Sega Master System</option>
+                    <option value="GEN">Sega Genesis / Mega Drive</option>
+                    <option value="SNES">Super Nintendo (SNES)</option>
+                </select>
+                <span id="fpsSpan">0.0 FPS</span>
+                <button id="dev-toggle-btn" class="btn outline-btn">DEV MODE</button>
             </div>
         </header>
 
         <!-- ========================================================= -->
-        <!-- CORE EMULATION STAGE (VIEWPORTS)                          -->
+        <!-- STAGE (CRT Viewport & ROM Uploader)                       -->
         <!-- ========================================================= -->
         <main id="stage">
-            
-            <!-- Video Output Wrapper (Maintains 4:3 Aspect Ratio) -->
             <div id="crt-wrapper">
-                <!-- Standard 2D Canvas (Fast fallback and raw pixels) -->
+                <!-- Hardware 2D Canvas (Pixel-perfect / Bilinear) -->
                 <canvas id="smsdisplay"></canvas>
-                <!-- WebGL2 Canvas (CRT-Royale Shaders & 3D Depth) -->
+                <!-- WebGL2 Canvas (CRT-Royale Shader) -->
                 <canvas id="webgldisplay" class="hidden"></canvas>
-                <!-- Static CSS Overlay for pseudo-scanlines -->
-                <div class="crt-scanline-overlay"></div>
+                
+                <!-- Overlay ROM Uploader -->
+                <div id="fileselector" class="overlay-center">
+                    <button id="romLoaderBtn" class="btn primary-btn pulse-anim">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        INSERT CARTRIDGE
+                    </button>
+                    <input type="file" id="cartridgeSelector" accept=".sms,.sg,.md,.gen,.bin,.smd,.sfc,.smc" style="display: none;">
+                </div>
             </div>
 
-            <!-- Virtual Gamepad (Hidden on Desktop, Visible on Touch devices) -->
-            <div id="virtual-gamepad">
+            <!-- Virtual Gamepad for Mobile (Hidden on Desktop) -->
+            <section id="virtual-gamepad">
                 <div class="d-pad">
                     <button class="v-dir" id="v-up"></button>
                     <button class="v-dir" id="v-left"></button>
-                    <div class="v-center"></div>
                     <button class="v-dir" id="v-right"></button>
                     <button class="v-dir" id="v-down"></button>
+                    <div class="v-center"></div>
                 </div>
-                
                 <div class="center-controls">
-                    <button id="v-pause" class="v-system-btn">START</button>
+                    <button class="v-system-btn" id="v-select">SELECT</button>
+                    <button class="v-system-btn" id="v-pause">START</button>
                 </div>
-
                 <div class="action-buttons">
-                    <button class="v-action" id="v-btn1">1</button>
-                    <button class="v-action" id="v-btn2">2</button>
+                    <button class="v-action" id="v-btnY">Y</button>
+                    <button class="v-action" id="v-btnX">X</button>
+                    <button class="v-action" id="v-btn2">B</button>
+                    <button class="v-action" id="v-btn1">A</button>
                 </div>
-            </div>
-
+            </section>
         </main>
 
         <!-- ========================================================= -->
-        <!-- SIDEBAR / SETTINGS DRAWER                                 -->
+        <!-- SIDEBAR (Settings & Savestates)                           -->
         <!-- ========================================================= -->
         <aside id="settings-panel" class="glass-panel">
-            
-            <!-- Cartridge Loading -->
             <div class="panel-section">
-                <h3>System Bridge</h3>
-                <input type="file" id="cartridgeSelector" accept=".sms,.sg,.bin,.gen,.md" style="display:none;">
-                <button id="romLoaderBtn" class="btn primary-btn">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                    Insert Cartridge
+                <h3>System Configuration</h3>
+                <div class="control-group" id="sms-config-section">
+                    <label>Video Standard</label>
+                    <select id="vdpModeSelector">
+                        <option value="NTSC">NTSC (60Hz)</option>
+                        <option value="PAL">PAL (50Hz)</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label>Audio DSP Filter</label>
+                    <select id="audioFilterSelector">
+                        <option value="0">Studio Clean (Bypass)</option>
+                        <option value="1">Low-Pass RF Filter (3.5KHz)</option>
+                        <option value="2">Analog Stereo Width</option>
+                        <option value="3">Haas Effect + Reverb</option>
+                    </select>
+                </div>
+                
+                <!-- Redesigned Hardware-style Eject Cartridge button -->
+                <button id="ejectBtn" class="btn eject-btn-retro mt-3">
+                    <svg class="icon-eject" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 17h14v2H5zM12 5l-7 8h14z"/>
+                    </svg>
+                    EJECT CARTRIDGE
                 </button>
             </div>
 
-            <!-- Master System Specific Configuration (ONLY Signal Standard remains here) -->
-            <div id="sms-config-section">
-                <div class="panel-section">
-                    <h3>Hardware Config</h3>
-                    
-                    <div class="control-group">
-                        <label>Signal Standard</label>
-                        <select id="vdpModeSelector">
-                            <option value="NTSC">NTSC (60 Hz)</option>
-                            <option value="PAL">PAL (50 Hz)</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Common Video & Audio Synthesizer Configuration (Visible for both SMS and Genesis) -->
             <div class="panel-section">
-                <h3>Hardware Config</h3>
-
+                <h3>Video Output</h3>
                 <div class="control-group">
-                    <label>Video Synthesizer</label>
+                    <label>Post-Processing Engine</label>
                     <select id="postProcessSelector">
-                        <option value="0">Raw Pixel (Sharp)</option>
-                        <option value="1">Bilinear (Soft)</option>
-                        <option value="2">Scale2X CPU</option>
-                        <option value="3">Scanlines 50% CPU</option>
-                        <option value="4">Scale4X HD CPU</option>
-                        <option value="5">NTSC Bleed CPU</option>
-                        <option value="6">CRT-Royale Extreme GPU</option>
-                        <option value="7">Anaglyph 3-D Glasses</option>
+                        <option value="0">1x Sharp (Nearest Neighbor)</option>
+                        <option value="1">1x Bilinear (Smooth)</option>
+                        <option value="2">Scale2X (Hardware Upscaler)</option>
+                        <option value="3">Scale2X + Fixed Scanlines</option>
+                        <option value="4">Scale4X (Cartoon Smoothing)</option>
+                        <option value="5">NTSC Analog Bleed</option>
+                        <option value="6">WebGL2: CRT-Royale Shader</option>
+                        <option value="7">Sega 3D Glasses (Anaglyph Red/Cyan)</option>
                     </select>
                 </div>
-
-                <div class="control-group">
-                    <label>Audio DSP</label>
-                    <select id="audioFilterSelector">
-                        <option value="0">Line-Out (Dry Mono)</option>
-                        <option value="1">Arcade Cabinet (Warm LP)</option>
-                        <option value="2">Lush 3D (Haas Stereo)</option>
-                        <option value="3">Spatial Atmos (Convolution)</option>
-                    </select>
-                </div>
-            </div>
-
-            <!-- WebGL2 CRT Shader Tuning Sliders (Visible for both SMS and Genesis) -->
-            <div class="panel-section">
-                <h3>CRT Shader Tuning</h3>
                 
-                <div class="control-group">
-                    <div class="slider-header">
-                        <label>Screen Curvature</label>
-                    </div>
-                    <!-- Range: 0 to 150 (Default 90 corresponds to 1.0 multiplier in JS) -->
-                    <input type="range" id="sh-curvature" min="0" max="150" value="90">
-                </div>
-
-                <div class="control-group">
-                    <div class="slider-header">
-                        <label>Scanline Strength</label>
-                    </div>
+                <!-- WebGL2 Live Shader Tuning -->
+                <div class="control-group shader-tuner">
+                    <label>CRT Curvature</label>
+                    <input type="range" id="sh-curvature" min="0" max="200" value="90">
+                    
+                    <label>Scanline Weight</label>
                     <input type="range" id="sh-scanlines" min="0" max="100" value="38">
-                </div>
-
-                <div class="control-group">
-                    <div class="slider-header">
-                        <label>Phosphor Triad</label>
-                    </div>
+                    
+                    <label>Phosphor Triad</label>
                     <input type="range" id="sh-phosphor" min="0" max="100" value="25">
-                </div>
-
-                <div class="control-group">
-                    <div class="slider-header">
-                        <label>Halation Bloom</label>
-                    </div>
+                    
+                    <label>Bloom Halation</label>
                     <input type="range" id="sh-bloom" min="0" max="100" value="15">
                 </div>
             </div>
 
-            <!-- In-Browser Storage Integration -->
             <div class="panel-section">
-                <h3>Save State</h3>
+                <h3>Temporal Physics</h3>
                 <div class="savestate-preview">
-                    <!-- Base64 empty transparent pixel placeholder -->
-                    <img id="savestateImg" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Empty Slot">
+                    <img id="savestateImg" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="Savestate Empty">
                 </div>
                 <div class="savestate-actions">
-                    <button id="btnSaveState" class="btn outline-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown', {'key': 'F2'}))">SAVE (F2)</button>
-                    <button id="btnLoadState" class="btn outline-btn" onclick="document.dispatchEvent(new KeyboardEvent('keydown', {'key': 'F3'}))">LOAD (F3)</button>
+                    <button id="btn-save" class="btn outline-btn" onclick="activeController.orchestrator.saveState(); setTimeout(()=>activeController.updateSaveStatePreview(), 200);">SAVE (F2)</button>
+                    <button id="btn-load" class="btn outline-btn" onclick="activeController.orchestrator.loadState();">LOAD (F3)</button>
                 </div>
-            </div>
-            
-            <div class="panel-footer">
-                <p>EGGStation Virtual Console <br>MIT License 2026</p>
+                <p class="panel-footer mt-2">Hold <strong>Backspace</strong> (or L2/LT) to Rewind Time.</p>
             </div>
         </aside>
 
         <!-- ========================================================= -->
-        <!-- DEVELOPER DIAGNOSTICS SUITE                               -->
+        <!-- DEVELOPER SUITE (Registers, CPU, VRAM)                    -->
         <!-- ========================================================= -->
         <footer id="developer-suite" class="glass-panel hidden">
-            
-            <!-- CPU Stepper Controls -->
-            <div class="dev-section" id="dev-controls">
-                <h4>Debugger Core</h4>
+            <div class="dev-section">
+                <h4>Execution Core</h4>
                 <div class="dev-btn-group">
-                    <button id="dbg-play" class="btn dev-btn">RESUME</button>
-                    <button id="dbg-pause" class="btn dev-btn">BREAK</button>
-                    <button id="dbg-step" class="btn dev-btn">STEP INTO</button>
-                </div>
-                <div class="control-group" style="margin-top: 10px;">
-                    <label>Hex Breakpoint</label>
-                    <input type="text" id="dbg-breakpoint" placeholder="e.g. 0038" maxlength="4">
+                    <button id="dbg-play" class="btn dev-btn">▶ PLAY</button>
+                    <button id="dbg-pause" class="btn dev-btn">⏸ PAUSE</button>
+                    <button id="dbg-step" class="btn dev-btn">⏭ STEP-INTO (1 Cycle)</button>
+                    <input type="text" id="dbg-breakpoint" placeholder="HEX Breakpoint (e.g. 0038)" maxlength="4">
                 </div>
             </div>
 
-            <!-- CPU Real-time Assembly Disassembly -->
-            <div class="dev-section" id="dev-disasm">
-                <h4>Assembly Output</h4>
-                <div id="disasm-output" class="terminal-box">
-                    <div class="disasm-line">0000: NOP</div>
-                </div>
+            <div class="dev-section">
+                <h4>Disassembly Terminal</h4>
+                <div id="disasm-output" class="terminal-box"></div>
             </div>
 
-            <!-- CPU Register Status Readouts -->
-            <div class="dev-section" id="dev-registers">
-                <h4>CPU Registers</h4>
+            <div class="dev-section">
+                <h4>Hardware Registers</h4>
                 <div class="registers-grid">
-                    <div>AF: <span id="reg-af">0040</span></div>
-                    <div>BC: <span id="reg-bc">0000</span></div>
-                    <div>DE: <span id="reg-de">0000</span></div>
-                    <div>HL: <span id="reg-hl">0000</span></div>
-                    <div>IX: <span id="reg-ix">FFFF</span></div>
-                    <div>IY: <span id="reg-iy">FFFF</span></div>
-                    <div>SP: <span id="reg-sp">DFF0</span></div>
-                    <div>PC: <span id="reg-pc">0000</span></div>
+                    <!-- Injected dynamically by the active UI Controller (Z80 / M68K / 65816) -->
                 </div>
             </div>
 
-            <!-- VRAM Pattern Tile Viewer -->
-            <div class="dev-section" id="dev-vram">
-                <h4>VRAM Tile Visualizer</h4>
+            <div class="dev-section">
+                <h4>VRAM Pattern Inspector</h4>
                 <div class="vram-preview-wrapper">
                     <canvas id="vram-canvas" width="128" height="192"></canvas>
                 </div>
             </div>
-
         </footer>
 
-        <!-- Mobile Drawer Dimming Overlay -->
-        <div id="mobile-overlay" class="hidden"></div>
     </div>
 
     <!-- ========================================================= -->
-    <!-- JAVASCRIPT INCLUDES (ORDER IS CRITICAL FOR DEPENDENCIES)  -->
+    <!-- DOMAIN, INFRASTRUCTURE, AND APPLICATION SCRIPTS           -->
     <!-- ========================================================= -->
 
-    <!-- SEGA MASTER SYSTEM / Z80 DOMAIN SCRIPTS -->
-    <script src="js/domain/cpu/Z80Registers.js"></script>
-    <script src="js/domain/cpu/Z80Alu.js"></script>
-    <script src="js/domain/cpu/Z80Disassembler.js"></script>
-    <script src="js/domain/cpu/instructions/Z80Arithmetic.js"></script>
-    <script src="js/domain/cpu/instructions/Z80Bitwise.js"></script>
-    <script src="js/domain/cpu/instructions/Z80BlockOps.js"></script>
-    <script src="js/domain/cpu/instructions/Z80DataTransfer.js"></script>
-    <script src="js/domain/cpu/instructions/Z80ProgramFlow.js"></script>
-    <script src="js/domain/cpu/instructions/Z80ShiftRotate.js"></script>
-    <script src="js/domain/cpu/instructions/Z80SystemIO.js"></script>
-    <script src="js/domain/cpu/ZilogZ80.js"></script>
-    
-    <!-- NUEVO: CPU Z80 específica de Genesis cargada antes de interactuar con el bus de Genesis -->
-    <script src="js/genesis/domain/cpu/GenesisZ80.js"></script>
+    <!-- SEGA MASTER SYSTEM CORE -->
+    <script src="js/sms/domain/bus/SegaMasterSystemBus.js"></script>
+    <script src="js/sms/domain/cartridge/SegaMasterSystemCartridge.js"></script>
+    <script src="js/sms/domain/cartridge/mappers/BaseMapper.js"></script>
+    <script src="js/sms/domain/cartridge/mappers/SegaMapper.js"></script>
+    <script src="js/sms/domain/cartridge/mappers/CodemastersMapper.js"></script>
+    <script src="js/sms/domain/cartridge/mappers/KoreanMapper.js"></script>
+    <script src="js/sms/domain/cartridge/mappers/SegaMasterSystemMapperFactory.js"></script>
+    <script src="js/sms/domain/controller/Sega315_5297.js"></script>
+    <script src="js/sms/domain/cpu/Z80Registers.js"></script>
+    <script src="js/sms/domain/cpu/Z80Alu.js"></script>
+    <script src="js/sms/domain/cpu/ZilogZ80.js"></script>
+    <script src="js/sms/domain/cpu/Z80Disassembler.js"></script>
+    <script src="js/sms/domain/cpu/instructions/Z80DataTransfer.js"></script>
+    <script src="js/sms/domain/cpu/instructions/Z80Arithmetic.js"></script>
+    <script src="js/sms/domain/cpu/instructions/Z80Bitwise.js"></script>
+    <script src="js/sms/domain/cpu/instructions/Z80ShiftRotate.js"></script>
+    <script src="js/sms/domain/cpu/instructions/Z80ProgramFlow.js"></script>
+    <script src="js/sms/domain/cpu/instructions/Z80BlockOps.js"></script>
+    <script src="js/sms/domain/cpu/instructions/Z80SystemIO.js"></script>
+    <script src="js/sms/infrastructure/video/Sega315_5124_Vdp.js"></script>
+    <script src="js/sms/infrastructure/video/VdpPostProcessor.js"></script>
+    <script src="js/sms/infrastructure/video/VdpSpriteManager.js"></script>
+    <script src="js/sms/infrastructure/video/VdpMode2Renderer.js"></script>
+    <script src="js/sms/infrastructure/video/VdpMode4Renderer.js"></script>
+    <script src="js/sms/infrastructure/audio/Sega315_5124_Psg.js"></script>
+    <script src="js/sms/infrastructure/storage/WebLocalStorageSerializer.js"></script>
+    <script src="js/sms/application/EmulatorOrchestrator.js"></script>
+    <script src="js/sms/presentation/UIController.js"></script>
 
-    <script src="js/domain/cartridge/mappers/BaseMapper.js"></script>
-    <script src="js/domain/cartridge/mappers/SegaMapper.js"></script>
-    <script src="js/domain/cartridge/mappers/CodemastersMapper.js"></script>
-    <script src="js/domain/cartridge/mappers/KoreanMapper.js"></script>
-    <script src="js/domain/cartridge/mappers/SegaMasterSystemMapperFactory.js"></script>
-    <script src="js/domain/cartridge/SegaMasterSystemCartridge.js"></script>
-    <script src="js/domain/controller/Sega315_5297.js"></script>
-    <script src="js/domain/bus/SegaMasterSystemBus.js"></script>
-    
-    <!-- SEGA MASTER SYSTEM INFRASTRUCTURE / PRESENTATION SCRIPTS -->
-    <script src="js/infrastructure/video/VdpMode2Renderer.js"></script>
-    <script src="js/infrastructure/video/VdpMode4Renderer.js"></script>
-    <script src="js/infrastructure/video/VdpSpriteManager.js"></script>
-    <script src="js/infrastructure/video/VdpPostProcessor.js"></script>
-    <script src="js/infrastructure/video/Sega315_5124_Vdp.js"></script>
-    <script src="js/infrastructure/audio/Sega315_5124_Psg.js"></script>
-    <script src="js/infrastructure/storage/WebLocalStorageSerializer.js"></script>
-    <script src="js/application/EmulatorOrchestrator.js"></script>
-    <script src="js/presentation/UIController.js"></script>
-
-    <!-- SEGA GENESIS / MEGA DRIVE DOMAIN SCRIPTS (M68K INSTRUCTIONS) -->
-    <script src="js/genesis/domain/cpu/instructions/M68kDataTransfer.js"></script>
-    <script src="js/genesis/domain/cpu/instructions/M68kArithmetic.js"></script>
-    <script src="js/genesis/domain/cpu/instructions/M68kLogical.js"></script>
-    <script src="js/genesis/domain/cpu/instructions/M68kBitwise.js"></script>
-    <script src="js/genesis/domain/cpu/instructions/M68kShiftRotate.js"></script>
-    <script src="js/genesis/domain/cpu/instructions/M68kProgramFlow.js"></script>
-    <script src="js/genesis/domain/cpu/instructions/M68kSystemExceptions.js"></script>
-    
-    <!-- SEGA GENESIS INFRASTRUCTURE / PRESENTATION SCRIPTS -->
-    <script src="js/genesis/domain/cpu/m68000.js"></script>
-    <script src="js/genesis/infrastructure/audio/GenesisLowPassFilter.js"></script>
-    <script src="js/genesis/infrastructure/audio/GenesisPsg.js"></script>
-    <script src="js/genesis/infrastructure/audio/GenesisPcm.js"></script>
-    <script src="js/genesis/infrastructure/audio/GenesisCdc.js"></script>
-    <script src="js/genesis/infrastructure/audio/GenesisCdda.js"></script>
-    <script src="js/genesis/infrastructure/audio/GenesisYm2612.js"></script>
-    <script src="js/genesis/infrastructure/video/GenesisVdp.js"></script>
-    
-    <!-- GPU-Accelerated Sega Genesis Post-Processing Filter Pipeline -->
-    <script src="js/genesis/infrastructure/video/GenesisPostProcessor.js"></script>
-    
-    <script src="js/genesis/domain/controller/GenesisControllerManager.js"></script>
-    <script src="js/genesis/domain/controller/GenesisIoPort.js"></script>
+    <!-- SEGA GENESIS CORE -->
     <script src="js/genesis/domain/bus/GenesisBusZ80.js"></script>
     <script src="js/genesis/domain/bus/GenesisBusM68k.js"></script>
+    <script src="js/genesis/domain/controller/GenesisIoPort.js"></script>
+    <script src="js/genesis/domain/controller/GenesisControllerManager.js"></script>
+    <script src="js/genesis/domain/cpu/m68000.js"></script>
+    <script src="js/genesis/domain/cpu/instructions/M68kSystemExceptions.js"></script>
+    <script src="js/genesis/domain/cpu/instructions/M68kDataTransfer.js"></script>
+    <script src="js/genesis/domain/cpu/instructions/M68kArithmetic.js"></script>
+    <script src="js/genesis/domain/cpu/instructions/M68kShiftRotate.js"></script>
+    <script src="js/genesis/domain/cpu/instructions/M68kBitwise.js"></script>
+    <script src="js/genesis/domain/cpu/instructions/M68kLogical.js"></script>
+    <script src="js/genesis/domain/cpu/instructions/M68kProgramFlow.js"></script>
+    <script src="js/genesis/domain/cpu/GenesisZ80.js"></script>
+    <script src="js/genesis/infrastructure/video/GenesisPostProcessor.js"></script>
+    <script src="js/genesis/infrastructure/video/GenesisVdp.js"></script>
+    <script src="js/genesis/infrastructure/audio/GenesisLowPassFilter.js"></script>
+    <script src="js/genesis/infrastructure/audio/GenesisPsg.js"></script>
+    <script src="js/genesis/infrastructure/audio/GenesisYm2612.js"></script>
+    <script src="js/genesis/infrastructure/audio/GenesisCdc.js"></script>
+    <script src="js/genesis/infrastructure/audio/GenesisCdda.js"></script>
+    <script src="js/genesis/infrastructure/audio/GenesisPcm.js"></script>
     <script src="js/genesis/application/GenesisOrchestrator.js"></script>
     <script src="js/genesis/presentation/GenesisUIController.js"></script>
 
-    <!-- SHARED APPLICATION BOOTSTRAPPER (SWAPPER) -->
-    <script src="js/app.js"></script>
+    <!-- SUPER NINTENDO (SNES) CORE -->
+    <script src="js/snes/domain/cpu/CpuRegisters.js"></script>
+    <script src="js/snes/domain/cpu/CpuAlu.js"></script>
+    <script src="js/snes/domain/cpu/CpuAddressing.js"></script>
+    <script src="js/snes/domain/cpu/Cpu.js"></script>
+    
+    <!-- Decoupled SNES Instruction Sub-Modules -->
+    <script src="js/snes/domain/cpu/SnesCpuSystem.js"></script>
+    <script src="js/snes/domain/cpu/SnesCpuDataTransfer.js"></script>
+    <script src="js/snes/domain/cpu/SnesCpuArithmetic.js"></script>
+    <script src="js/snes/domain/cpu/SnesCpuLogical.js"></script>
+    <script src="js/snes/domain/cpu/SnesCpuShiftRotate.js"></script>
+    <script src="js/snes/domain/cpu/SnesCpuProgramFlow.js"></script>
+    
+    <!-- Aggregator Entry Point -->
+    <script src="js/snes/domain/cpu/CpuInstructions.js"></script>
 
-    <!-- INLINE UI INTERACTION LOGIC (Mobile Drawer & CSS Toggles) -->
-    <script>
-        // Toggle mobile settings drawer
-        document.getElementById('mobile-menu-btn').addEventListener('click', () => {
-            document.getElementById('settings-panel').classList.toggle('active');
-            document.getElementById('mobile-overlay').classList.toggle('hidden');
-        });
-        
-        // Click outside drawer to close
-        document.getElementById('mobile-overlay').addEventListener('click', () => {
-            document.getElementById('settings-panel').classList.remove('active');
-            document.getElementById('mobile-overlay').classList.add('hidden');
-        });
-        
-        // Toggle Developer Mode Diagnostic Suite
-        document.getElementById('dev-toggle-btn').addEventListener('click', () => {
-            const devSuite = document.getElementById('developer-suite');
-            const appContainer = document.getElementById('app-container');
-            devSuite.classList.toggle('hidden');
-            appContainer.classList.toggle('dev-mode');
-        });
-    </script>
+    <script src="js/snes/domain/apu/Spc700Registers.js"></script>
+    <script src="js/snes/domain/apu/Spc700Alu.js"></script>
+    <script src="js/snes/domain/apu/Spc700.js"></script>
+    <script src="js/snes/domain/apu/Spc700Instructions.js"></script>
+    <script src="js/snes/domain/cartridge/SnesCartridge.js"></script>
+    <script src="js/snes/domain/cartridge/SnesMapper.js"></script>
+    <script src="js/snes/domain/bus/SnesBus.js"></script>
+    <script src="js/snes/infrastructure/video/SnesPpu.js"></script>
+    <script src="js/snes/infrastructure/video/SnesPpuRenderer.js"></script>
+    <script src="js/snes/infrastructure/video/SnesPostProcessor.js"></script>
+    <script src="js/snes/infrastructure/audio/SnesApu.js"></script>
+    <script src="js/snes/infrastructure/audio/SnesDsp.js"></script>
+    <script src="js/snes/application/SnesOrchestrator.js"></script>
+    <script src="js/snes/presentation/SnesUIController.js"></script>
+
+    <!-- SYSTEM BOOTSTRAPPER (Composition Root) -->
+    <script src="js/app.js"></script>
 </body>
 </html>

@@ -1,16 +1,13 @@
 /* 
- * Project: EGGStation - Sega Master System Emulator
+ * Project: EGGStation - Super Nintendo Entertainment System Emulator
  * Author: Enrique González Gutiérrez
  * 
  * Presentation Layer: EGGStation Style Sheet (Responsive & Immersive CRT Display)
  * 
  * Defines a dark-mode Synthwave aesthetic. Features 3 responsive states:
- * 1. Desktop (Canvas center, glass sidebar)
+ * 1. Desktop (Canvas center, glass sidebar, expanding developer suite)
  * 2. Mobile Portrait (Canvas top, D-PAD bottom, sidebar hidden in drawer)
  * 3. Mobile Landscape (Canvas 100%, overlaid translucent D-PAD)
- * 
- * OPTIMIZED: Configures the CRT container with a native 4:3 retro television aspect 
- * ratio and forces high-DPI scaling edge-to-edge for dynamic height viewports.
  */
 
 /* ==========================================================================
@@ -26,6 +23,8 @@
     --neon-pink: #ff007f;
     --neon-purple: #7f00ff;
     --success: #04d361;
+    --snes-purple: #b3a6db;
+    --snes-purple-dark: #5e5189;
 }
 
 /* ==========================================================================
@@ -94,6 +93,13 @@ body {
     gap: 12px;
 }
 
+.brand-logo {
+    height: 32px;
+    width: auto;
+    border-radius: 4px;
+    border: 1px solid var(--glass-border);
+}
+
 .brand h1 {
     font-size: 1.4rem;
     font-weight: 800;
@@ -112,6 +118,26 @@ body {
     gap: 20px;
 }
 
+/* System Dropdown styling */
+.sys-selector {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: var(--neon-pink);
+    font-weight: bold;
+    padding: 6px 12px;
+    border-radius: 6px;
+    outline: none;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.sys-selector option {
+    background-color: var(--bg-surface);
+    color: var(--text-main);
+    font-weight: normal;
+}
+
 #fpsSpan {
     font-family: monospace;
     color: var(--success);
@@ -120,20 +146,6 @@ body {
     background: rgba(4, 211, 97, 0.1);
     padding: 4px 10px;
     border-radius: 4px;
-}
-
-.icon-btn {
-    background: none;
-    border: none;
-    color: var(--text-main);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.mobile-only {
-    display: none;
 }
 
 /* ==========================================================================
@@ -145,7 +157,7 @@ body {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 40px 24px; /* Increased vertical breathing room */
+    padding: 40px 24px;
     position: relative;
     height: 100%;
 }
@@ -155,7 +167,7 @@ body {
     width: 100%;
     max-width: 960px; 
     max-height: calc(100vh - 160px); 
-    aspect-ratio: 4 / 3; /* OPTIMIZED: Immersive standard retro television 4:3 ratio */
+    aspect-ratio: 4 / 3; /* Immersive standard retro television 4:3 ratio */
     background: #000;
     border-radius: 8px;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--glass-border);
@@ -171,7 +183,7 @@ canvas {
     width: 100%;
     height: 100%;
     display: block;
-    object-fit: contain; /* OPTIMIZED: Automatically centers and scales display edge-to-edge */
+    object-fit: contain; /* Automatically centers and scales display edge-to-edge */
 }
 
 /* Hardware standard pixel rendering */
@@ -184,6 +196,25 @@ canvas {
 
 .hidden {
     display: none !important;
+}
+
+/* Overlay Uploader Styles */
+.overlay-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 20;
+}
+
+.pulse-anim {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 0, 127, 0.4); }
+    70% { transform: scale(1.05); box-shadow: 0 0 0 10px rgba(255, 0, 127, 0); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 0, 127, 0); }
 }
 
 /* ==========================================================================
@@ -240,7 +271,6 @@ select, .btn {
     transition: all 0.2s ease;
 }
 
-/* Fixes the "white text on white background" issue in system drop-down menus */
 select option {
     background-color: var(--bg-surface) !important;
     color: var(--text-main) !important;
@@ -271,6 +301,44 @@ select:hover, .btn:hover {
 .outline-btn {
     font-size: 0.8rem;
     padding: 10px;
+}
+
+/* Redesigned Tactile Hardware Eject Button */
+.eject-btn-retro {
+    background: linear-gradient(180deg, #2a2a35 0%, #181820 100%);
+    border: 2px solid #3c3c4e;
+    box-shadow: 0 4px 0 #0f0f14, inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    color: #e1e1e6;
+    font-family: monospace;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+    transition: all 0.1s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.eject-btn-retro:hover {
+    border-color: var(--neon-pink);
+    box-shadow: 0 4px 0 #0f0f14, 0 0 10px rgba(255, 0, 127, 0.4);
+    color: #fff;
+}
+
+.eject-btn-retro:active {
+    transform: translateY(4px);
+    box-shadow: none;
+}
+
+.icon-eject {
+    transition: transform 0.2s ease;
+}
+
+.eject-btn-retro:hover .icon-eject {
+    transform: translateY(-2px); /* Mechanical upward slide effect on hover */
 }
 
 /* Savestate Thumbnail */
@@ -315,7 +383,7 @@ select:hover, .btn:hover {
     gap: 24px;
     padding: 20px 24px;
     border-top: 1px solid var(--glass-border);
-    border-left: none; /* Occupies full bottom width */
+    border-left: none;
     overflow-y: hidden;
     z-index: 30;
 }
@@ -417,14 +485,14 @@ select:hover, .btn:hover {
    ========================================================================== */
 #virtual-gamepad {
     display: none;
-    touch-action: none; /* CRITICAL: Prevents OS zoom/scroll when playing */
+    touch-action: none; /* Prevents OS zoom/scroll when playing */
 }
 
 /* ==========================================================================
    MEDIA QUERIES - MOBILE PORTRAIT (Vertical)
    ========================================================================== */
 @media (max-width: 900px) {
-    /* CRITICAL: Suspend developer mode debugger entirely on mobile displays */
+    /* Suspend developer mode debugger entirely on mobile displays */
     #developer-suite, #dev-toggle-btn {
         display: none !important;
     }
@@ -440,8 +508,8 @@ select:hover, .btn:hover {
         grid-template-rows: 50px 1fr;
     }
 
-    .mobile-only {
-        display: flex;
+    .brand-logo {
+        display: none; /* Hide logo on small screens to fit the dropdown */
     }
 
     #stage {
@@ -496,38 +564,47 @@ select:hover, .btn:hover {
         background: rgba(255, 255, 255, 0.15);
     }
 
-    /* Action Buttons */
+    /* SNES-style Action Buttons Diamond Layout */
     .action-buttons {
-        display: flex;
-        gap: 15px;
-        transform: rotate(-15deg); /* Classic retro angle */
+        position: relative;
+        width: 140px;
+        height: 140px;
+        transform: rotate(-15deg);
     }
 
     .v-action {
-        width: 60px;
-        height: 60px;
+        position: absolute;
+        width: 50px;
+        height: 50px;
         border-radius: 50%;
-        background: rgba(255, 255, 255, 0.15);
         border: 2px solid rgba(255, 255, 255, 0.3);
         color: #fff;
-        font-size: 1.2rem;
+        font-size: 1.1rem;
         font-weight: bold;
     }
 
-    .v-action:active { background: var(--neon-purple); border-color: var(--neon-pink); }
+    .v-action:active { border-color: var(--neon-pink); }
+
+    /* specific coloring for SNES buttons */
+    #v-btnY { top: 45px; left: 0; background: var(--snes-purple); }
+    #v-btnX { top: 0; left: 45px; background: var(--snes-purple-dark); }
+    #v-btn2 { top: 90px; left: 45px; background: var(--snes-purple-dark); } /* B button */
+    #v-btn1 { top: 45px; left: 90px; background: var(--snes-purple); } /* A button */
 
     .center-controls {
         position: absolute;
         bottom: 30px;
         left: 50%;
         transform: translateX(-50%);
+        display: flex;
+        gap: 15px;
     }
 
     .v-system-btn {
         background: rgba(255, 255, 255, 0.1);
         border: none;
         color: #fff;
-        padding: 8px 20px;
+        padding: 8px 16px;
         border-radius: 20px;
         font-size: 0.7rem;
         letter-spacing: 2px;
@@ -536,26 +613,7 @@ select:hover, .btn:hover {
 
     /* Hide Sidebar, convert to Mobile Drawer */
     #settings-panel {
-        position: fixed;
-        top: 0;
-        right: -300px;
-        width: 280px;
-        height: 100vh;
-        border-left: 1px solid var(--glass-border);
-        transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: -10px 0 30px rgba(0,0,0,0.8);
-    }
-
-    #settings-panel.active {
-        right: 0;
-    }
-
-    #mobile-overlay {
-        position: fixed;
-        top: 0; left: 0; width: 100vw; height: 100vh;
-        background: rgba(0,0,0,0.6);
-        backdrop-filter: blur(2px);
-        z-index: 40;
+        display: none;
     }
 }
 
@@ -600,19 +658,13 @@ select:hover, .btn:hover {
         bottom: 20px;
         left: 30px;
         width: 130px; height: 130px;
-        opacity: 0.6; /* More transparent for landscape */
+        opacity: 0.6;
     }
-    .v-dir, .v-center { width: 45px; height: 45px; }
-    #v-up { left: 45px; }
-    #v-down { left: 45px; }
-    #v-left { top: 45px; }
-    #v-right { top: 45px; }
-    .v-center { top: 45px; left: 45px; }
 
     /* Position Action Buttons bottom right */
     .action-buttons {
-        bottom: 30px;
-        right: 40px;
+        bottom: 20px;
+        right: 30px;
         opacity: 0.6;
     }
 

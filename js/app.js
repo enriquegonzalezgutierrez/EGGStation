@@ -1,18 +1,17 @@
-/* 
- * Project: EGGStation - Sega Multi-System Emulator
+/**
+ * Project: EGGStation - Sega & SNES Multi-System Emulator
  * Author: Enrique González Gutiérrez
  * 
  * Application Entry Point: Composition Root, Welcome Banner, & Console Swapper (Debugger Purge)
  * 
  * This file serves as the system Bootstrapper. It coordinates the hot-swapping 
- * between the Sega Master System and Sega Genesis emulators dynamically, 
- * tearing down hardware registers and audio pipelines on-the-fly.
+ * between the Sega Master System, Sega Genesis, and Super Nintendo (SNES) emulators
+ * dynamically, tearing down hardware registers, cleaning event listeners, and closing 
+ * active audio pipelines on-the-fly to guarantee zero leakages.
  * 
  * SOLID Principles:
- * - Single Responsibility Principle (SRP): Isolates platform-wide bootstrap 
- *   mechanics, diagnostic logs, and console swappers from internal hardware loops.
- * - Open/Closed Principle (OCP): Designed with modular console loader segments 
- *   that allow new console cores to be integrated without modifying old engines.
+ * - Single Responsibility Principle (SRP): Concentrates global system swapper
+ *   orchestration, DOM cleanup, and hardware Cartridge Ejection.
  */
 
 // ========================================================================
@@ -34,7 +33,7 @@ console.log("%c=== SYSTEM SPECIFICATIONS ===", infoHeaderStyle);
 console.log(
     `%c` +
     `• Project      : EGGStation Virtual Console\n` +
-    `• Target       : Sega Master System, SG-1000 & Sega Genesis\n` +
+    `• Target       : Sega SMS, Genesis, & Super Nintendo (SNES)\n` +
     `• Architecture : Decoupled Domain-Driven Design (DDD) & SOLID Standards\n` +
     `• Audio Engine : Dynamic Rate Control (DRC) & Hybrid Stereo DSP Graph\n` +
     `• Video Engine : WebGL2 CRT-Royale Shader & Adaptive Screen Pacing\n` +
@@ -45,38 +44,32 @@ console.log(
 console.log("%c=============================", infoHeaderStyle);
 
 // ========================================================================
-// WEBGL2 HARDWARE DIAGNOSTIC SUITE
-// ========================================================================
-console.log("%c\n=== EGGStation WebGL2 Hardware Diagnostic ===", "color: #ff007f; font-weight: bold; font-size: 0.95rem;");
-try {
-    const testCanvas = document.createElement("canvas");
-    const testGL = testCanvas.getContext("webgl2");
-    if (testGL) {
-        const debugInfo = testGL.getExtension('WEBGL_debug_renderer_info');
-        const gpuVendor = debugInfo ? testGL.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : testGL.getParameter(testGL.VENDOR);
-        const gpuRenderer = debugInfo ? testGL.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : testGL.getParameter(testGL.RENDERER);
-        console.log("%cDiagnostic::SUCCESS - WebGL2 is fully operational!", "color: #04d361; font-weight: bold;");
-        console.log(`Diagnostic::GPU Vendor   : ${gpuVendor}`);
-        console.log(`Diagnostic::GPU Renderer : ${gpuRenderer}`);
-    } else {
-        console.warn("Diagnostic::FAILED - glCanvas.getContext('webgl2') returned NULL.");
-    }
-} catch (err) {
-    console.error("Diagnostic::EXCEPTION - WebGL2 initialization crashed:", err);
-}
-console.log("%c=============================================\n", "color: #ff007f; font-weight: bold;");
-
-// ========================================================================
 // CONSOLE HOT-SWAPPING BOOTSTRAPPER (COMPOSITION ROOT)
 // ========================================================================
 let activeOrchestrator = null;
 let activeController = null;
 
+/**
+ * Toggles the visibility of the collapsible Developer diagnostics suite.
+ */
+function toggleDeveloperSuite() {
+    const devSuite = document.getElementById('developer-suite');
+    const appContainer = document.getElementById('app-container');
+    if (devSuite && appContainer) {
+        devSuite.classList.toggle('hidden');
+        appContainer.classList.toggle('dev-mode');
+        
+        // Push initial registers layout to debugger if expanded
+        if (!devSuite.classList.contains('hidden') && activeController) {
+            activeController.updateDebuggerUI();
+        }
+    }
+}
+
 function bootConsole(consoleType) {
     console.log(`%c[EGGStation::Swapper] Purging hardware components for swap to ${consoleType}...`, "color: #7f00ff; font-weight: bold;");
 
-    // Nullify active controller reference first.
-    // This resolves constructor-stage race conditions in physical gamepad polling loops on hot-swaps.
+    // Nullify active controller reference first to prevent gamepad poll loops from firing
     activeController = null;
 
     // 1. Safe Teardown of the running console
@@ -86,24 +79,20 @@ function bootConsole(consoleType) {
             cancelAnimationFrame(activeOrchestrator.animationFrameId);
         }
         
-        // Close audio context of Master System if active
-        if (activeOrchestrator.psg && activeOrchestrator.psg.context) {
+        // Corrected: Safe Close checks state to prevent close-after-close state exceptions
+        if (activeOrchestrator.psg && activeOrchestrator.psg.context && activeOrchestrator.psg.context.state !== 'closed') {
             console.log(`[EGGStation::Audio] Closing active SMS audio context...`);
-            activeOrchestrator.psg.context.close().then(() => {
-                console.log(`[EGGStation::Audio] SMS Audio context closed safely.`);
-            }).catch((err) => {
-                console.error(`[EGGStation::Audio] Error closing SMS Audio context:`, err);
-            });
+            activeOrchestrator.psg.context.close().catch(() => {});
         }
         
-        // Close audio context of Sega Genesis if active
-        if (activeOrchestrator.audioCtx) {
+        if (activeOrchestrator.audioCtx && activeOrchestrator.audioCtx.state !== 'closed') {
             console.log(`[EGGStation::Audio] Closing active Genesis audio context...`);
-            activeOrchestrator.audioCtx.close().then(() => {
-                console.log(`[EGGStation::Audio] Genesis Audio context closed safely.`);
-            }).catch((err) => {
-                console.error(`[EGGStation::Audio] Error closing Genesis Audio context:`, err);
-            });
+            activeOrchestrator.audioCtx.close().catch(() => {});
+        }
+
+        if (activeOrchestrator.dsp && activeOrchestrator.dsp.context && activeOrchestrator.dsp.context.state !== 'closed') {
+            console.log(`[EGGStation::Audio] Closing active SNES audio context...`);
+            activeOrchestrator.dsp.context.close().catch(() => {});
         }
     }
 
@@ -117,10 +106,8 @@ function bootConsole(consoleType) {
     const newSelector = oldSelector.cloneNode(true);
     oldSelector.parentNode.replaceChild(newSelector, oldSelector);
 
-    // Clone the Debugger control buttons container synchronously during hot-swaps.
-    // This purges all old, accumulated Event Listeners of 'dbg-play', 'dbg-pause', and 'dbg-step' snychronously,
-    // ensuring zero event conflicts between SMS and Genesis debugger states.
-    const dbgSection = document.getElementById('dev-controls');
+    // Clone the Debugger control buttons container synchronously during hot-swaps
+    const dbgSection = document.getElementById('developer-suite');
     if (dbgSection) {
         const newDbgSection = dbgSection.cloneNode(true);
         dbgSection.parentNode.replaceChild(newDbgSection, dbgSection);
@@ -134,24 +121,17 @@ function bootConsole(consoleType) {
     let glContext = null;
     try {
         glContext = glCanvas.getContext("webgl2") || glCanvas.getContext("experimental-webgl2");
-        if (glContext) {
-            console.log(`[EGGStation::Canvas] WebGL2 graphics context acquired successfully.`);
-        } else {
-            console.warn(`[EGGStation::Canvas] WebGL2 context acquisition failed. Falling back to 2D.`);
-        }
     } catch (e) {
-        console.warn("[EGGStation::Canvas] WebGL2 Context exception: ", e);
+        console.warn("[EGGStation::Canvas] WebGL2 context acquisition failed: ", e);
     }
 
     // Clean viewport frames to prevent previous console artifacts from displaying
     if (videoContext) {
         videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
-        console.log(`[EGGStation::Canvas] 2D frame buffer canvas cleared.`);
     }
     if (glContext) {
         glContext.clearColor(0.0, 0.0, 0.0, 1.0);
         glContext.clear(glContext.COLOR_BUFFER_BIT);
-        console.log(`[EGGStation::Canvas] WebGL shader frame buffer canvas cleared.`);
     }
 
     // Reset default layout views
@@ -166,7 +146,6 @@ function bootConsole(consoleType) {
         try {
             // Show Master System specific options
             document.getElementById('sms-config-section').classList.remove('hidden');
-            document.getElementById('dev-toggle-btn').classList.remove('hidden');
 
             activeOrchestrator = new EmulatorOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");
@@ -182,18 +161,8 @@ function bootConsole(consoleType) {
     } 
     else if (consoleType === "GEN") {
         try {
-            // Hide Master System configurations (not used in Genesis standard mode)
+            // Hide Master System configurations
             document.getElementById('sms-config-section').classList.add('hidden');
-            
-            // Un-hide the "DEV MODE" button on Genesis mode as well
-            document.getElementById('dev-toggle-btn').classList.remove('hidden'); 
-            
-            // Collapse developer diagnostics suite to preserve mobile/desktop grid spaces
-            const devSuite = document.getElementById('developer-suite');
-            if (devSuite) devSuite.classList.add('hidden');
-
-            const appContainer = document.getElementById('app-container');
-            if (appContainer) appContainer.classList.remove('dev-mode');
             
             // Hide WebGL canvas inline and show standard 2D canvas
             glCanvas.style.display = "none";
@@ -212,11 +181,29 @@ function bootConsole(consoleType) {
             console.error(`[EGGStation::Swapper] Fatal exception during Genesis engine boot:`, err);
         }
     }
+    else if (consoleType === "SNES") {
+        try {
+            // Hide Master System configurations
+            document.getElementById('sms-config-section').classList.add('hidden');
+            
+            activeOrchestrator = new SnesOrchestrator(videoContext, glContext, (fps) => {
+                const fpsElement = document.getElementById("fpsSpan");
+                if (fpsElement) fpsElement.textContent = `${fps} FPS`;
+            });
+            activeController = new SnesUIController(activeOrchestrator);
+            
+            console.log(`%c[EGGStation::Swapper] Super Nintendo (SNES) Engine instantiated successfully.`, "color: #04d361; font-weight: bold;");
+        } catch (err) {
+            console.error(`[EGGStation::Swapper] Fatal exception during SNES engine boot:`, err);
+        }
+    }
 }
 
 // Global DOM Loaded initialization
 document.addEventListener("DOMContentLoaded", () => {
     const consoleSelector = document.getElementById('consoleSelector');
+    const devToggle = document.getElementById('dev-toggle-btn');
+    const ejectBtn = document.getElementById('ejectBtn');
     
     // Boot the default console (Sega Master System)
     console.log(`[EGGStation::Bootstrapper] Initializing default system configuration...`);
@@ -226,6 +213,54 @@ document.addEventListener("DOMContentLoaded", () => {
     if (consoleSelector) {
         consoleSelector.addEventListener('change', (e) => {
             bootConsole(e.target.value);
+        });
+    }
+
+    // Listen to developer panel toggles
+    if (devToggle) {
+        devToggle.addEventListener('click', toggleDeveloperSuite);
+    }
+
+    // Global Eject Cartridge listener implementation
+    if (ejectBtn) {
+        ejectBtn.addEventListener('click', () => {
+            console.log("[EGGStation::Swapper] Ejecting active cartridge...");
+            
+            if (activeOrchestrator) {
+                activeOrchestrator.isRunning = false;
+                if (activeOrchestrator.animationFrameId) {
+                    cancelAnimationFrame(activeOrchestrator.animationFrameId);
+                }
+                
+                // Close operational audio contexts only if they aren't already closed
+                if (activeOrchestrator.psg && activeOrchestrator.psg.context && activeOrchestrator.psg.context.state !== 'closed') {
+                    activeOrchestrator.psg.context.close().catch(() => {});
+                }
+                if (activeOrchestrator.audioCtx && activeOrchestrator.audioCtx.state !== 'closed') {
+                    activeOrchestrator.audioCtx.close().catch(() => {});
+                }
+                if (activeOrchestrator.dsp && activeOrchestrator.dsp.context && activeOrchestrator.dsp.context.state !== 'closed') {
+                    activeOrchestrator.dsp.context.close().catch(() => {});
+                }
+            }
+
+            // Clean active viewports
+            const videoCanvas = document.getElementById("smsdisplay");
+            const videoContext = videoCanvas.getContext("2d");
+            if (videoContext) {
+                videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
+            }
+
+            // Expose the ROM loader overlay
+            const fileSelectorEl = document.getElementById("fileselector");
+            if (fileSelectorEl) {
+                fileSelectorEl.classList.remove("hidden");
+            }
+
+            const fpsSpan = document.getElementById("fpsSpan");
+            if (fpsSpan) {
+                fpsSpan.textContent = "0.0 FPS";
+            }
         });
     }
 });
