@@ -5,20 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>EGGStation | Ultimate Web Emulator</title>
     
-    <!-- Synthwave / Glassmorphism Stylesheet -->
+    <!-- Synthwave / Glassmorphism UI Stylesheet -->
     <link rel="stylesheet" href="css/main.css">
     
-    <!-- External Zip/Deflate libraries (Shared across systems) -->
+    <!-- External Compression Libraries (Decompression of .zip ROMs) -->
     <script src="js/snes/lib/zip.js"></script>
     <script src="js/snes/lib/inflate.js"></script>
     <script src="js/snes/lib/deflate.js"></script>
 </head>
 <body>
 
-    <!-- Main Grid Container -->
+    <!-- Main Grid App Container -->
     <div id="app-container">
 
-        <!-- HEADER: Branding & Global System Selection -->
+        <!-- ========================================================= -->
+        <!-- HEADER (Branding & Global Console Selectors)              -->
+        <!-- ========================================================= -->
         <header id="top-bar">
             <div class="brand">
                 <img src="img/eggstation-visualizer.png" alt="EGGStation Logo" class="brand-logo">
@@ -36,12 +38,14 @@
             </div>
         </header>
 
-        <!-- STAGE: CRT Viewport & ROM Uploader -->
+        <!-- ========================================================= -->
+        <!-- STAGE (Dual CRT Viewports & ROM Overlay)                  -->
+        <!-- ========================================================= -->
         <main id="stage">
             <div id="crt-wrapper">
-                <!-- Hardware 2D Canvas (Primary output) -->
+                <!-- Hardware 2D Canvas (Software render & scalers) -->
                 <canvas id="smsdisplay"></canvas>
-                <!-- WebGL2 Canvas (CRT-Royale / Advanced Shaders) -->
+                <!-- WebGL2 Canvas (CRT-Royale Shaders & GPU effects) -->
                 <canvas id="webgldisplay" class="hidden"></canvas>
                 
                 <!-- Overlay ROM Uploader -->
@@ -54,7 +58,7 @@
                 </div>
             </div>
 
-            <!-- Virtual Gamepad for Mobile -->
+            <!-- Virtual On-Screen Gamepad for Mobile Views -->
             <section id="virtual-gamepad">
                 <div class="d-pad">
                     <button class="v-dir" id="v-up"></button>
@@ -76,12 +80,14 @@
             </section>
         </main>
 
-        <!-- SIDEBAR: Settings & Hardware Toggles -->
+        <!-- ========================================================= -->
+        <!-- SIDEBAR (Settings, Scaling and Savestates)                -->
+        <!-- ========================================================= -->
         <aside id="settings-panel" class="glass-panel">
             <div class="panel-section">
                 <h3>System Configuration</h3>
                 
-                <!-- Sega Specific Config -->
+                <!-- Sega Specific Settings -->
                 <div class="control-group" id="sms-config-section">
                     <label>Video Standard</label>
                     <select id="vdpModeSelector">
@@ -90,7 +96,7 @@
                     </select>
                 </div>
 
-                <!-- SNES Specific Config -->
+                <!-- SNES Specific Settings -->
                 <div class="control-group hidden" id="snes-config-section">
                     <label>Cartridge Mode</label>
                     <select id="ishirom-toggle">
@@ -116,6 +122,7 @@
                 </button>
             </div>
 
+            <!-- Unified Post-Processing Sliders & Filters -->
             <div class="panel-section">
                 <h3>Video Output</h3>
                 <div class="control-group">
@@ -132,7 +139,7 @@
                     </select>
                 </div>
                 
-                <!-- Shader Tuner -->
+                <!-- Dynamic Shader Tuner -->
                 <div class="control-group shader-tuner">
                     <label>CRT Curvature</label>
                     <input type="range" id="sh-curvature" min="0" max="200" value="90">
@@ -153,7 +160,9 @@
             </div>
         </aside>
 
-        <!-- DEVELOPER SUITE: Hardware Diagnostics -->
+        <!-- ========================================================= -->
+        <!-- DEVELOPER SUITE (Execution states & diagnostics logs)     -->
+        <!-- ========================================================= -->
         <footer id="developer-suite" class="glass-panel hidden">
             <div class="dev-section">
                 <h4>Execution Core</h4>
@@ -234,23 +243,23 @@
     <script src="js/genesis/presentation/GenesisUIController.js"></script>
 
     <!-- ========================================================= -->
-    <!-- SUPER NINTENDO (SNES) CORE - Standardized Infrastructure  -->
+    <!-- SUPER NINTENDO (SNES) CORE - Clean DDD Architecture       -->
     <!-- ========================================================= -->
-    <!-- 1. Infrastructure First (Compatibility, Video & Audio Adapters) -->
+    <!-- 1. Infrastructure Layer (Adapters, Shims & Processors) -->
     <script src="js/snes/infrastructure/SnesCompatibilityLayer.js"></script>
     <script src="js/snes/infrastructure/video/SnesPostProcessor.js"></script>
     <script src="js/snes/infrastructure/audio/SnesAudioProcessor.js"></script>
     
-    <!-- 2. Hardware Core (Domain) -->
-    <script src="js/snes/apu.js"></script>
-    <script src="js/snes/cart.js"></script>
-    <script src="js/snes/cpu.js"></script>
-    <script src="js/snes/dsp.js"></script>
-    <script src="js/snes/pipu.js"></script>
-    <script src="js/snes/snes.js"></script>
-    <script src="js/snes/spc.js"></script>
+    <!-- 2. Domain Layer (Encapsulated Hardware Entities) -->
+    <script src="js/snes/domain/cartridge/SnesCartridge.js"></script>
+    <script src="js/snes/domain/cpu/SnesCpu.js"></script>
+    <script src="js/snes/domain/video/SnesPpu.js"></script>
+    <script src="js/snes/domain/audio/SnesSpc.js"></script>
+    <script src="js/snes/domain/audio/SnesDsp.js"></script>
+    <script src="js/snes/domain/audio/SnesApu.js"></script>
+    <script src="js/snes/domain/bus/SnesSystemBus.js"></script>
     
-    <!-- 3. Application & Presentation (Mediators) -->
+    <!-- 3. Application & Presentation Layers (Mediators) -->
     <script src="js/snes/application/SnesOrchestrator.js"></script>
     <script src="js/snes/presentation/SnesUIController.js"></script>
 
