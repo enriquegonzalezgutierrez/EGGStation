@@ -20,7 +20,7 @@ class SnesPpuBackgroundRenderer {
     static resolveColor(ppu, sub, x, y) {
         let modeIndex = ppu.layer3Prio && ppu.mode === 1 ? 96 : 12 * ppu.mode;
         modeIndex = ppu.mode7ExBg && ppu.mode === 7 ? 108 : modeIndex;
-        const count = LAYER_COUNT_PER_MODE[ppu.mode];
+        const count = SnesPpuMathUnit.LAYER_COUNT_PER_MODE[ppu.mode];
 
         let j;
         let pixel = 0;
@@ -34,7 +34,7 @@ class SnesPpuBackgroundRenderer {
         for (j = 0; j < count; j++) {
             let lx = x;
             let ly = y;
-            layer = LAYERS_PER_MODE[modeIndex + j];
+            layer = SnesPpuMathUnit.LAYERS_PER_MODE[modeIndex + j];
 
             // Evaluate screen visibility and window clipping masks
             if ((!sub && ppu.mainScreenEnabled[layer] && (!ppu.mainScreenWindow[layer] || !this.getWindowState(ppu, lx, layer))) ||
@@ -87,7 +87,7 @@ class SnesPpuBackgroundRenderer {
                     }
                 }
 
-                pixel = this.getPixelForLayer(ppu, lx, ly, layer, PRIO_PER_MODE[modeIndex + j]);
+                pixel = this.getPixelForLayer(ppu, lx, ly, layer, SnesPpuMathUnit.PRIO_PER_MODE[modeIndex + j]);
             }
 
             if ((pixel & 0xff) > 0) {
@@ -99,7 +99,7 @@ class SnesPpuBackgroundRenderer {
         let color = ppu.cgram[pixel & 0xff];
 
         // Handle Direct Color modes (Standard 8-bpp layer bypass)
-        if (ppu.directColor && layer < 4 && BIT_PER_MODE[ppu.mode * 4 + layer] === 8) {
+        if (ppu.directColor && layer < 4 && SnesPpuMathUnit.BIT_PER_MODE[ppu.mode * 4 + layer] === 8) {
             const r = ((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7);
             const g = ((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8);
             const b = ((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8);
@@ -139,7 +139,7 @@ class SnesPpuBackgroundRenderer {
 
         paletteNum += ppu.mode === 0 ? l * 8 : 0;
 
-        const bits = BIT_PER_MODE[ppu.mode * 4 + l];
+        const bits = SnesPpuMathUnit.BIT_PER_MODE[ppu.mode * 4 + l];
         let mul = 4;
         let tileData = (ppu.tileBufferP1[l] >> xShift) & 0x1;
         tileData |= ((ppu.tileBufferP1[l] >> (8 + xShift)) & 0x1) << 1;
@@ -186,10 +186,11 @@ class SnesPpuBackgroundRenderer {
         tileNum += useXbig && (rx & 0x8) === (xFlip ? 0 : 8) ? 1 : 0;
         tileNum += ppu.bigTiles[l] && (ry & 0x8) === (yFlip ? 0 : 8) ? 0x10 : 0;
 
-        const bits = BIT_PER_MODE[ppu.mode * 4 + l];
+        const bits = SnesPpuMathUnit.BIT_PER_MODE[ppu.mode * 4 + l];
 
         ppu.tileBufferP1[l] = ppu.vram[(ppu.tileAdr[l] + tileNum * 4 * bits + yRow) & 0x7fff];
         if (bits > 2) {
+            ppu.tileBufferP1[l] = ppu.vram[(ppu.tileAdr[l] + tileNum * 4 * bits + yRow) & 0x7fff];
             ppu.tileBufferP2[l] = ppu.vram[(ppu.tileAdr[l] + tileNum * 4 * bits + yRow + 8) & 0x7fff];
         }
         if (bits > 4) {

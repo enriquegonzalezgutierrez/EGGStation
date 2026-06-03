@@ -43,7 +43,7 @@ class SnesPpuSpriteEvaluator {
             x = x > 255 ? -(512 - x) : x;
 
             // Resolve physical sprite size (typically 8x8 up to 64x64)
-            const size = SPRITE_SIZES[ppu.objSize + (big ? 8 : 0)];
+            const size = SnesPpuMathUnit.SPRITE_SIZES[ppu.objSize + (big ? 8 : 0)];
             let sprRow = line - y;
             
             // Handle vertical wrap-around
@@ -79,7 +79,7 @@ class SnesPpuSpriteEvaluator {
 
                         // Handle horizontal flip
                         const tileColumn = ((ex & 0x40) > 0) ? size - 1 - k : k;
-                        const tileNum = (tile + SPRITE_TILE_OFFSETS[tileRow * 8 + tileColumn]) & 0xff;
+                        const tileNum = (tile + SnesPpuMathUnit.SPRITE_TILE_OFFSETS[tileRow * 8 + tileColumn]) & 0xff;
 
                         // Fetch the 4bpp sprite plane tiles from VRAM
                         const tileP1 = ppu.vram[(adr + tileNum * 16 + sprRow) & 0x7fff];

@@ -254,10 +254,13 @@
     <script src="js/snes/domain/cpu/SnesCpuInstructions.js"></script>
     <script src="js/snes/domain/cpu/SnesCpu.js"></script>
     
-    <!-- Decoupled PPU Backgrounds, Sprites & Mode 7 Renderer Sub-Domain -->
-    <script src="js/snes/domain/video/SnesPpuMode7Renderer.js"></script>     <!-- ADDED: Modular Mode 7 affine projections -->
-    <script src="js/snes/domain/video/SnesPpuSpriteEvaluator.js"></script>     <!-- ADDED: Modular Sprite/OAM line evaluator -->
-    <script src="js/snes/domain/video/SnesPpuBackgroundRenderer.js"></script> <!-- ADDED: Modular Backgrounds, Window & Math -->
+    <!-- Decoupled PPU Backgrounds, Sprites, Mode 7, Math & Compositor Sub-Domain -->
+    <script src="js/snes/domain/video/SnesPpuMathUnit.js"></script>
+    <script src="js/snes/domain/video/SnesPpuRegisterMapper.js"></script>
+    <script src="js/snes/domain/video/SnesPpuMode7Renderer.js"></script>
+    <script src="js/snes/domain/video/SnesPpuSpriteEvaluator.js"></script>
+    <script src="js/snes/domain/video/SnesPpuBackgroundRenderer.js"></script>
+    <script src="js/snes/domain/video/SnesPpuScanlineCompositor.js"></script>
     <script src="js/snes/domain/video/SnesPpu.js"></script>
     
     <script src="js/snes/domain/audio/SnesSpc.js"></script>
