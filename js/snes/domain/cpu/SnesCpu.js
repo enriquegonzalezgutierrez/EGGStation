@@ -1,18 +1,16 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesCpu (Ricoh 5A22 CPU - Scoped & GC-Free Version)
+ * Component: SnesCpu (Ricoh 5A22 CPU - JIT-Optimized PC Wrapping)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
  * Manages the state, memory access, stack, and cycle-accurate loop execution 
  * of the SNES Ricoh 5A22 processor. 
- * OPTIMIZED: Uses pre-allocated class properties (resolvedAdr, resolvedAdrh) 
- * in its hot loop execution to prevent temporary memory allocations entirely.
+ * OPTIMIZED: Implements 16-bit program counter wrapping on opcode fetches,
+ * bypassing array lookup overhead.
  * 
  * SOLID Principles:
- * - SRP: Handles only CPU execution states, registers, and memory lookups,
- *   delegating arithmetic to SnesCpuAlu, addressing to SnesCpuAddressing,
- *   and opcode actions to SnesCpuInstructions.
+ * - SRP: Handles only CPU execution states, registers, and memory lookups.
  */
 
 // Local constant register scopes
@@ -180,20 +178,24 @@ class SnesCpu {
 
     /**
      * Process one clock step of the central CPU.
+     * GC-FREE: Employs 16-bit enshrouded PC wrapping.
      */
     cycle() {
         if (this.cyclesLeft === 0) {
             if (this.stopped) {
                 this.cyclesLeft = 1;
             } else if (!this.waiting) {
-                // Fetch opcode byte from current Program Bank:PC
-                let instr = this.mem.read((this.r[CPU_REG_K] << 16) | this.br[CPU_REG_PC]++);
+                // Fetch opcode byte with strict 16-bit Program Counter wrapping
+                const pc = this.br[CPU_REG_PC];
+                let instr = this.mem.read((this.r[CPU_REG_K] << 16) | pc);
+                this.br[CPU_REG_PC] = (pc + 1) & 0xffff;
+                
                 this.cyclesLeft = this.cycles[instr];
                 let mode = this.modes[instr];
 
                 // Interrupt Line queries
                 if ((this.irqWanted && !this.i) || this.nmiWanted || this.aboWanted) {
-                    this.br[CPU_REG_PC]--;
+                    this.br[CPU_REG_PC] = (this.br[CPU_REG_PC] - 1) & 0xffff;
                     if (this.aboWanted) {
                         this.aboWanted = false;
                         instr = 0x100;
@@ -274,7 +276,7 @@ class SnesCpu {
     doBranch(check, rel) {
         if (check) {
             this.cyclesLeft++;
-            this.br[CPU_REG_PC] += rel;
+            this.br[CPU_REG_PC] = (this.br[CPU_REG_PC] + rel) & 0xffff;
         }
     }
 
@@ -284,11 +286,11 @@ class SnesCpu {
         } else {
             this.mem.write(this.br[CPU_REG_SP], value);
         }
-        this.br[CPU_REG_SP]--;
+        this.br[CPU_REG_SP] = (this.br[CPU_REG_SP] - 1) & 0xffff;
     }
 
     pullByte() {
-        this.br[CPU_REG_SP]++;
+        this.br[CPU_REG_SP] = (this.br[CPU_REG_SP] + 1) & 0xffff;
         if (this.e) {
             return this.mem.read((this.br[CPU_REG_SP] & 0xff) | 0x100);
         }
@@ -332,10 +334,10 @@ class SnesCpu {
     bmi(adr) { this.doBranch(this.n, adr); }
     bne(adr) { this.doBranch(!this.z, adr); }
     bpl(adr) { this.doBranch(!this.n, adr); }
-    bra(adr) { this.br[CPU_REG_PC] += adr; }
+    bra(adr) { this.br[CPU_REG_PC] = (this.br[CPU_REG_PC] + adr) & 0xffff; }
     bvc(adr) { this.doBranch(!this.v, adr); }
     bvs(adr) { this.doBranch(this.v, adr); }
-    brl(adr) { this.br[CPU_REG_PC] += adr; }
+    brl(adr) { this.br[CPU_REG_PC] = (this.br[CPU_REG_PC] + adr) & 0xffff; }
 
     jmp(adr) { this.br[CPU_REG_PC] = adr & 0xffff; }
     jml(adr) { this.r[CPU_REG_K] = (adr & 0xff0000) >> 16; this.br[CPU_REG_PC] = adr & 0xffff; }
@@ -375,12 +377,12 @@ class SnesCpu {
     rtl() {
         const pullPc = SnesCpuOperations.pullWord(this);
         this.r[CPU_REG_K] = SnesCpuOperations.pullByte(this);
-        this.br[CPU_REG_PC] = pullPc + 1;
+        this.br[CPU_REG_PC] = (pullPc + 1) & 0xffff;
     }
 
     rts() {
         const pullPc = SnesCpuOperations.pullWord(this);
-        this.br[CPU_REG_PC] = pullPc + 1;
+        this.br[CPU_REG_PC] = (pullPc + 1) & 0xffff;
     }
 
     brk() {
@@ -409,7 +411,7 @@ class SnesCpu {
 
     abo() {
         SnesCpuOperations.pushByte(this, this.r[CPU_REG_K]);
-        SnesCpuOperations.pushWord(this, cpu.br[CPU_REG_PC]);
+        SnesCpuOperations.pushWord(this, this.br[CPU_REG_PC]);
         SnesCpuOperations.pushByte(this, this.getP());
         this.cyclesLeft++;
         this.i = true;

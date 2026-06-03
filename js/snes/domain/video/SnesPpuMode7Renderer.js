@@ -1,6 +1,6 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesPpuMode7Renderer (Mode 7 Affine Projection Processor)
+ * Component: SnesPpuMode7Renderer (Highly Optimized Mode 7 Affine Processor)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
@@ -40,13 +40,19 @@ class SnesPpuMode7Renderer {
             (ppu.mode7Y << 8)
         );
 
-        ppu.mode7Xcoords[0] = lineStartX;
-        ppu.mode7Ycoords[0] = lineStartY;
+        // Cache typed arrays and values to eliminate property access overhead in the projection loop
+        const mode7Xcoords = ppu.mode7Xcoords;
+        const mode7Ycoords = ppu.mode7Ycoords;
+        const mode7A = ppu.mode7A;
+        const mode7C = ppu.mode7C;
+
+        mode7Xcoords[0] = lineStartX;
+        mode7Ycoords[0] = lineStartY;
 
         // Project pixels on the scanline using matricial increments (A and C)
         for (let i = 1; i < 256; i++) {
-            ppu.mode7Xcoords[i] = ppu.mode7Xcoords[i - 1] + ppu.mode7A;
-            ppu.mode7Ycoords[i] = ppu.mode7Ycoords[i - 1] + ppu.mode7C;
+            mode7Xcoords[i] = mode7Xcoords[i - 1] + mode7A;
+            mode7Ycoords[i] = mode7Ycoords[i - 1] + mode7C;
         }
     }
 
@@ -63,14 +69,17 @@ class SnesPpuMode7Renderer {
         
         if (x !== ppu.lastTileFetchedX[0] || y !== ppu.lastTileFetchedY[0]) {
             const rX = ppu.mode7FlipX ? 255 - x : x;
-            const px = ppu.mode7Xcoords[rX] >> 8;
-            const py = ppu.mode7Ycoords[rX] >> 8;
+            
+            // Decoupled let declaration to allow proper local bitwise mutation (Fixed constant crash!)
+            let px = ppu.mode7Xcoords[rX] >> 8;
+            let py = ppu.mode7Ycoords[rX] >> 8;
             let pixelIsTransparent = false;
 
             // Handle wrap-around / large field boundaries
             if (ppu.mode7LargeField && (px < 0 || px >= 1024 || py < 0 || py >= 1024)) {
                 if (ppu.mode7Char0fill) {
-                    px &= 0x7; py &= 0x7; // Fill with tile 0
+                    px &= 0x7; 
+                    py &= 0x7; // Mutate localized variables safely
                 } else {
                     pixelIsTransparent = true; // Output transparency
                 }
@@ -84,15 +93,19 @@ class SnesPpuMode7Renderer {
             
             // Read and decode tile pixel data
             pixelData = ppu.vram[tileByte * 64 + (py & 0x7) * 8 + (px & 0x7)] >> 8;
-            pixelData = pixelIsTransparent ? 0 : pixelData;
+            if (pixelIsTransparent) {
+                pixelData = 0;
+            }
 
             ppu.tilemapBuffer[0] = pixelData;
             ppu.lastTileFetchedX[0] = x;
             ppu.lastTileFetchedY[0] = y;
         }
 
-        if (layer === 1 && (pixelData >> 7) !== priority) return 0;
-        if (layer === 1) return pixelData & 0x7f;
+        if (layer === 1) {
+            if ((pixelData >> 7) !== priority) return 0;
+            return pixelData & 0x7f;
+        }
 
         return pixelData;
     }

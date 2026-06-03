@@ -1,12 +1,13 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesCpuInstructions (Hardware Instruction Set)
+ * Component: SnesCpuInstructions (Hardware Instruction Set - Optimized)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
  * Implements the instruction set (Opcodes) of the Ricoh 5A22 CPU.
- * It manipulates CPU state registers and delegates mathematical calculations to
- * SnesCpuAlu. This keeps the execution core decoupled from instruction definitions.
+ * It manipulates CPU state registers directly.
+ * OPTIMIZED: Bypasses external SnesCpuAlu class lookup calls on hot paths 
+ * by calling cpu.setZandN directly.
  * 
  * SOLID Principles:
  * - SRP: Exclusively handles instruction set behavior.
@@ -21,33 +22,33 @@ class SnesCpuInstructions {
         if (cpu.m) {
             const value = cpu.mem.read(adr);
             cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] & 0xff00) | (value & 0xff);
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m); // Bypasses SnesCpuAlu static class lookup
         } else {
             cpu.cyclesLeft++;
             cpu.br[CPU_REG_A] = cpu.readWord(adr, adrh);
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         }
     }
 
     static ldx(cpu, adr, adrh) {
         if (cpu.x) {
             cpu.br[CPU_REG_X] = cpu.mem.read(adr);
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_X], cpu.x);
+            cpu.setZandN(cpu.br[CPU_REG_X], cpu.x);
         } else {
             cpu.cyclesLeft++;
             cpu.br[CPU_REG_X] = cpu.readWord(adr, adrh);
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_X], cpu.x);
+            cpu.setZandN(cpu.br[CPU_REG_X], cpu.x);
         }
     }
 
     static ldy(cpu, adr, adrh) {
         if (cpu.x) {
             cpu.br[CPU_REG_Y] = cpu.mem.read(adr);
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_Y], cpu.x);
+            cpu.setZandN(cpu.br[CPU_REG_Y], cpu.x);
         } else {
             cpu.cyclesLeft++;
             cpu.br[CPU_REG_Y] = cpu.readWord(adr, adrh);
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_Y], cpu.x);
+            cpu.setZandN(cpu.br[CPU_REG_Y], cpu.x);
         }
     }
 
@@ -95,12 +96,12 @@ class SnesCpuInstructions {
         if (cpu.m) {
             const value = cpu.mem.read(adr);
             cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] & 0xff00) | ((cpu.br[CPU_REG_A] & value) & 0xff);
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         } else {
             const value = cpu.readWord(adr, adrh);
             cpu.cyclesLeft++;
             cpu.br[CPU_REG_A] &= value;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         }
     }
 
@@ -108,12 +109,12 @@ class SnesCpuInstructions {
         if (cpu.m) {
             const value = cpu.mem.read(adr);
             cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] & 0xff00) | ((cpu.br[CPU_REG_A] ^ value) & 0xff);
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         } else {
             const value = cpu.readWord(adr, adrh);
             cpu.cyclesLeft++;
             cpu.br[CPU_REG_A] ^= value;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         }
     }
 
@@ -121,12 +122,12 @@ class SnesCpuInstructions {
         if (cpu.m) {
             const value = cpu.mem.read(adr);
             cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] & 0xff00) | ((cpu.br[CPU_REG_A] | value) & 0xff);
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         } else {
             const value = cpu.readWord(adr, adrh);
             cpu.cyclesLeft++;
             cpu.br[CPU_REG_A] |= value;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         }
     }
 
@@ -195,13 +196,13 @@ class SnesCpuInstructions {
     static dec(cpu, adr, adrh) {
         if (cpu.m) {
             const result = (cpu.mem.read(adr) - 1) & 0xff;
-            SnesCpuAlu.setZandN(cpu, result, cpu.m);
+            cpu.setZandN(result, cpu.m);
             cpu.mem.write(adr, result);
         } else {
             const value = cpu.readWord(adr, adrh);
             cpu.cyclesLeft += 2;
             const result = (value - 1) & 0xffff;
-            SnesCpuAlu.setZandN(cpu, result, cpu.m);
+            cpu.setZandN(result, cpu.m);
             cpu.writeWord(adr, adrh, result, true);
         }
     }
@@ -209,46 +210,46 @@ class SnesCpuInstructions {
     static deca(cpu) {
         if (cpu.m) {
             const result = ((cpu.br[CPU_REG_A] & 0xff) - 1) & 0xff;
-            SnesCpuAlu.setZandN(cpu, result, cpu.m);
+            cpu.setZandN(result, cpu.m);
             cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] & 0xff00) | result;
         } else {
             cpu.br[CPU_REG_A]--;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         }
     }
 
     static dex(cpu) {
         if (cpu.x) {
             const result = ((cpu.br[CPU_REG_X] & 0xff) - 1) & 0xff;
-            SnesCpuAlu.setZandN(cpu, result, cpu.x);
+            cpu.setZandN(result, cpu.x);
             cpu.br[CPU_REG_X] = result;
         } else {
             cpu.br[CPU_REG_X]--;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_X], cpu.x);
+            cpu.setZandN(cpu.br[CPU_REG_X], cpu.x);
         }
     }
 
     static dey(cpu) {
         if (cpu.x) {
             const result = ((cpu.br[CPU_REG_Y] & 0xff) - 1) & 0xff;
-            SnesCpuAlu.setZandN(cpu, result, cpu.x);
+            cpu.setZandN(result, cpu.x);
             cpu.br[CPU_REG_Y] = result;
         } else {
             cpu.br[CPU_REG_Y]--;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_Y], cpu.x);
+            cpu.setZandN(cpu.br[CPU_REG_Y], cpu.x);
         }
     }
 
     static inc(cpu, adr, adrh) {
         if (cpu.m) {
             const result = (cpu.mem.read(adr) + 1) & 0xff;
-            SnesCpuAlu.setZandN(cpu, result, cpu.m);
+            cpu.setZandN(result, cpu.m);
             cpu.mem.write(adr, result);
         } else {
             const value = cpu.readWord(adr, adrh);
             cpu.cyclesLeft += 2;
             const result = (value + 1) & 0xffff;
-            SnesCpuAlu.setZandN(cpu, result, cpu.m);
+            cpu.setZandN(result, cpu.m);
             cpu.writeWord(adr, adrh, result, true);
         }
     }
@@ -256,33 +257,33 @@ class SnesCpuInstructions {
     static inca(cpu) {
         if (cpu.m) {
             const result = ((cpu.br[CPU_REG_A] & 0xff) + 1) & 0xff;
-            SnesCpuAlu.setZandN(cpu, result, cpu.m);
+            cpu.setZandN(result, cpu.m);
             cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] & 0xff00) | result;
         } else {
             cpu.br[CPU_REG_A]++;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         }
     }
 
     static inx(cpu) {
         if (cpu.x) {
             const result = ((cpu.br[CPU_REG_X] & 0xff) + 1) & 0xff;
-            SnesCpuAlu.setZandN(cpu, result, cpu.x);
+            cpu.setZandN(result, cpu.x);
             cpu.br[CPU_REG_X] = result;
         } else {
             cpu.br[CPU_REG_X]++;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_X], cpu.x);
+            cpu.setZandN(cpu.br[CPU_REG_X], cpu.x);
         }
     }
 
     static iny(cpu) {
         if (cpu.x) {
             const result = ((cpu.br[CPU_REG_Y] & 0xff) + 1) & 0xff;
-            SnesCpuAlu.setZandN(cpu, result, cpu.x);
+            cpu.setZandN(result, cpu.x);
             cpu.br[CPU_REG_Y] = result;
         } else {
             cpu.br[CPU_REG_Y]++;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_Y], cpu.x);
+            cpu.setZandN(cpu.br[CPU_REG_Y], cpu.x);
         }
     }
 
@@ -291,14 +292,14 @@ class SnesCpuInstructions {
             let value = cpu.mem.read(adr);
             cpu.c = (value & 0x80) > 0;
             value <<= 1;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.mem.write(adr, value);
         } else {
             let value = cpu.readWord(adr, adr + 1);
             cpu.cyclesLeft += 2;
             cpu.c = (value & 0x8000) > 0;
             value <<= 1;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.writeWord(adr, adr + 1, value, true);
         }
     }
@@ -308,13 +309,13 @@ class SnesCpuInstructions {
             let value = cpu.br[CPU_REG_A] & 0xff;
             cpu.c = (value & 0x80) > 0;
             value <<= 1;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] & 0xff00) | (value & 0xff);
         } else {
             cpu.c = (cpu.br[CPU_REG_A] & 0x8000) > 0;
             cpu.cyclesLeft += 2;
             cpu.br[CPU_REG_A] <<= 1;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         }
     }
 
@@ -323,14 +324,14 @@ class SnesCpuInstructions {
             let value = cpu.mem.read(adr);
             cpu.c = (value & 0x1) > 0;
             value >>= 1;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.mem.write(adr, value);
         } else {
             let value = cpu.readWord(adr, adr + 1);
             cpu.cyclesLeft += 2;
             cpu.c = (value & 0x1) > 0;
             value >>= 1;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.writeWord(adr, adr + 1, value, true);
         }
     }
@@ -340,13 +341,13 @@ class SnesCpuInstructions {
             let value = cpu.br[CPU_REG_A] & 0xff;
             cpu.c = (value & 0x1) > 0;
             value >>= 1;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] & 0xff00) | (value & 0xff);
         } else {
             cpu.c = (cpu.br[CPU_REG_A] & 0x1) > 0;
             cpu.cyclesLeft += 2;
             cpu.br[CPU_REG_A] >>= 1;
-            SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+            cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
         }
     }
 
@@ -355,14 +356,14 @@ class SnesCpuInstructions {
             let value = cpu.mem.read(adr);
             value = (value << 1) | (cpu.c ? 1 : 0);
             cpu.c = (value & 0x100) > 0;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.mem.write(adr, value);
         } else {
             let value = cpu.readWord(adr, adr + 1);
             cpu.cyclesLeft += 2;
             value = (value << 1) | (cpu.c ? 1 : 0);
             cpu.c = (value & 0x10000) > 0;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.writeWord(adr, adr + 1, value, true);
         }
     }
@@ -372,13 +373,13 @@ class SnesCpuInstructions {
             let value = cpu.br[CPU_REG_A] & 0xff;
             value = (value << 1) | (cpu.c ? 1 : 0);
             cpu.c = (value & 0x100) > 0;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] & 0xff00) | (value & 0xff);
         } else {
             cpu.cyclesLeft += 2;
             const value = (cpu.br[CPU_REG_A] << 1) | (cpu.c ? 1 : 0);
             cpu.c = (value & 0x10000) > 0;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.br[CPU_REG_A] = value;
         }
     }
@@ -389,7 +390,7 @@ class SnesCpuInstructions {
             const carry = value & 0x1;
             value = (value >> 1) | (cpu.c ? 0x80 : 0);
             cpu.c = carry > 0;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.mem.write(adr, value);
         } else {
             let value = cpu.readWord(adr, adr + 1);
@@ -397,7 +398,7 @@ class SnesCpuInstructions {
             const carry = value & 0x1;
             value = (value >> 1) | (cpu.c ? 0x8000 : 0);
             cpu.c = carry > 0;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.writeWord(adr, adr + 1, value, true);
         }
     }
@@ -408,14 +409,14 @@ class SnesCpuInstructions {
             const carry = value & 0x1;
             value = (value >> 1) | (cpu.c ? 0x80 : 0);
             cpu.c = carry > 0;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] & 0xff00) | (value & 0xff);
         } else {
             cpu.cyclesLeft += 2;
             const carry = cpu.br[CPU_REG_A] & 0x1;
             const value = (cpu.br[CPU_REG_A] >> 1) | (cpu.c ? 0x8000 : 0);
             cpu.c = carry > 0;
-            SnesCpuAlu.setZandN(cpu, value, cpu.m);
+            cpu.setZandN(value, cpu.m);
             cpu.br[CPU_REG_A] = value;
         }
     }
@@ -426,22 +427,22 @@ class SnesCpuInstructions {
 
     static tax(cpu) {
         cpu.br[CPU_REG_X] = cpu.x ? (cpu.br[CPU_REG_A] & 0xff) : cpu.br[CPU_REG_A];
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_X], cpu.x);
+        cpu.setZandN(cpu.br[CPU_REG_X], cpu.x);
     }
 
     static tay(cpu) {
         cpu.br[CPU_REG_Y] = cpu.x ? (cpu.br[CPU_REG_A] & 0xff) : cpu.br[CPU_REG_A];
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_Y], cpu.x);
+        cpu.setZandN(cpu.br[CPU_REG_Y], cpu.x);
     }
 
     static tsx(cpu) {
         cpu.br[CPU_REG_X] = cpu.x ? (cpu.br[CPU_REG_SP] & 0xff) : cpu.br[CPU_REG_SP];
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_X], cpu.x);
+        cpu.setZandN(cpu.br[CPU_REG_X], cpu.x);
     }
 
     static txa(cpu) {
         cpu.br[CPU_REG_A] = cpu.m ? ((cpu.br[CPU_REG_A] & 0xff00) | (cpu.br[CPU_REG_X] & 0xff)) : cpu.br[CPU_REG_X];
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+        cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
     }
 
     static txs(cpu) {
@@ -450,22 +451,22 @@ class SnesCpuInstructions {
 
     static txy(cpu) {
         cpu.br[CPU_REG_Y] = cpu.x ? (cpu.br[CPU_REG_X] & 0xff) : cpu.br[CPU_REG_X];
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_Y], cpu.x);
+        cpu.setZandN(cpu.br[CPU_REG_Y], cpu.x);
     }
 
     static tya(cpu) {
         cpu.br[CPU_REG_A] = cpu.m ? ((cpu.br[CPU_REG_A] & 0xff00) | (cpu.br[CPU_REG_Y] & 0xff)) : cpu.br[CPU_REG_Y];
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], cpu.m);
+        cpu.setZandN(cpu.br[CPU_REG_A], cpu.m);
     }
 
     static tyx(cpu) {
         cpu.br[CPU_REG_X] = cpu.x ? (cpu.br[CPU_REG_Y] & 0xff) : cpu.br[CPU_REG_Y];
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_X], cpu.x);
+        cpu.setZandN(cpu.br[CPU_REG_X], cpu.x);
     }
 
     static tcd(cpu) {
         cpu.br[CPU_REG_DPR] = cpu.br[CPU_REG_A];
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_DPR], false);
+        cpu.setZandN(cpu.br[CPU_REG_DPR], false);
     }
 
     static tcs(cpu) {
@@ -474,19 +475,19 @@ class SnesCpuInstructions {
 
     static tdc(cpu) {
         cpu.br[CPU_REG_A] = cpu.br[CPU_REG_DPR];
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], false);
+        cpu.setZandN(cpu.br[CPU_REG_A], false);
     }
 
     static tsc(cpu) {
         cpu.br[CPU_REG_A] = cpu.br[CPU_REG_SP];
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], false);
+        cpu.setZandN(cpu.br[CPU_REG_A], false);
     }
 
     static xba(cpu) {
         const low = cpu.br[CPU_REG_A] & 0xff;
         const high = (cpu.br[CPU_REG_A] & 0xff00) >> 8;
         cpu.br[CPU_REG_A] = (low << 8) | high;
-        SnesCpuAlu.setZandN(cpu, cpu.br[CPU_REG_A], true);
+        cpu.setZandN(cpu.br[CPU_REG_A], true);
     }
 
     static xce(cpu) {
@@ -506,11 +507,11 @@ class SnesCpuInstructions {
     static mvn(cpu, adr, adrh) {
         cpu.r[CPU_REG_DBR] = adr;
         cpu.mem.write((adr << 16) | cpu.br[CPU_REG_Y], cpu.mem.read((adrh << 16) | cpu.br[CPU_REG_X]));
-        cpu.br[CPU_REG_A]--;
-        cpu.br[CPU_REG_X]++;
-        cpu.br[CPU_REG_Y]++;
+        cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] - 1) & 0xffff;
+        cpu.br[CPU_REG_X] = (cpu.br[CPU_REG_X] + 1) & 0xffff;
+        cpu.br[CPU_REG_Y] = (cpu.br[CPU_REG_Y] + 1) & 0xffff;
         if (cpu.br[CPU_REG_A] !== 0xffff) {
-            cpu.br[CPU_REG_PC] -= 3;
+            cpu.br[CPU_REG_PC] = (cpu.br[CPU_REG_PC] - 3) & 0xffff;
         }
         if (cpu.x) {
             cpu.br[CPU_REG_X] &= 0xff;
@@ -521,11 +522,11 @@ class SnesCpuInstructions {
     static mvp(cpu, adr, adrh) {
         cpu.r[CPU_REG_DBR] = adr;
         cpu.mem.write((adr << 16) | cpu.br[CPU_REG_Y], cpu.mem.read((adrh << 16) | cpu.br[CPU_REG_X]));
-        cpu.br[CPU_REG_A]--;
-        cpu.br[CPU_REG_X]--;
-        cpu.br[CPU_REG_Y]--;
+        cpu.br[CPU_REG_A] = (cpu.br[CPU_REG_A] - 1) & 0xffff;
+        cpu.br[CPU_REG_X] = (cpu.br[CPU_REG_X] - 1) & 0xffff;
+        cpu.br[CPU_REG_Y] = (cpu.br[CPU_REG_Y] - 1) & 0xffff;
         if (cpu.br[CPU_REG_A] !== 0xffff) {
-            cpu.br[CPU_REG_PC] -= 3;
+            cpu.br[CPU_REG_PC] = (cpu.br[CPU_REG_PC] - 3) & 0xffff;
         }
         if (cpu.x) {
             cpu.br[CPU_REG_X] &= 0xff;

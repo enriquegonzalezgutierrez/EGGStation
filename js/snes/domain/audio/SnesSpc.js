@@ -1,6 +1,6 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesSpc (Sony SPC700 Audio CPU - Unified & Scoped)
+ * Component: SnesSpc (Sony SPC700 Audio CPU - Safe JIT-Separated Execution)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
@@ -8,8 +8,6 @@
  * Uses uniquely prefixed constants (SPC_) to prevent global lexical scope
  * collisions with the main CPU (65816) when loaded via standard script tags.
  */
-
-// Constants are defined in SnesSpcAddressing.js (loaded before this file)
 
 class SnesSpc {
     constructor(mem) {
@@ -99,20 +97,33 @@ class SnesSpc {
         this.cyclesLeft = 7; 
     }
 
+    /**
+     * Steps one cycle of the Sony SPC700 CPU.
+     * JIT-Optimized: Bypasses try-catch overhead directly in the hot loop.
+     */
     cycle() {
         if (this.cyclesLeft === 0) {
             const instr = this.mem.read(this.br[SPC_REG_PC]++);
             const mode = this.modes[instr];
             this.cyclesLeft = this.cycles[instr];
 
-            try {
-                const eff = SnesSpcAddressing.resolve(this, mode);
-                this.functions[instr](eff[0], eff[1], instr);
-            } catch (e) {
-                console.error(`[SPC700] Execution Exception at PC $${this.br[SPC_REG_PC].toString(16)}:`, e);
-            }
+            // Delegation to avoid try-catch inside the 1Mhz hot path
+            this.executeInstruction(mode, instr);
         }
         this.cyclesLeft--;
+    }
+
+    /**
+     * Resolves addressing and dispatches the instruction with safe exception containment.
+     * Separated to allow SnesSpc.cycle() to be fully JIT-compiled.
+     */
+    executeInstruction(mode, instr) {
+        try {
+            const eff = SnesSpcAddressing.resolve(this, mode);
+            this.functions[instr](eff[0], eff[1], instr);
+        } catch (e) {
+            console.error(`[SPC700] Execution Exception at PC $${this.br[SPC_REG_PC].toString(16)}:`, e);
+        }
     }
 
     getP() {
@@ -165,15 +176,10 @@ class SnesSpc {
         this.r[SPC_REG_SP]++;
         return this.mem.read(this.r[SPC_REG_SP] | 0x100);
     }
-    // ========================================================================
-    // INSTRUCTION DISPATCH TABLE
-    // ========================================================================
 
     /**
      * Builds the per-instance dispatch array from the shared static TABLE.
-     * Closures capture `s` (this) once — V8 can constant-fold the receiver
-     * and apply inline-cache optimizations that are not available when calling
-     * a global static array with a dynamic receiver argument.
+     * Closures capture `s` (this) once — V8 can constant-fold the receiver.
      */
     bindInstructionMap() {
         const s = this;

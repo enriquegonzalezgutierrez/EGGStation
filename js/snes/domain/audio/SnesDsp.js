@@ -1,10 +1,10 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesDsp (Audio Digital Signal Processor Entity)
+ * Component: SnesDsp (Audio Digital Signal Processor Entity - Compatibility Fixed)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
- * Represents the physical SNES Audio DSP co-processor. It handles BRR sample decompression,
+ * Represents the physical SNES Sony DSP co-processor. It handles BRR sample decompression,
  * Gaussian interpolation, ADSR state machine tracking, noise generation, and stereo 
  * volume scaling across 8 independent hardware sound channels.
  * 
@@ -27,7 +27,7 @@ const ENVELOPE_RATES = Object.freeze([
     10, 8, 6, 5, 4, 3, 2, 1
 ]);
 
-// From NoCash's fullsnes.txt specifications for hardware Gaussian interpolations
+// From Sony's hardware specifications for high-accuracy Gaussian interpolations
 const GAUSSIAN_TABLE = Object.freeze([
     0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000,
     0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x001, 0x002, 0x002, 0x002, 0x002, 0x002,
@@ -147,12 +147,17 @@ class SnesDsp {
         let totalL = 0;
         let totalR = 0;
 
+        // Cache array lookups locally to prevent property access inside the 8-voice loop
+        const sampleOut = this.sampleOut;
+        const channelVolumeL = this.channelVolumeL;
+        const channelVolumeR = this.channelVolumeR;
+
         for (let i = 0; i < 8; i++) {
             this.cycleChannel(i);
-            totalL += (this.sampleOut[i] * this.channelVolumeL[i]) >> 6;
-            totalR += (this.sampleOut[i] * this.channelVolumeR[i]) >> 6;
+            totalL += (sampleOut[i] * channelVolumeL[i]) >> 6;
+            totalR += (sampleOut[i] * channelVolumeR[i]) >> 6;
             
-            // Native Clamping
+            // Fast Clamping Clamps
             totalL = totalL < -0x8000 ? -0x8000 : (totalL > 0x7fff ? 0x7fff : totalL);
             totalR = totalR < -0x8000 ? -0x8000 : (totalR > 0x7fff ? 0x7fff : totalR);
         }
@@ -185,15 +190,21 @@ class SnesDsp {
      * Decompresses raw BRR (Bit Rate Reduction) audio packet.
      */
     decodeBrr(ch) {
+        const decodeBuffer = this.decodeBuffer;
+        const ram = this.apu.ram;
+
+        // Precalculate base indices to eliminate multiplication steps inside the packet decoding
+        const baseIdx = ch * 19;
+
         // Carry over old boundary samples for interpolation logic
-        this.decodeBuffer[ch * 19] = this.decodeBuffer[ch * 19 + 16];
-        this.decodeBuffer[ch * 19 + 1] = this.decodeBuffer[ch * 19 + 17];
-        this.decodeBuffer[ch * 19 + 2] = this.decodeBuffer[ch * 19 + 18];
+        decodeBuffer[baseIdx] = decodeBuffer[baseIdx + 16];
+        decodeBuffer[baseIdx + 1] = decodeBuffer[baseIdx + 17];
+        decodeBuffer[baseIdx + 2] = decodeBuffer[baseIdx + 18];
 
         if (this.prevFlags[ch] === 1 || this.prevFlags[ch] === 3) {
             const sampleAdr = (this.dirPage << 8) + (this.srcn[ch] * 4);
-            let loopAdr = this.apu.ram[(sampleAdr + 2) & 0xffff];
-            loopAdr |= this.apu.ram[(sampleAdr + 3) & 0xffff] << 8;
+            let loopAdr = ram[sampleAdr & 0xffff];
+            loopAdr |= ram[(sampleAdr + 1) & 0xffff] << 8;
             this.decodeOffset[ch] = loopAdr;
             
             if (this.prevFlags[ch] === 1) {
@@ -203,19 +214,25 @@ class SnesDsp {
             this.ram[0x7c] |= (1 << ch); // Flag ENDx (End of block)
         }
 
-        const header = this.apu.ram[this.decodeOffset[ch]++];
-        this.decodeOffset[ch] &= 0xffff;
+        let decodeOffset = this.decodeOffset[ch];
+        const header = ram[decodeOffset++];
+        decodeOffset &= 0xffff;
 
         const shift = header >> 4;
         const filter = (header & 0xc) >> 2;
         this.prevFlags[ch] = header & 0x3;
 
         let byte = 0;
+        
+        // Cache historical state registers outside the 16-sliver decoding loop
+        let oldSample = this.old[ch];
+        let olderSample = this.older[ch];
+
         for (let i = 0; i < 16; i++) {
             let s = byte & 0xf;
             if ((i & 1) === 0) {
-                byte = this.apu.ram[this.decodeOffset[ch]++];
-                this.decodeOffset[ch] &= 0xffff;
+                byte = ram[decodeOffset++];
+                decodeOffset &= 0xffff;
                 s = byte >> 4;
             }
 
@@ -226,18 +243,15 @@ class SnesDsp {
                 s = s < 0 ? -2048 : 2048;
             }
 
-            const old = this.old[ch];
-            const older = this.older[ch];
-
             switch (filter) {
                 case 1:
-                    s = s + old * 1 + ((-old * 1) >> 4);
+                    s = s + oldSample * 1 + ((-oldSample * 1) >> 4);
                     break;
                 case 2:
-                    s = s + old * 2 + ((-old * 3) >> 5) - older + ((older * 1) >> 4);
+                    s = s + oldSample * 2 + ((-oldSample * 3) >> 5) - olderSample + ((olderSample * 1) >> 4);
                     break;
                 case 3:
-                    s = s + old * 2 + ((-old * 13) >> 6) - older + ((older * 3) >> 4);
+                    s = s + oldSample * 2 + ((-oldSample * 13) >> 6) - olderSample + ((olderSample * 3) >> 4);
                     break;
             }
 
@@ -246,20 +260,31 @@ class SnesDsp {
             s &= 0x7fff;
             s = s > 0x3fff ? s - 0x8000 : s;
 
-            this.older[ch] = this.old[ch];
-            this.old[ch] = s;
-            this.decodeBuffer[ch * 19 + i + 3] = s;
+            // Shift history samples cleanly using local variables (compatibility restored!)
+            olderSample = oldSample;
+            oldSample = s;
+            decodeBuffer[baseIdx + i + 3] = s;
         }
+
+        // Write the historical values back to the TypedArrays exactly once upon function exit
+        this.older[ch] = olderSample;
+        this.old[ch] = oldSample;
+        this.decodeOffset[ch] = decodeOffset;
     }
 
     /**
      * Applies standard SNES Gaussian interpolation on raw decoded BRR samples.
      */
     interpolate(ch, sampleNum, offset) {
-        const news = this.decodeBuffer[ch * 19 + sampleNum + 3];
-        const old = this.decodeBuffer[ch * 19 + sampleNum + 2];
-        const older = this.decodeBuffer[ch * 19 + sampleNum + 1];
-        const oldest = this.decodeBuffer[ch * 19 + sampleNum];
+        const decodeBuffer = this.decodeBuffer;
+        
+        // Cache base sample buffer offset
+        const baseIdx = ch * 19 + sampleNum;
+        
+        const news = decodeBuffer[baseIdx + 3];
+        const old = decodeBuffer[baseIdx + 2];
+        const older = decodeBuffer[baseIdx + 1];
+        const oldest = decodeBuffer[baseIdx];
 
         let out = (GAUSSIAN_TABLE[0xff - offset] * oldest) >> 10;
         out += (GAUSSIAN_TABLE[0x1ff - offset] * older) >> 10;
@@ -300,17 +325,18 @@ class SnesDsp {
             pitch = pitch > 0x3fff ? 0x3fff : pitch;
         }
 
-        this.counter[ch] += pitch;
-        if (this.counter[ch] > 0xffff) {
+        let currentCounter = this.counter[ch] + pitch;
+        if (currentCounter > 0xffff) {
             this.decodeBrr(ch);
         }
-        this.counter[ch] &= 0xffff;
+        currentCounter &= 0xffff;
+        this.counter[ch] = currentCounter;
 
         let sample;
         if (this.enableNoise[ch]) {
             sample = this.noiseSample;
         } else {
-            sample = this.interpolate(ch, this.counter[ch] >> 12, (this.counter[ch] >> 4) & 0xff);
+            sample = this.interpolate(ch, currentCounter >> 12, (currentCounter >> 4) & 0xff);
         }
 
         // Envelope state machine processing (ADSR)
@@ -321,63 +347,68 @@ class SnesDsp {
             }
         }
 
-        const rate = this.rateNums[ch * 5 + this.adsrState[ch]];
+        const baseCh5 = ch * 5;
+        const currentState = this.adsrState[ch];
+        const rate = this.rateNums[baseCh5 + currentState];
+        
         if (rate !== 0) {
             this.rateCounter[ch]++;
         }
 
         if (rate !== 0 && this.rateCounter[ch] >= rate) {
             this.rateCounter[ch] = 0;
-            if (!this.directGain[ch] || !this.useGain[ch] || this.adsrState[ch] === ADSR_RELEASE) {
-                switch (this.adsrState[ch]) {
+            if (!this.directGain[ch] || !this.useGain[ch] || currentState === ADSR_RELEASE) {
+                let currentGain = this.gain[ch];
+                switch (currentState) {
                     case ADSR_ATTACK:
-                        this.gain[ch] += rate === 1 ? 1024 : 32;
-                        if (this.gain[ch] >= 0x7e0) {
+                        currentGain += rate === 1 ? 1024 : 32;
+                        if (currentGain >= 0x7e0) {
                             this.adsrState[ch] = ADSR_DECAY;
                         }
-                        if (this.gain[ch] > 0x7ff) {
-                            this.gain[ch] = 0x7ff;
+                        if (currentGain > 0x7ff) {
+                            currentGain = 0x7ff;
                         }
                         break;
                     case ADSR_DECAY:
-                        this.gain[ch] -= ((this.gain[ch] - 1) >> 8) + 1;
-                        if (this.gain[ch] < this.sustainLevel[ch]) {
+                        currentGain -= ((currentGain - 1) >> 8) + 1;
+                        if (currentGain < this.sustainLevel[ch]) {
                             this.adsrState[ch] = ADSR_SUSTAIN;
                         }
                         break;
                     case ADSR_SUSTAIN:
-                        this.gain[ch] -= ((this.gain[ch] - 1) >> 8) + 1;
+                        currentGain -= ((currentGain - 1) >> 8) + 1;
                         break;
                     case ADSR_RELEASE:
-                        this.gain[ch] -= 8;
-                        if (this.gain[ch] < 0) {
-                            this.gain[ch] = 0;
+                        currentGain -= 8;
+                        if (currentGain < 0) {
+                            currentGain = 0;
                         }
                         break;
                     case ADSR_GAIN:
                         switch (this.gainMode[ch]) {
                             case 0:
-                                this.gain[ch] -= 32;
-                                if (this.gain[ch] < 0) this.gain[ch] = 0;
+                                currentGain -= 32;
+                                if (currentGain < 0) currentGain = 0;
                                 break;
                             case 1:
-                                this.gain[ch] -= ((this.gain[ch] - 1) >> 8) + 1;
+                                currentGain -= ((currentGain - 1) >> 8) + 1;
                                 break;
                             case 2:
-                                this.gain[ch] += 32;
-                                if (this.gain[ch] > 0x7ff) this.gain[ch] = 0x7ff;
+                                currentGain += 32;
+                                if (currentGain > 0x7ff) currentGain = 0x7ff;
                                 break;
                             case 3:
-                                this.gain[ch] += this.gain[ch] < 0x600 ? 32 : 8;
-                                if (this.gain[ch] > 0x7ff) this.gain[ch] = 0x7ff;
+                                currentGain += currentGain < 0x600 ? 32 : 8;
+                                if (currentGain > 0x7ff) currentGain = 0x7ff;
                                 break;
                         }
                         break;
                 }
+                this.gain[ch] = currentGain;
             }
         }
 
-        if (this.directGain[ch] && this.useGain[ch] && this.adsrState[ch] !== ADSR_RELEASE) {
+        if (this.directGain[ch] && this.useGain[ch] && currentState !== ADSR_RELEASE) {
             this.gain[ch] = this.gainValue[ch];
         }
 

@@ -1,6 +1,6 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesApu (Audio Processing Unit - Corrected Initialization)
+ * Component: SnesApu (Sony Audio Processing Unit - JIT-Optimized)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
@@ -85,6 +85,7 @@ class SnesApu {
 
     /**
      * Executes one master clock step of the audio system.
+     * GC-FREE & High-Performance: Timer processing is fully inlined.
      */
     cycle() {
         this.spc.cycle();
@@ -94,31 +95,49 @@ class SnesApu {
             this.dsp.cycle();
         }
 
-        // T1 & T2 run at 8kHz (master cycle divided by 128)
-        this.processTimer(this.timers.t1, 128);
-        this.processTimer(this.timers.t2, 128);
-
-        // T3 runs at 64kHz (master cycle divided by 16)
-        this.processTimer(this.timers.t3, 16);
-
-        this.cycles++;
-    }
-
-    /**
-     * Helper method to process a hardware timer under class encapsulation.
-     */
-    processTimer(t, tickLimit) {
-        if (t.interval === 0) {
-            t.interval = tickLimit;
-            if (t.enabled) {
-                t.divider = (t.divider + 1) & 0xff;
-                if (t.divider === t.target) {
-                    t.divider = 0;
-                    t.counter = (t.counter + 1) & 0xf;
+        // Inline T1 processing (prevents 1,000,000+ function calls per second)
+        const t1 = this.timers.t1;
+        if (t1.interval === 0) {
+            t1.interval = 128;
+            if (t1.enabled) {
+                t1.divider = (t1.divider + 1) & 0xff;
+                if (t1.divider === t1.target) {
+                    t1.divider = 0;
+                    t1.counter = (t1.counter + 1) & 0xf;
                 }
             }
         }
-        t.interval--;
+        t1.interval--;
+
+        // Inline T2 processing (prevents 1,000,000+ function calls per second)
+        const t2 = this.timers.t2;
+        if (t2.interval === 0) {
+            t2.interval = 128;
+            if (t2.enabled) {
+                t2.divider = (t2.divider + 1) & 0xff;
+                if (t2.divider === t2.target) {
+                    t2.divider = 0;
+                    t2.counter = (t2.counter + 1) & 0xf;
+                }
+            }
+        }
+        t2.interval--;
+
+        // Inline T3 processing (prevents 1,000,000+ function calls per second)
+        const t3 = this.timers.t3;
+        if (t3.interval === 0) {
+            t3.interval = 16;
+            if (t3.enabled) {
+                t3.divider = (t3.divider + 1) & 0xff;
+                if (t3.divider === t3.target) {
+                    t3.divider = 0;
+                    t3.counter = (t3.counter + 1) & 0xf;
+                }
+            }
+        }
+        t3.interval--;
+
+        this.cycles++;
     }
 
     /**

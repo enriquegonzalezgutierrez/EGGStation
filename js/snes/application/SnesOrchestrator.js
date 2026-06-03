@@ -136,43 +136,77 @@ class SnesOrchestrator {
     }
 
     /**
-     * High-performance execution loop. Synchronized at 60Hz.
+     * Diagnostic execution loop. Measures exact millisecond metrics of each subsystem.
      */
     executionLoop(timestamp) {
         if (!this.isRunning) return;
 
         if (!this.isPaused) {
-            // 1. Core Hardware Tick (runs exactly one frame of cycles)
-            this.hardware.runFrame(false);
+            // Diagnostics timing markers
+            const tStart = performance.now();
 
-            // 2. Audio DSP stream (retrieves and queues samples)
+            // 1. Core Hardware Tick
+            this.hardware.runFrame(false);
+            const tCoreEnd = performance.now();
+
+            // 2. Audio DSP stream
             this.hardware.apu.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
             this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
+            const tAudioEnd = performance.now();
 
             // 3. Standardized Visual Blit
-            // Decides the active resolution height based on PPU overscan registers
             const activeWidth = 512;
             const activeHeight = this.hardware.ppu.frameOverscan ? 239 : 224;
 
-            // UNIFIED SIGNATURE: Perfectly substitutes SMS and Genesis PostProcessor blit calls
             this.postProcessor.blit(
                 this.ctx,
                 this.hardware.ppu.pixelOutput,
                 activeWidth,
                 activeHeight,
                 this.postProcessMode,
-                null // SNES has no anaglyph 3D glasses, pass null
+                null
             );
+            const tVideoEnd = performance.now();
+
+            // Accumulate metrics for reporting
+            this.accumulatedCore += (tCoreEnd - tStart);
+            this.accumulatedAudio += (tAudioEnd - tCoreEnd);
+            this.accumulatedVideo += (tVideoEnd - tAudioEnd);
+            this.measuredFrames++;
         }
 
         this.updatePerformanceMetrics(timestamp);
         this.animationFrameId = requestAnimationFrame((t) => this.executionLoop(t));
     }
 
+    /**
+     * Modified performance reporting to print diagnostic metrics to the console.
+     */
     updatePerformanceMetrics(timestamp) {
+        if (!this.accumulatedCore) {
+            this.accumulatedCore = 0;
+            this.accumulatedAudio = 0;
+            this.accumulatedVideo = 0;
+            this.measuredFrames = 0;
+        }
+
         this.fpsCount++;
         if (timestamp - this.fpsTimer >= 1000) {
             if (this.onFpsUpdate) this.onFpsUpdate(this.fpsCount);
+            
+            // Print scientific report once per second to the browser console
+            // if (this.measuredFrames > 0) {
+            //     const avgCore = (this.accumulatedCore / this.measuredFrames).toFixed(2);
+            //     const avgAudio = (this.accumulatedAudio / this.measuredFrames).toFixed(2);
+            //     const avgVideo = (this.accumulatedVideo / this.measuredFrames).toFixed(2);
+            //     console.log(`[EGGStation Profile] FPS: ${this.fpsCount} | Avg Frame Time: Core: ${avgCore}ms, Audio: ${avgAudio}ms, Video: ${avgVideo}ms`);
+            // }
+
+            // Reset diagnostics
+            this.accumulatedCore = 0;
+            this.accumulatedAudio = 0;
+            this.accumulatedVideo = 0;
+            this.measuredFrames = 0;
             this.fpsCount = 0;
             this.fpsTimer = timestamp;
         }

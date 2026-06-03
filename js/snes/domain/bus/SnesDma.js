@@ -1,9 +1,14 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesDma
+ * Component: SnesDma (Highly Optimized DMA & HDMA Transfer Engine)
+ * Author: Enrique González Gutiérrez
  * 
  * ROLE:
- * Handles Direct Memory Access (DMA) and Horizontal DMA (HDMA).
+ * Handles high-speed Direct Memory Access (DMA) and Horizontal DMA (HDMA) transfers,
+ * copying data blocks between Cartridge ROM, WRAM, VRAM, CGRAM, and OAM.
+ * 
+ * SOLID Principles:
+ * - SRP: Exclusively handles hardware DMA/HDMA channels, triggers, and speed delays.
  */
 
 const DMA_OFFS = Object.freeze([
@@ -78,14 +83,31 @@ class SnesDma {
         this.dmaOffIndex = 0;
     }
 
+    /**
+     * Handles active general DMA transfers between memory banks.
+     * GC-FREE: Employs cached TypedArray references.
+     */
     handleDma() {
         if (this.dmaTimer > 0) {
             this.dmaTimer -= 2;
             return;
         }
+
+        // Cache typed arrays locally to prevent property lookups in the hot loop
+        const dmaActive = this.dmaActive;
+        const dmaMode = this.dmaMode;
+        const dmaFromB = this.dmaFromB;
+        const dmaBadr = this.dmaBadr;
+        const dmaAadrBank = this.dmaAadrBank;
+        const dmaAadr = this.dmaAadr;
+        const dmaFixed = this.dmaFixed;
+        const dmaDec = this.dmaDec;
+        const dmaSize = this.dmaSize;
+        const bus = this.bus;
+
         let i;
         for (i = 0; i < 8; i++) {
-            if (this.dmaActive[i]) {
+            if (dmaActive[i]) {
                 break;
             }
         }
@@ -94,49 +116,63 @@ class SnesDma {
             this.dmaOffIndex = 0;
             return;
         }
-        const tableOff = this.dmaMode[i] * 4 + this.dmaOffIndex++;
+
+        const mode = dmaMode[i];
+        const tableOff = (mode << 2) + this.dmaOffIndex++;
         this.dmaOffIndex &= 0x3;
-        if (this.dmaFromB[i]) {
-            this.bus.write(
-                (this.dmaAadrBank[i] << 16) | this.dmaAadr[i],
-                this.bus.readBBus((this.dmaBadr[i] + DMA_OFFS[tableOff]) & 0xff), 
+
+        const badr = dmaBadr[i];
+        const aadrBank = dmaAadrBank[i] << 16;
+        const aadr = dmaAadr[i];
+
+        if (dmaFromB[i]) {
+            bus.write(
+                aadrBank | aadr,
+                bus.readBBus((badr + DMA_OFFS[tableOff]) & 0xff), 
                 true
             );
         } else {
-            this.bus.writeBBus(
-                (this.dmaBadr[i] + DMA_OFFS[tableOff]) & 0xff,
-                this.bus.read((this.dmaAadrBank[i] << 16) | this.dmaAadr[i], true)
+            bus.writeBBus(
+                (badr + DMA_OFFS[tableOff]) & 0xff,
+                bus.read(aadrBank | aadr, true)
             );
         }
         this.dmaTimer += 6;
-        if (!this.dmaFixed[i]) {
-            if (this.dmaDec[i]) {
-                this.dmaAadr[i]--;
+        if (!dmaFixed[i]) {
+            if (dmaDec[i]) {
+                dmaAadr[i] = (aadr - 1) & 0xffff;
             } else {
-                this.dmaAadr[i]++;
+                dmaAadr[i] = (aadr + 1) & 0xffff;
             }
         }
-        this.dmaSize[i]--;
-        if (this.dmaSize[i] === 0) {
+        dmaSize[i] = (dmaSize[i] - 1) & 0xffff;
+        if (dmaSize[i] === 0) {
             this.dmaOffIndex = 0;
-            this.dmaActive[i] = false;
+            dmaActive[i] = false;
             this.dmaTimer += 8;
         }
     }
 
+    /**
+     * Initializes Horizontal DMA (HDMA) registers at the start of VBlank.
+     */
     initHdma() {
         this.hdmaTimer = 18;
+        const bus = this.bus;
+        
         for (let i = 0; i < 8; i++) {
             if (this.hdmaActive[i]) {
                 this.dmaActive[i] = false;
                 this.dmaOffIndex = 0;
 
                 this.hdmaTableAdr[i] = this.dmaAadr[i];
-                this.hdmaRepCount[i] = this.bus.read((this.dmaAadrBank[i] << 16) | this.hdmaTableAdr[i]++, true);
+                const aadrBank = this.dmaAadrBank[i] << 16;
+                this.hdmaRepCount[i] = bus.read(aadrBank | this.hdmaTableAdr[i]++, true);
                 this.hdmaTimer += 8;
                 if (this.hdmaInd[i]) {
-                    this.dmaSize[i] = this.bus.read((this.dmaAadrBank[i] << 16) | this.hdmaTableAdr[i]++, true);
-                    this.dmaSize[i] |= this.bus.read((this.dmaAadrBank[i] << 16) | this.hdmaTableAdr[i]++, true) << 8;
+                    let size = bus.read(aadrBank | this.hdmaTableAdr[i]++, true);
+                    size |= bus.read(aadrBank | this.hdmaTableAdr[i]++, true) << 8;
+                    this.dmaSize[i] = size;
                     this.hdmaTimer += 16;
                 }
                 this.hdmaDoTransfer[i] = true;
@@ -147,65 +183,116 @@ class SnesDma {
         }
     }
 
+    /**
+     * Executes active HDMA transfers during HBlank.
+     * GC-FREE: Employs local register buffers to prevent repeated typed array writes.
+     */
     handleHdma() {
         this.hdmaTimer = 18;
+        
+        // Cache typed arrays locally to prevent index-validation penalties inside the inner loops
+        const hdmaActive = this.hdmaActive;
+        const hdmaTerminated = this.hdmaTerminated;
+        const hdmaDoTransfer = this.hdmaDoTransfer;
+        const dmaMode = this.dmaMode;
+        const hdmaInd = this.hdmaInd;
+        const dmaFromB = this.dmaFromB;
+        const hdmaIndBank = this.hdmaIndBank;
+        const dmaSize = this.dmaSize;
+        const dmaBadr = this.dmaBadr;
+        const dmaAadrBank = this.dmaAadrBank;
+        const hdmaTableAdr = this.hdmaTableAdr;
+        const hdmaRepCount = this.hdmaRepCount;
+        const bus = this.bus;
+
         for (let i = 0; i < 8; i++) {
-            if (this.hdmaActive[i] && !this.hdmaTerminated[i]) {
+            if (hdmaActive[i] && !hdmaTerminated[i]) {
                 this.dmaActive[i] = false;
                 this.hdmaTimer += 8;
-                if (this.hdmaDoTransfer[i]) {
-                    for (let j = 0; j < DMA_OFF_LENGTHS[this.dmaMode[i]]; j++) {
-                        const tableOff = this.dmaMode[i] * 4 + j;
-                        this.hdmaTimer += 8;
-                        if (this.hdmaInd[i]) {
-                            if (this.dmaFromB[i]) {
-                                this.bus.write(
-                                    (this.hdmaIndBank[i] << 16) | this.dmaSize[i],
-                                    this.bus.readBBus((this.dmaBadr[i] + DMA_OFFS[tableOff]) & 0xff), 
+                if (hdmaDoTransfer[i]) {
+                    const mode = dmaMode[i];
+                    const offsetLength = DMA_OFF_LENGTHS[mode];
+                    const badr = dmaBadr[i];
+                    const modeOffset = mode << 2; // Fast left-shift multiplier replacing mode * 4
+                    const fromB = dmaFromB[i];
+
+                    if (hdmaInd[i]) {
+                        const indBank = hdmaIndBank[i] << 16;
+                        let size = dmaSize[i]; // Buffer in local register
+
+                        for (let j = 0; j < offsetLength; j++) {
+                            const tableOff = modeOffset + j;
+                            this.hdmaTimer += 8;
+                            if (fromB) {
+                                bus.write(
+                                    indBank | size,
+                                    bus.readBBus((badr + DMA_OFFS[tableOff]) & 0xff), 
                                     true
                                 );
                             } else {
-                                this.bus.writeBBus(
-                                    (this.dmaBadr[i] + DMA_OFFS[tableOff]) & 0xff,
-                                    this.bus.read((this.hdmaIndBank[i] << 16) | this.dmaSize[i], true)
+                                bus.writeBBus(
+                                    (badr + DMA_OFFS[tableOff]) & 0xff,
+                                    bus.read(indBank | size, true)
                                 );
                             }
-                            this.dmaSize[i]++;
-                        } else {
-                            if (this.dmaFromB[i]) {
-                                this.bus.write(
-                                    (this.dmaAadrBank[i] << 16) | this.hdmaTableAdr[i],
-                                    this.bus.readBBus((this.dmaBadr[i] + DMA_OFFS[tableOff]) & 0xff), 
-                                    true
-                                );
-                            } else {
-                                this.bus.writeBBus(
-                                    (this.dmaBadr[i] + DMA_OFFS[tableOff]) & 0xff,
-                                    this.bus.read((this.dmaAadrBank[i] << 16) | this.hdmaTableAdr[i], true)
-                                );
-                            }
-                            this.hdmaTableAdr[i]++;
+                            size++;
                         }
+                        dmaSize[i] = size; // Flush back exactly once
+                    } else {
+                        const aadrBank = dmaAadrBank[i] << 16;
+                        let tableAdr = hdmaTableAdr[i]; // Buffer in local register
+
+                        for (let j = 0; j < offsetLength; j++) {
+                            const tableOff = modeOffset + j;
+                            this.hdmaTimer += 8;
+                            if (fromB) {
+                                bus.write(
+                                    aadrBank | tableAdr,
+                                    bus.readBBus((badr + DMA_OFFS[tableOff]) & 0xff), 
+                                    true
+                                );
+                            } else {
+                                bus.writeBBus(
+                                    (badr + DMA_OFFS[tableOff]) & 0xff,
+                                    bus.read(aadrBank | tableAdr, true)
+                                );
+                            }
+                            tableAdr++;
+                        }
+                        hdmaTableAdr[i] = tableAdr; // Flush back exactly once
                     }
                 }
-                this.hdmaRepCount[i]--;
-                this.hdmaDoTransfer[i] = (this.hdmaRepCount[i] & 0x80) > 0;
-                if ((this.hdmaRepCount[i] & 0x7f) === 0) {
-                    this.hdmaRepCount[i] = this.bus.read((this.dmaAadrBank[i] << 16) | this.hdmaTableAdr[i]++, true);
-                    if (this.hdmaInd[i]) {
-                        this.dmaSize[i] = this.bus.read((this.dmaAadrBank[i] << 16) | this.hdmaTableAdr[i]++, true);
-                        this.dmaSize[i] |= this.bus.read((this.dmaAadrBank[i] << 16) | this.hdmaTableAdr[i]++, true) << 8;
+                
+                let repCount = hdmaRepCount[i];
+                repCount--;
+                hdmaDoTransfer[i] = (repCount & 0x80) > 0;
+                
+                if ((repCount & 0x7f) === 0) {
+                    const aadrBank = dmaAadrBank[i] << 16;
+                    let tableAdr = hdmaTableAdr[i];
+                    repCount = bus.read(aadrBank | tableAdr++, true);
+                    hdmaTableAdr[i] = tableAdr;
+
+                    if (hdmaInd[i]) {
+                        let size = bus.read(aadrBank | tableAdr++, true);
+                        size |= bus.read(aadrBank | tableAdr++, true) << 8;
+                        hdmaTableAdr[i] = tableAdr;
+                        dmaSize[i] = size;
                         this.hdmaTimer += 16;
                     }
-                    if (this.hdmaRepCount[i] === 0) {
-                        this.hdmaTerminated[i] = true;
+                    if (repCount === 0) {
+                        hdmaTerminated[i] = true;
                     }
-                    this.hdmaDoTransfer[i] = true;
+                    hdmaDoTransfer[i] = true;
                 }
+                hdmaRepCount[i] = repCount;
             }
         }
     }
 
+    /**
+     * Reads DMA/HDMA specific I/O Registers ($4300-$437F range).
+     */
     readReg(adr) {
         if (adr >= 0x4300 && adr < 0x4380) {
             const channel = (adr & 0xf0) >> 4;
@@ -236,30 +323,35 @@ class SnesDma {
         return this.bus.openBus;
     }
 
+    /**
+     * Writes DMA/HDMA specific I/O Registers ($4300-$437F range).
+     */
     writeReg(adr, value) {
         if (adr === 0x420b) {
-            this.dmaActive[0] = (value & 0x1) > 0;
-            this.dmaActive[1] = (value & 0x2) > 0;
-            this.dmaActive[2] = (value & 0x4) > 0;
-            this.dmaActive[3] = (value & 0x8) > 0;
-            this.dmaActive[4] = (value & 0x10) > 0;
-            this.dmaActive[5] = (value & 0x20) > 0;
-            this.dmaActive[6] = (value & 0x40) > 0;
-            this.dmaActive[7] = (value & 0x80) > 0;
+            const dmaActive = this.dmaActive;
+            dmaActive[0] = (value & 0x1) > 0;
+            dmaActive[1] = (value & 0x2) > 0;
+            dmaActive[2] = (value & 0x4) > 0;
+            dmaActive[3] = (value & 0x8) > 0;
+            dmaActive[4] = (value & 0x10) > 0;
+            dmaActive[5] = (value & 0x20) > 0;
+            dmaActive[6] = (value & 0x40) > 0;
+            dmaActive[7] = (value & 0x80) > 0;
             this.dmaBusy = value > 0;
             this.dmaTimer += this.dmaBusy ? 8 : 0;
             return true;
         }
 
         if (adr === 0x420c) {
-            this.hdmaActive[0] = (value & 0x1) > 0;
-            this.hdmaActive[1] = (value & 0x2) > 0;
-            this.hdmaActive[2] = (value & 0x4) > 0;
-            this.hdmaActive[3] = (value & 0x8) > 0;
-            this.hdmaActive[4] = (value & 0x10) > 0;
-            this.hdmaActive[5] = (value & 0x20) > 0;
-            this.hdmaActive[6] = (value & 0x40) > 0;
-            this.hdmaActive[7] = (value & 0x80) > 0;
+            const hdmaActive = this.hdmaActive;
+            hdmaActive[0] = (value & 0x1) > 0;
+            hdmaActive[1] = (value & 0x2) > 0;
+            hdmaActive[2] = (value & 0x4) > 0;
+            hdmaActive[3] = (value & 0x8) > 0;
+            hdmaActive[4] = (value & 0x10) > 0;
+            hdmaActive[5] = (value & 0x20) > 0;
+            hdmaActive[6] = (value & 0x40) > 0;
+            hdmaActive[7] = (value & 0x80) > 0;
             return true;
         }
 

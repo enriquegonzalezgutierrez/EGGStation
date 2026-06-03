@@ -1,12 +1,15 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesSpcInstructions (Sony SPC700 Audio CPU Opcode Handlers)
- *
- * All 256 opcode handlers as static functions.
+ * Component: SnesSpcInstructions ( Sony SPC700 Audio CPU Opcode Handlers - JIT-Optimized)
+ * Author: Enrique González Gutiérrez
+ * 
+ * ROLE:
+ * Implements the complete 256 instruction set (Opcodes) of the Sony SPC700 CPU.
  * The SPC instance is passed as the first argument (spc) instead of using
  * `this`, eliminating prototype dispatch and .bind() allocation costs.
- *
- * Depends on: SnesSpcAddressing.js (SPC_REG_* / SPC_MODE_* constants)
+ * 
+ * SOLID Principles:
+ * - SRP: Exclusively handles instruction set behavior.
  */
 
 class SnesSpcInstructions {
@@ -38,7 +41,7 @@ class SnesSpcInstructions {
     static bcs(spc, adr) { spc.doBranch( spc.c, adr); }
     static bne(spc, adr) { spc.doBranch(!spc.z, adr); }
     static beq(spc, adr) { spc.doBranch( spc.z, adr); }
-    static bra(spc, adr) { spc.br[SPC_REG_PC] += adr; }
+    static bra(spc, adr) { spc.br[SPC_REG_PC] = (spc.br[SPC_REG_PC] + adr) & 0xffff; }
 
     static bbs(spc, adr, adrh, instr) {
         const value = spc.mem.read(adr);
@@ -63,7 +66,7 @@ class SnesSpcInstructions {
     }
 
     static dbnzy(spc, adr) {
-        spc.r[SPC_REG_Y]--;
+        spc.r[SPC_REG_Y] = (spc.r[SPC_REG_Y] - 1) & 0xff;
         spc.doBranch(spc.r[SPC_REG_Y] !== 0, adr);
     }
 
@@ -72,48 +75,54 @@ class SnesSpcInstructions {
     // ========================================================================
 
     static tcall(spc, adr, adrh, instr) {
-        spc.push(spc.br[SPC_REG_PC] >> 8);
-        spc.push(spc.br[SPC_REG_PC] & 0xff);
+        const pc = spc.br[SPC_REG_PC];
+        spc.push(pc >> 8);
+        spc.push(pc & 0xff);
         const padr = 0xffc0 + ((15 - (instr >> 4)) << 1);
         spc.br[SPC_REG_PC] = spc.mem.read(padr) | (spc.mem.read(padr + 1) << 8);
     }
 
-    static jmp(spc, adr)  { spc.br[SPC_REG_PC] = adr; }
+    static jmp(spc, adr)  { spc.br[SPC_REG_PC] = adr & 0xffff; }
 
     static call(spc, adr) {
-        spc.push(spc.br[SPC_REG_PC] >> 8);
-        spc.push(spc.br[SPC_REG_PC] & 0xff);
-        spc.br[SPC_REG_PC] = adr;
+        const pc = spc.br[SPC_REG_PC];
+        spc.push(pc >> 8);
+        spc.push(pc & 0xff);
+        spc.br[SPC_REG_PC] = adr & 0xffff;
     }
 
     static pcall(spc, adr) {
-        spc.push(spc.br[SPC_REG_PC] >> 8);
-        spc.push(spc.br[SPC_REG_PC] & 0xff);
+        const pc = spc.br[SPC_REG_PC];
+        spc.push(pc >> 8);
+        spc.push(pc & 0xff);
         spc.br[SPC_REG_PC] = 0xff00 + (adr & 0xff);
     }
 
     static ret(spc) {
-        spc.br[SPC_REG_PC]  = spc.pop();
-        spc.br[SPC_REG_PC] |= spc.pop() << 8;
+        let pc = spc.pop();
+        pc |= spc.pop() << 8;
+        spc.br[SPC_REG_PC] = pc;
     }
 
     static reti(spc) {
         spc.setP(spc.pop());
-        spc.br[SPC_REG_PC]  = spc.pop();
-        spc.br[SPC_REG_PC] |= spc.pop() << 8;
+        let pc = spc.pop();
+        pc |= spc.pop() << 8;
+        spc.br[SPC_REG_PC] = pc;
     }
 
     static brk(spc) {
-        spc.push(spc.br[SPC_REG_PC] >> 8);
-        spc.push(spc.br[SPC_REG_PC] & 0xff);
+        const pc = spc.br[SPC_REG_PC];
+        spc.push(pc >> 8);
+        spc.push(pc & 0xff);
         spc.push(spc.getP());
         spc.i = false;
         spc.b = true;
         spc.br[SPC_REG_PC] = spc.mem.read(0xffde) | (spc.mem.read(0xffdf) << 8);
     }
 
-    static sleep(spc) { spc.br[SPC_REG_PC]--; }
-    static stop(spc)  { spc.br[SPC_REG_PC]--; }
+    static sleep(spc) { spc.br[SPC_REG_PC] = (spc.br[SPC_REG_PC] - 1) & 0xffff; }
+    static stop(spc)  { spc.br[SPC_REG_PC] = (spc.br[SPC_REG_PC] - 1) & 0xffff; }
 
     // ========================================================================
     // BIT MANIPULATION
@@ -278,7 +287,7 @@ class SnesSpcInstructions {
         spc.h = ((spc.r[SPC_REG_A] & 0xf)  + (value & 0xf)  + (spc.c ? 1 : 0)) > 0xf;
         spc.c = result > 0xff;
         spc.setZandN(result);
-        spc.r[SPC_REG_A] = result;
+        spc.r[SPC_REG_A] = result & 0xff;
     }
 
     static adcm(spc, adr, adrh) {
@@ -312,7 +321,7 @@ class SnesSpcInstructions {
         spc.h = ((spc.r[SPC_REG_A] & 0xf)  + (value & 0xf)  + (spc.c ? 1 : 0)) > 0xf;
         spc.c = result > 0xff;
         spc.setZandN(result);
-        spc.r[SPC_REG_A] = result;
+        spc.r[SPC_REG_A] = result & 0xff;
     }
 
     static sbcm(spc, adr, adrh) {
@@ -354,7 +363,7 @@ class SnesSpcInstructions {
 
     static asla(spc) {
         spc.c = (spc.r[SPC_REG_A] & 0x80) > 0;
-        spc.r[SPC_REG_A] <<= 1;
+        spc.r[SPC_REG_A] = (spc.r[SPC_REG_A] << 1) & 0xff;
         spc.setZandN(spc.r[SPC_REG_A]);
     }
 
@@ -369,7 +378,7 @@ class SnesSpcInstructions {
 
     static rola(spc) {
         const carry      = (spc.r[SPC_REG_A] & 0x80) > 0;
-        spc.r[SPC_REG_A] = (spc.r[SPC_REG_A] << 1) | (spc.c ? 1 : 0);
+        spc.r[SPC_REG_A] = ((spc.r[SPC_REG_A] << 1) | (spc.c ? 1 : 0)) & 0xff;
         spc.c = carry > 0;
         spc.setZandN(spc.r[SPC_REG_A]);
     }
@@ -413,9 +422,9 @@ class SnesSpcInstructions {
         spc.setZandN(value);
         spc.mem.write(adr, value);
     }
-    static inca(spc) { spc.r[SPC_REG_A]++; spc.setZandN(spc.r[SPC_REG_A]); }
-    static incx(spc) { spc.r[SPC_REG_X]++; spc.setZandN(spc.r[SPC_REG_X]); }
-    static incy(spc) { spc.r[SPC_REG_Y]++; spc.setZandN(spc.r[SPC_REG_Y]); }
+    static inca(spc) { spc.r[SPC_REG_A] = (spc.r[SPC_REG_A] + 1) & 0xff; spc.setZandN(spc.r[SPC_REG_A]); }
+    static incx(spc) { spc.r[SPC_REG_X] = (spc.r[SPC_REG_X] + 1) & 0xff; spc.setZandN(spc.r[SPC_REG_X]); }
+    static incy(spc) { spc.r[SPC_REG_Y] = (spc.r[SPC_REG_Y] + 1) & 0xff; spc.setZandN(spc.r[SPC_REG_Y]); }
 
     static incw(spc, adr, adrh) {
         let value = spc.mem.read(adr) | (spc.mem.read(adrh) << 8);
@@ -431,9 +440,9 @@ class SnesSpcInstructions {
         spc.setZandN(value);
         spc.mem.write(adr, value);
     }
-    static deca(spc) { spc.r[SPC_REG_A]--; spc.setZandN(spc.r[SPC_REG_A]); }
-    static decx(spc) { spc.r[SPC_REG_X]--; spc.setZandN(spc.r[SPC_REG_X]); }
-    static decy(spc) { spc.r[SPC_REG_Y]--; spc.setZandN(spc.r[SPC_REG_Y]); }
+    static deca(spc) { spc.r[SPC_REG_A] = (spc.r[SPC_REG_A] - 1) & 0xff; spc.setZandN(spc.r[SPC_REG_A]); }
+    static decx(spc) { spc.r[SPC_REG_X] = (spc.r[SPC_REG_X] - 1) & 0xff; spc.setZandN(spc.r[SPC_REG_X]); }
+    static decy(spc) { spc.r[SPC_REG_Y] = (spc.r[SPC_REG_Y] - 1) & 0xff; spc.setZandN(spc.r[SPC_REG_Y]); }
 
     static decw(spc, adr, adrh) {
         let value = spc.mem.read(adr) | (spc.mem.read(adrh) << 8);
@@ -445,7 +454,7 @@ class SnesSpcInstructions {
     }
 
     static xcn(spc) {
-        spc.r[SPC_REG_A] = (spc.r[SPC_REG_A] >> 4) | (spc.r[SPC_REG_A] << 4);
+        spc.r[SPC_REG_A] = ((spc.r[SPC_REG_A] >> 4) | (spc.r[SPC_REG_A] << 4)) & 0xff;
         spc.setZandN(spc.r[SPC_REG_A]);
     }
 
@@ -532,29 +541,29 @@ class SnesSpcInstructions {
         }
         spc.v = result > 0xff;
         spc.h = (spc.r[SPC_REG_X] & 0xf) <= (spc.r[SPC_REG_Y] & 0xf);
-        spc.r[SPC_REG_A] = result;
+        spc.r[SPC_REG_A] = result & 0xff;
         spc.r[SPC_REG_Y] = mod;
         spc.setZandN(spc.r[SPC_REG_A]);
     }
 
     static daa(spc) {
         if (spc.r[SPC_REG_A] > 0x99 || spc.c) {
-            spc.r[SPC_REG_A] += 0x60;
+            spc.r[SPC_REG_A] = (spc.r[SPC_REG_A] + 0x60) & 0xff;
             spc.c = true;
         }
         if ((spc.r[SPC_REG_A] & 0xf) > 9 || spc.h) {
-            spc.r[SPC_REG_A] += 6;
+            spc.r[SPC_REG_A] = (spc.r[SPC_REG_A] + 6) & 0xff;
         }
         spc.setZandN(spc.r[SPC_REG_A]);
     }
 
     static das(spc) {
         if (spc.r[SPC_REG_A] > 0x99 || !spc.c) {
-            spc.r[SPC_REG_A] -= 0x60;
+            spc.r[SPC_REG_A] = (spc.r[SPC_REG_A] - 0x60) & 0xff;
             spc.c = false;
         }
         if ((spc.r[SPC_REG_A] & 0xf) > 9 || !spc.h) {
-            spc.r[SPC_REG_A] -= 6;
+            spc.r[SPC_REG_A] = (spc.r[SPC_REG_A] - 6) & 0xff;
         }
         spc.setZandN(spc.r[SPC_REG_A]);
     }

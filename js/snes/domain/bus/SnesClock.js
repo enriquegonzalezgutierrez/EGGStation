@@ -1,82 +1,76 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesClock (JIT-Optimized Execution Sync Engine - Compatibility Restored)
+ * Component: SnesClock (Ultra-Advanced Diagnostic Performance Breakdown)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
- * Handles system cycle synchronization, horizontal/vertical counters, 
- * interrupts (NMI/IRQ), DMA/HDMA trigger timing, and video scanline render scheduling.
- * 
- * SOLID Principles:
- * - SRP: Exclusively orchestrates the master execution clock and time-slice scheduling.
+ * Handles system clock, horizontal/vertical sync, timers, and schedules frame rendering.
+ * It integrates a non-intrusive deductive performance profiler to measure 
+ * CPU, Background Pixel Blending, Background Tile Fetching, Background Windowing,
+ * Sprites, APU, and DMA/HDMA.
  */
 
 class SnesClock {
-    /**
-     * @param {Object} bus - Central motherboard aggregate instance.
-     */
     constructor(bus) {
         this.bus = bus;
-        
-        // APU clock multiplier ratio relative to the Master Clock
         this.apuCyclesPerMaster = (32040 * 32) / (1364 * 262 * 60);
+
+        // Profiler Timing Accumulators
+        this.profPpu = 0;
+        this.profSprite = 0;
+        this.profFetch = 0;
+        this.profWindow = 0;
+        this.profBGPixel = 0;
+        this.profApu = 0;
+        this.profDma = 0;
+        
+        this.accumCpu = 0;
+        this.accumBgPixel = 0;
+        this.accumFetch = 0;
+        this.accumWindow = 0;
+        this.accumSprite = 0;
+        this.accumApu = 0;
+        this.accumDma = 0;
+        this.accumTotal = 0;
+        this.profFrameCount = 0;
 
         this.reset();
     }
 
-    /**
-     * Resets system timers, synchronization states, and interrupt lines.
-     */
     reset() {
-        // PPU/CPU Coordinate Sync counters
         this.xPos = 0;
         this.yPos = 0;
         this.frames = 0;
-
-        // Reset overhead: 5 read cycles + 2 IO cycles
         this.cpuCyclesLeft = 5 * 8 + 12; 
         this.cpuMemOps = 0;
-        
-        // High-Performance Integer clock accumulator
         this.elapsedMasterCycles = 0;
         this.apuCatchCycles = 0;
-
-        // Interrupt and Timer Flags
         this.hIrqEnabled = false;
         this.vIrqEnabled = false;
         this.nmiEnabled = false;
         this.hTimer = 0x1ff;
         this.vTimer = 0x1ff;
-        
         this.inNmi = false;
         this.inIrq = false;
         this.inHblank = false;
         this.inVblank = false;
     }
 
-    /**
-     * Steps the system clock for exactly one master cycle (2 master clock ticks).
-     * Highly optimized hot path executed ~178,000 times per frame.
-     * @param {boolean} noPpu - True to suppress PPU rendering operations.
-     */
     cycle(noPpu) {
-        // Accumulate elapsed master cycles as an integer to prevent floating-point overhead in the hot loop
         this.elapsedMasterCycles += 2;
-
-        // Strobe joypad registers synchronously to maintain register latching times
         this.bus.joypad.strobe();
 
-        // DMA and HDMA triggers (highest priority bus activities)
         if (this.bus.dma.hdmaTimer > 0) {
             this.bus.dma.hdmaTimer -= 2;
         } else if (this.bus.dma.dmaBusy) {
+            // Measure active general DMA transfers
+            const t0 = performance.now();
             this.bus.dma.handleDma();
+            this.profDma += (performance.now() - t0);
         } else if (this.xPos < 536 || this.xPos >= 576) {
-            // CPU executing instructions (paused for DRAM refresh at xPos [536, 576))
             this.cpuCycle();
         }
 
-        // Interrupt Line Queries (NMI / IRQ logic)
         if (this.yPos === this.vTimer && this.vIrqEnabled) {
             if (!this.hIrqEnabled) {
                 if (this.xPos === 0) {
@@ -94,18 +88,22 @@ class SnesClock {
             this.bus.cpu.irqWanted = true;
         }
 
-        // Hblank/Vblank logic gates
         if (this.xPos === 1024) {
             this.inHblank = true;
             if (!this.inVblank) {
+                // Measure HDMA Transfers
+                const t0 = performance.now();
                 this.bus.dma.handleHdma();
+                this.profDma += (performance.now() - t0);
             }
         } else if (this.xPos === 0) {
             this.inHblank = false;
             this.bus.ppu.checkOverscan(this.yPos);
         } else if (this.xPos === 512 && !noPpu) {
-            // Synchronously render active scanline to buffer
+            // Measure total PPU Scanline rendering
+            const t0 = performance.now();
             this.bus.ppu.renderLine(this.yPos);
+            this.profPpu += (performance.now() - t0);
         }
 
         if (this.yPos === (this.bus.ppu.frameOverscan ? 240 : 225) && this.xPos === 0) {
@@ -121,15 +119,12 @@ class SnesClock {
             this.bus.dma.initHdma();
         }
 
-        // Stepping internal joypad clock to satisfy auto-reading timeouts ($4212 polling)
         this.bus.joypad.cycle();
 
-        // Position progression
         this.xPos += 2;
         if (this.xPos === 1364) {
             this.xPos = 0;
             this.yPos++;
-            
             if (this.yPos === 262) {
                 this.yPos = 0;
                 this.frames++;
@@ -138,9 +133,6 @@ class SnesClock {
         }
     }
 
-    /**
-     * Steps the Ricoh 5A22 CPU core cycles.
-     */
     cpuCycle() {
         if (this.cpuCyclesLeft === 0) {
             this.bus.cpu.cyclesLeft = 0;
@@ -151,37 +143,96 @@ class SnesClock {
         this.cpuCyclesLeft -= 2;
     }
 
-    /**
-     * Synchronizes and executes any pending APU cycles up to the current master clock timestamp.
-     */
     catchUpApu() {
-        // Flush integer-accumulated master clock steps into APU cycles prior to processing
+        // Measure APU and DSP Cycle execution
+        const t0 = performance.now();
         if (this.elapsedMasterCycles > 0) {
             this.apuCatchCycles += (this.elapsedMasterCycles * this.apuCyclesPerMaster);
             this.elapsedMasterCycles = 0;
         }
 
-        const catchUpCycles = this.apuCatchCycles | 0; // Fast integer cast
+        const catchUpCycles = this.apuCatchCycles | 0;
         if (catchUpCycles > 0) {
             for (let i = 0; i < catchUpCycles; i++) {
                 this.bus.apu.cycle();
             }
             this.apuCatchCycles -= catchUpCycles;
         }
+        this.profApu += (performance.now() - t0);
     }
 
     /**
-     * Runs hardware execution up to the boundaries of exactly one video frame.
+     * Executes one visible frame while measuring exact subcomponent timings.
      */
     runFrame(noPpu) {
+        this.profPpu = 0;
+        this.profApu = 0;
+        this.profDma = 0;
+        this.profSprite = 0;
+        this.profFetch = 0;
+        this.profWindow = 0;
+        this.profBGPixel = 0;
+        
+        // Reset subcomponent timers
+        if (this.bus.ppu) {
+            this.bus.ppu.profSpriteTime = 0;
+            this.bus.ppu.profFetchTime = 0;
+            this.bus.ppu.profWindowTime = 0;
+            this.bus.ppu.profBGPixelTime = 0;
+        }
+
+        const tStart = performance.now();
+
         do {
             this.cycle(noPpu);
         } while (!(this.xPos === 0 && this.yPos === 0));
+
+        const tEnd = performance.now();
+        
+        // Deductive profiling calculation
+        const totalFrameTime = tEnd - tStart;
+        const cpuTime = totalFrameTime - (this.profPpu + this.profApu + this.profDma);
+        
+        const spriteTime = this.bus.ppu ? (this.bus.ppu.profSpriteTime || 0) : 0;
+        const fetchTime = this.bus.ppu ? (this.bus.ppu.profFetchTime || 0) : 0;
+        const windowTime = this.bus.ppu ? (this.bus.ppu.profWindowTime || 0) : 0;
+        const bgPixelTime = this.bus.ppu ? (this.bus.ppu.profBGPixelTime || 0) : 0;
+
+        this.accumCpu += cpuTime;
+        this.accumBgPixel += bgPixelTime;
+        this.accumFetch += fetchTime;
+        this.accumWindow += windowTime;
+        this.accumSprite += spriteTime;
+        this.accumApu += this.profApu;
+        this.accumDma += this.profDma;
+        this.accumTotal += totalFrameTime;
+        this.profFrameCount++;
+
+        // Report diagnostic metrics once every 60 frames (~1 second)
+        if (this.profFrameCount >= 60) {
+            const avgCpu = (this.accumCpu / 60).toFixed(2);
+            const avgBgPixel = (this.accumBgPixel / 60).toFixed(2);
+            const avgFetch = (this.accumFetch / 60).toFixed(2);
+            const avgWindow = (this.accumWindow / 60).toFixed(2);
+            const avgSprite = (this.accumSprite / 60).toFixed(2);
+            const avgApu = (this.accumApu / 60).toFixed(2);
+            const avgDma = (this.accumDma / 60).toFixed(2);
+            const avgTotal = (this.accumTotal / 60).toFixed(2);
+            
+            console.log(`[EGGStation Core Breakdown] Frame Time: ${avgTotal}ms | CPU: ${avgCpu}ms | BG-Pixel: ${avgBgPixel}ms | BG-Fetch: ${avgFetch}ms | BG-Window: ${avgWindow}ms | Sprite: ${avgSprite}ms | APU: ${avgApu}ms | DMA: ${avgDma}ms`);
+
+            this.accumCpu = 0;
+            this.accumBgPixel = 0;
+            this.accumFetch = 0;
+            this.accumWindow = 0;
+            this.accumSprite = 0;
+            this.accumApu = 0;
+            this.accumDma = 0;
+            this.accumTotal = 0;
+            this.profFrameCount = 0;
+        }
     }
 
-    /**
-     * SnesClock specific I/O Register reads.
-     */
     readReg(adr) {
         switch (adr) {
             case 0x4210: {
@@ -209,9 +260,6 @@ class SnesClock {
         return this.bus.openBus;
     }
 
-    /**
-     * SnesClock specific I/O Register writes.
-     */
     writeReg(adr, value) {
         switch (adr) {
             case 0x4200:
@@ -230,9 +278,6 @@ class SnesClock {
                 return true;
             case 0x4208:
                 this.hTimer = (this.hTimer & 0xff) | ((value & 0x1) << 8);
-                return true;
-            case 0x4209:
-                this.vTimer = (this.vTimer & 0x100) | value;
                 return true;
             case 0x420a:
                 this.vTimer = (this.vTimer & 0xff) | ((value & 0x1) << 8);
