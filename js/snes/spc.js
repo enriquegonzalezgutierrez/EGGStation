@@ -1,28 +1,30 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Sound CPU
- * Author: Original Author (Adapted by Enrique González Gutiérrez)
- * 
- * Domain Layer: Sony SPC700 Audio Processor (JIT-Optimized Legacy Code)
+ * Component: Spc (Sony SPC700 Audio CPU Core)
+ * Documented & Optimized: English comments, Bitwise Sign Extension, Inlined Addressing Paths
  * 
  * ROLE:
  * Emulates the Sony SPC700 audio CPU.
+ * Interprets audio opcodes, processes registers, maps addressing structures,
+ * and executes targeted instructions to synthesize game music and effects.
  * 
- * JIT OPTIMIZATIONS:
- * - Removed heavy try-catch from inner cycle() loop to allow V8 TurboFan compilation.
- * - Replaces dynamic .call(this) with pre-bound monomorphic function executions.
- * - Reuses a single pre-allocated address buffer (this.effBuffer) to eliminate 
- *   1,000,000 Garbage Collector array allocations per second.
+ * PERFORMANCE OPTIMIZATIONS:
+ * - Implements Bitwise Sign Extension (`(val << 24) >> 24`) for fast 8-bit signed integer conversions.
+ * - Inlines sign-conversion math inside `getAdr` to eliminate function call overhead.
+ * - Employs pre-bound functions to ensure high-performance monomorphic execution.
+ * - Reuses a pre-allocated static address buffer (`this.effBuffer`) to maintain a zero-GC footprint.
  */
 
 Spc = (function() {
 
-  // indexes in register arrays
+  // Indexes in register arrays (Local constant scope for high-speed indexing)
   const A = 0;
   const X = 1;
   const Y = 2;
   const SP = 3;
   const PC = 0;
 
+  // Addressing mode identifier constants
   const IMP = 0;
   const REL = 1;
   const DP = 2;
@@ -51,7 +53,7 @@ Spc = (function() {
     this.r = new Uint8Array(4);
     this.br = new Uint16Array(1);
 
-    // flags
+    // Processor Status Flags
     this.n = false;
     this.v = false;
     this.p = false;
@@ -63,7 +65,7 @@ Spc = (function() {
 
     this.cyclesLeft = 0;
 
-    // Pre-allocated static address buffer to avoid Garbage Collection Thrashing (GC Free)
+    // Pre-allocated static address buffer to avoid Garbage Collection (GC Free)
     this.effBuffer = new Uint32Array(2);
 
     this.modes = [
@@ -104,6 +106,9 @@ Spc = (function() {
       2, 8, 4, 5, 4, 5, 5, 6, 3, 4, 5, 4, 2, 2, 4, 3
     ];
 
+    /**
+     * Resets active registers and hardware flags back to baseline.
+     */
     this.reset = function() {
       this.r[A] = 0;
       this.r[X] = 0;
@@ -130,8 +135,8 @@ Spc = (function() {
     this.reset();
 
     /**
-     * Highly Optimized Hot Path Cycle.
-     * Removed legacy try-catch block to enable JIT monomorphic compilation in V8.
+     * Executes a single instruction step.
+     * GC-FREE: Resolves addressing modes directly onto pre-allocated buffers.
      */
     this.cycle = function() {
         if (this.cyclesLeft === 0) {
@@ -139,10 +144,8 @@ Spc = (function() {
             const mode = this.modes[instr];
             this.cyclesLeft = this.cycles[instr];
 
-            // Avoids garbage array allocations by reusing static memory buffers
             const eff = this.getAdr(mode);
             
-            // Fast Bound dispatch (No .call overhead)
             this.functions[instr](eff[0], eff[1], instr);
         }
         this.cyclesLeft--;
@@ -173,16 +176,17 @@ Spc = (function() {
     }
 
     this.setZandN = function(val) {
-      val &= 0xff;
-      this.n = val > 0x7f;
-      this.z = val === 0;
+      const v = val & 0xff;
+      this.n = v > 0x7f;
+      this.z = v === 0;
     }
 
+    /**
+     * High-speed bitwise conversion of unsigned 8-bit values to signed integers.
+     * OPTIMIZATION: Bypasses comparison operations using 32-bit hardware shift registers.
+     */
     this.getSigned = function(val) {
-      if(val > 127) {
-        return -(256 - val);
-      }
-      return val;
+      return (val << 24) >> 24;
     }
 
     this.doBranch = function(check, rel) {
@@ -203,8 +207,9 @@ Spc = (function() {
     }
 
     /**
-     * Refactored: Writes results directly onto the pre-allocated Uint32Array (this.effBuffer)
-     * completely eliminating millions of runtime memory allocations.
+     * Resolves operand memory addresses.
+     * OPTIMIZATION: Sign extension logic is inlined directly inside addressing cases (REL, DPR, DXR) 
+     * to eliminate standard function call overhead.
      */
     this.getAdr = function(mode) {
       const buf = this.effBuffer;
@@ -214,8 +219,8 @@ Spc = (function() {
           return buf;
         }
         case REL: {
-          let rel = this.mem.read(this.br[PC]++);
-          buf[0] = this.getSigned(rel); buf[1] = 0;
+          const rel = this.mem.read(this.br[PC]++);
+          buf[0] = (rel << 24) >> 24; buf[1] = 0;
           return buf;
         }
         case DP: {
@@ -226,9 +231,9 @@ Spc = (function() {
         }
         case DPR: {
           let adr = this.mem.read(this.br[PC]++);
-          let rel = this.mem.read(this.br[PC]++);
+          const rel = this.mem.read(this.br[PC]++);
           buf[0] = adr | (this.p ? 0x100 : 0);
-          buf[1] = this.getSigned(rel);
+          buf[1] = (rel << 24) >> 24;
           return buf;
         }
         case ABS: {
@@ -316,7 +321,7 @@ Spc = (function() {
         }
         case DXR: {
           let adr = this.mem.read(this.br[PC]++);
-          let rel = this.getSigned(this.mem.read(this.br[PC]++));
+          const rel = (this.mem.read(this.br[PC]++) << 24) >> 24;
           buf[0] = ((adr + this.r[X]) & 0xff) | (this.p ? 0x100 : 0);
           buf[1] = rel;
           return buf;
@@ -337,7 +342,7 @@ Spc = (function() {
       }
     }
 
-    // instructions
+    // SPC700 CPU instructions set
     this.nop = function(adr, adrh, instr) {}
 
     this.clrp = function(adr, adrh, instr) { this.p = false; }
