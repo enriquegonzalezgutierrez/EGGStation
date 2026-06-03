@@ -24,7 +24,7 @@ class SnesOrchestrator {
      */
     constructor(videoContext, glContext, fpsUpdateCallback) {
         // Domain Core (Legacy Core Engine)
-        this.hardware = new Snes();
+        this.hardware = new SnesMotherboard();
         
         // Context Dependencies
         this.ctx = videoContext;
@@ -88,9 +88,10 @@ class SnesOrchestrator {
      */
     loadCartridge(romData, isHirom) {
         try {
-            const success = this.hardware.loadRom(romData, isHirom);
-            if (!success) throw new Error("ROM parsing failed.");
+            const cart = SnesCartridge.loadRom(romData, isHirom);
+            if (!cart) throw new Error("ROM parsing failed.");
 
+            this.hardware.cart = cart;
             this.hardware.reset(true);
             this.start();
         } catch (error) {
@@ -139,7 +140,7 @@ class SnesOrchestrator {
             this.hardware.runFrame(false);
 
             // 2. Audio DSP stream (retrieves and queues samples)
-            this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
+            this.hardware.apu.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
             this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
 
             // 3. Standardized Visual Blit
@@ -173,9 +174,9 @@ class SnesOrchestrator {
 
     sendInput(buttonIndex, isPressed) {
         if (isPressed) {
-            this.hardware.setPad1ButtonPressed(buttonIndex);
+            this.hardware.joypad.setPad1ButtonPressed(buttonIndex);
         } else {
-            this.hardware.setPad1ButtonReleased(buttonIndex);
+            this.hardware.joypad.setPad1ButtonReleased(buttonIndex);
         }
     }
 

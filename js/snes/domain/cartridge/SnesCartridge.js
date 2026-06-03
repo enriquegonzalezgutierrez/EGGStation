@@ -165,6 +165,61 @@ class SnesCartridge {
     write(bank, adr, value) {
         this.mapper.write(bank, adr, value);
     }
+
+    /**
+     * Parses the ROM header to extract metadata.
+     */
+    static parseHeader(rom, isHirom) {
+        let str = "";
+        let header;
+        const offset = isHirom ? 0xffc0 : 0x7fc0;
+        for (let i = 0; i < 21; i++) {
+            str += String.fromCharCode(rom[offset + i]);
+        }
+        header = {
+            name: str,
+            type: rom[offset + 21] & 0xf,
+            speed: rom[offset + 21] >> 4,
+            chips: rom[offset + 22],
+            romSize: 0x400 << rom[offset + 23],
+            ramSize: 0x400 << rom[offset + 24]
+        };
+
+        if (header.romSize < rom.length) {
+            const bankCount = Math.pow(2, Math.ceil(Math.log2(rom.length / 0x8000)));
+            header.romSize = bankCount * 0x8000;
+        }
+        return header;
+    }
+
+    /**
+     * Factory method to load and prepare a Cartridge instance from ROM data.
+     */
+    static loadRom(rom, isHirom) {
+        let header;
+        if (rom.length % 0x8000 === 0) {
+            header = SnesCartridge.parseHeader(rom, isHirom);
+        } else if ((rom.length - 512) % 0x8000 === 0) {
+            rom = new Uint8Array(Array.prototype.slice.call(rom, 512));
+            header = SnesCartridge.parseHeader(rom, isHirom);
+        } else {
+            return null;
+        }
+
+        if (rom.length < header.romSize) {
+            const extraData = rom.length - (header.romSize / 2);
+            const nRom = new Uint8Array(header.romSize);
+            for (let i = 0; i < nRom.length; i++) {
+                if (i < (header.romSize / 2)) {
+                    nRom[i] = rom[i];
+                } else {
+                    nRom[i] = rom[(header.romSize / 2) + (i % extraData)];
+                }
+            }
+            rom = nRom;
+        }
+        return new SnesCartridge(rom, header, isHirom);
+    }
 }
 
 // Backward Compatibility Alias (Ensures legacy core files run normally during microphases)
