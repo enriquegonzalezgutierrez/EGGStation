@@ -141,7 +141,7 @@ class Sega315_5124_Psg {
      */
     async startMix(cpu) {
         try {
-            this.audioEnabled = true;
+            this.audioEnabled = window.audioEnabledState !== false;
             window.AudioContext = window.AudioContext || window.webkitAudioContext;
             this.context = new AudioContext();
             
@@ -188,11 +188,32 @@ class Sega315_5124_Psg {
             this.gainNode.connect(this.context.destination);
 
             this.audioInitialized = true;
+            if (!this.audioEnabled) {
+                this.context.suspend().catch(() => {});
+            }
         }
         catch(e) {
             console.error("PSG::Failed to bootstrap Web Audio.", e);
             this.audioEnabled = false;
         }        
+    }
+
+    /**
+     * Dynamically enables or disables Web Audio contexts and processing.
+     */
+    setAudioEnabled(enabled) {
+        this.audioEnabled = enabled;
+        if (this.context) {
+            if (enabled) {
+                if (this.context.state === 'suspended') {
+                    this.context.resume().catch(() => {});
+                }
+            } else {
+                if (this.context.state === 'running') {
+                    this.context.suspend().catch(() => {});
+                }
+            }
+        }
     }
 
     /**
@@ -274,7 +295,11 @@ class Sega315_5124_Psg {
      * @param {AudioProcessingEvent} e
      */
     mixFunction(e) {
-        if (!this.audioEnabled || !this.audioInitialized) return;
+        if (!this.audioEnabled || !this.audioInitialized) {
+            const data = e.outputBuffer.getChannelData(0);
+            data.fill(0);
+            return;
+        }
 
         const data = e.outputBuffer.getChannelData(0);
         const dataLength = data.length;

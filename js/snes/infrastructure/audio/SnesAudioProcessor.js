@@ -17,6 +17,7 @@
 
 class SnesAudioProcessor {
     constructor() {
+        this.audioEnabled = true;
         // Initialize Web Audio API
         this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
@@ -64,14 +65,33 @@ class SnesAudioProcessor {
         this.masterGain.connect(this.audioCtx.destination);
 
         console.log("[EGGStation::SNES] Audio Processor & DSP Graph Initialized.");
+        this.setAudioEnabled(window.audioEnabledState !== false);
     }
 
     /**
      * Resumes the AudioContext. Must be called after a user interaction (e.g., clicking "Play").
      */
     resume() {
-        if (this.audioCtx.state === 'suspended') {
+        if (this.audioEnabled && this.audioCtx.state === 'suspended') {
             this.audioCtx.resume();
+        }
+    }
+
+    /**
+     * Dynamically enables or disables Web Audio contexts and processing.
+     */
+    setAudioEnabled(enabled) {
+        this.audioEnabled = enabled;
+        if (this.audioCtx) {
+            if (enabled) {
+                if (this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume().catch(() => {});
+                }
+            } else {
+                if (this.audioCtx.state === 'running') {
+                    this.audioCtx.suspend().catch(() => {});
+                }
+            }
         }
     }
 
@@ -121,6 +141,7 @@ class SnesAudioProcessor {
      * @param {number} count - Number of samples to push.
      */
     pushSamples(left, right, count) {
+        if (this.audioEnabled === false) return;
         for (let i = 0; i < count; i++) {
             // Drop samples if buffer is full (prevents catastrophic lag pileups)
             if (this.samplesInQueue >= this.bufferSize) break;
@@ -140,6 +161,11 @@ class SnesAudioProcessor {
     onAudioProcess(event) {
         const outL = event.outputBuffer.getChannelData(0);
         const outR = event.outputBuffer.getChannelData(1);
+        if (this.audioEnabled === false) {
+            outL.fill(0.0);
+            outR.fill(0.0);
+            return;
+        }
         const requestedSamples = outL.length;
 
         for (let i = 0; i < requestedSamples; i++) {

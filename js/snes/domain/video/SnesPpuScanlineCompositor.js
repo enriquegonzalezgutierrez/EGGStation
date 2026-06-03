@@ -109,13 +109,16 @@ class SnesPpuScanlineCompositor {
                     }
                 }
 
-                const outIdx = line * 1536 + 6 * i;
-                ppu.pixelOutput[outIdx]     = (r1 * bMult) & 0xff;
-                ppu.pixelOutput[outIdx + 1] = (g1 * bMult) & 0xff;
-                ppu.pixelOutput[outIdx + 2] = (b1 * bMult) & 0xff;
-                ppu.pixelOutput[outIdx + 3] = (r2 * bMult) & 0xff;
-                ppu.pixelOutput[outIdx + 4] = (g2 * bMult) & 0xff;
-                ppu.pixelOutput[outIdx + 5] = (b2 * bMult) & 0xff;
+                const outIdx = line * 512 + 2 * i;
+                const r1b = (r1 * bMult) | 0;
+                const g1b = (g1 * bMult) | 0;
+                const b1b = (b1 * bMult) | 0;
+                const r2b = (r2 * bMult) | 0;
+                const g2b = (g2 * bMult) | 0;
+                const b2b = (b2 * bMult) | 0;
+
+                ppu.pixelOutput[outIdx]     = r1b | (g1b << 8) | (b1b << 16) | 0xff000000;
+                ppu.pixelOutput[outIdx + 1] = r2b | (g2b << 8) | (b2b << 16) | 0xff000000;
 
                 i++;
             }

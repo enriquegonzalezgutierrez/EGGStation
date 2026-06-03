@@ -37,6 +37,7 @@ class GenesisOrchestrator {
         this.audioCtx = null;
         this.jsNode = null;
         this.gainNode = null;
+        this.audioEnabled = true;
 
         this.maxAudioBufferSize = 2048;
         this.tempFm = new Int16Array(this.maxAudioBufferSize * 2);
@@ -151,6 +152,7 @@ class GenesisOrchestrator {
 
     startAudio() {
         if (this.audioCtx) return;
+        this.audioEnabled = window.audioEnabledState !== false;
         window.AudioContext = window.AudioContext || window.webkitAudioContext;
         this.audioCtx = new AudioContext();
         this.gainNode = this.audioCtx.createGain();
@@ -159,10 +161,14 @@ class GenesisOrchestrator {
         this.jsNode.onaudioprocess = (e) => this.mixAudio(e);
         this.jsNode.connect(this.gainNode);
         this.gainNode.connect(this.audioCtx.destination);
+
+        if (!this.audioEnabled) {
+            this.audioCtx.suspend().catch(() => {});
+        }
     }
 
     mixAudio(e) {
-        if (!this.isRunning || this.isPaused || this.isRewinding) {
+        if (!this.isRunning || this.isPaused || this.isRewinding || this.audioEnabled === false) {
             e.outputBuffer.getChannelData(0).fill(0);
             e.outputBuffer.getChannelData(1).fill(0);
             return;
@@ -247,6 +253,21 @@ class GenesisOrchestrator {
         console.log("GenesisOrchestrator::Sega Genesis Engine Booted Successfully.");
 
         this.animationFrameId = requestAnimationFrame(this.loop);
+    }
+
+    setAudioEnabled(enabled) {
+        this.audioEnabled = enabled;
+        if (this.audioCtx) {
+            if (enabled) {
+                if (this.audioCtx.state === 'suspended') {
+                    this.audioCtx.resume().catch(() => {});
+                }
+            } else {
+                if (this.audioCtx.state === 'running') {
+                    this.audioCtx.suspend().catch(() => {});
+                }
+            }
+        }
     }
 
     togglePause() {

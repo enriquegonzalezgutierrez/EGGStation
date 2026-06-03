@@ -1,30 +1,44 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Domain Layer
- * Component: SnesClock
+ * Component: SnesClock (JIT-Optimized Execution Sync Engine - Compatibility Restored)
+ * Author: Enrique González Gutiérrez
  * 
  * ROLE:
- * Handles system cycle synchronization, H/V timers, interrupts (NMI/IRQ), 
- * and Hblank/Vblank logic.
+ * Handles system cycle synchronization, horizontal/vertical counters, 
+ * interrupts (NMI/IRQ), DMA/HDMA trigger timing, and video scanline render scheduling.
+ * 
+ * SOLID Principles:
+ * - SRP: Exclusively orchestrates the master execution clock and time-slice scheduling.
  */
 
 class SnesClock {
+    /**
+     * @param {Object} bus - Central motherboard aggregate instance.
+     */
     constructor(bus) {
         this.bus = bus;
         
-        // Calculate APU cycle ratio relative to Master Clock
+        // APU clock multiplier ratio relative to the Master Clock
         this.apuCyclesPerMaster = (32040 * 32) / (1364 * 262 * 60);
 
         this.reset();
     }
 
+    /**
+     * Resets system timers, synchronization states, and interrupt lines.
+     */
     reset() {
-        // PPU/CPU Sync counters
+        // PPU/CPU Coordinate Sync counters
         this.xPos = 0;
         this.yPos = 0;
         this.frames = 0;
 
-        this.cpuCyclesLeft = 5 * 8 + 12; // Reset overhead: 5 read cycles + 2 IO cycles
+        // Reset overhead: 5 read cycles + 2 IO cycles
+        this.cpuCyclesLeft = 5 * 8 + 12; 
         this.cpuMemOps = 0;
+        
+        // High-Performance Integer clock accumulator
+        this.elapsedMasterCycles = 0;
         this.apuCatchCycles = 0;
 
         // Interrupt and Timer Flags
@@ -41,23 +55,28 @@ class SnesClock {
     }
 
     /**
-     * Steps the system clock for one master cycle.
+     * Steps the system clock for exactly one master cycle (2 master clock ticks).
+     * Highly optimized hot path executed ~178,000 times per frame.
+     * @param {boolean} noPpu - True to suppress PPU rendering operations.
      */
     cycle(noPpu) {
-        this.apuCatchCycles += (this.apuCyclesPerMaster * 2);
+        // Accumulate elapsed master cycles as an integer to prevent floating-point overhead in the hot loop
+        this.elapsedMasterCycles += 2;
 
+        // Strobe joypad registers synchronously to maintain register latching times
         this.bus.joypad.strobe();
 
+        // DMA and HDMA triggers (highest priority bus activities)
         if (this.bus.dma.hdmaTimer > 0) {
             this.bus.dma.hdmaTimer -= 2;
         } else if (this.bus.dma.dmaBusy) {
             this.bus.dma.handleDma();
         } else if (this.xPos < 536 || this.xPos >= 576) {
-            // CPU is paused for 40 cycles starting around dot 536
+            // CPU executing instructions (paused for DRAM refresh at xPos [536, 576))
             this.cpuCycle();
         }
 
-        // Interrupt line evaluations (IRQ/NMI)
+        // Interrupt Line Queries (NMI / IRQ logic)
         if (this.yPos === this.vTimer && this.vIrqEnabled) {
             if (!this.hIrqEnabled) {
                 if (this.xPos === 0) {
@@ -75,7 +94,7 @@ class SnesClock {
             this.bus.cpu.irqWanted = true;
         }
 
-        // Hblank/Vblank logic
+        // Hblank/Vblank logic gates
         if (this.xPos === 1024) {
             this.inHblank = true;
             if (!this.inVblank) {
@@ -85,6 +104,7 @@ class SnesClock {
             this.inHblank = false;
             this.bus.ppu.checkOverscan(this.yPos);
         } else if (this.xPos === 512 && !noPpu) {
+            // Synchronously render active scanline to buffer
             this.bus.ppu.renderLine(this.yPos);
         }
 
@@ -101,20 +121,26 @@ class SnesClock {
             this.bus.dma.initHdma();
         }
 
+        // Stepping internal joypad clock to satisfy auto-reading timeouts ($4212 polling)
         this.bus.joypad.cycle();
 
+        // Position progression
         this.xPos += 2;
         if (this.xPos === 1364) {
             this.xPos = 0;
             this.yPos++;
+            
             if (this.yPos === 262) {
-                this.catchUpApu();
                 this.yPos = 0;
                 this.frames++;
+                this.catchUpApu();
             }
         }
     }
 
+    /**
+     * Steps the Ricoh 5A22 CPU core cycles.
+     */
     cpuCycle() {
         if (this.cpuCyclesLeft === 0) {
             this.bus.cpu.cyclesLeft = 0;
@@ -125,20 +151,37 @@ class SnesClock {
         this.cpuCyclesLeft -= 2;
     }
 
+    /**
+     * Synchronizes and executes any pending APU cycles up to the current master clock timestamp.
+     */
     catchUpApu() {
-        const catchUpCycles = this.apuCatchCycles & 0xffffffff;
-        for (let i = 0; i < catchUpCycles; i++) {
-            this.bus.apu.cycle();
+        // Flush integer-accumulated master clock steps into APU cycles prior to processing
+        if (this.elapsedMasterCycles > 0) {
+            this.apuCatchCycles += (this.elapsedMasterCycles * this.apuCyclesPerMaster);
+            this.elapsedMasterCycles = 0;
         }
-        this.apuCatchCycles -= catchUpCycles;
+
+        const catchUpCycles = this.apuCatchCycles | 0; // Fast integer cast
+        if (catchUpCycles > 0) {
+            for (let i = 0; i < catchUpCycles; i++) {
+                this.bus.apu.cycle();
+            }
+            this.apuCatchCycles -= catchUpCycles;
+        }
     }
 
+    /**
+     * Runs hardware execution up to the boundaries of exactly one video frame.
+     */
     runFrame(noPpu) {
         do {
             this.cycle(noPpu);
         } while (!(this.xPos === 0 && this.yPos === 0));
     }
 
+    /**
+     * SnesClock specific I/O Register reads.
+     */
     readReg(adr) {
         switch (adr) {
             case 0x4210: {
@@ -166,6 +209,9 @@ class SnesClock {
         return this.bus.openBus;
     }
 
+    /**
+     * SnesClock specific I/O Register writes.
+     */
     writeReg(adr, value) {
         switch (adr) {
             case 0x4200:
@@ -195,4 +241,5 @@ class SnesClock {
         return false;
     }
 }
+
 window.SnesClock = SnesClock;

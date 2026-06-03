@@ -72,6 +72,12 @@ class SnesOrchestrator {
         this.audioProcessor.setFilterMode(this.audioFilterMode);
     }
 
+    setAudioEnabled(enabled) {
+        if (this.audioProcessor) {
+            this.audioProcessor.setAudioEnabled(enabled);
+        }
+    }
+
     /**
      * Updates WebGL shader variables from UI sliders.
      */

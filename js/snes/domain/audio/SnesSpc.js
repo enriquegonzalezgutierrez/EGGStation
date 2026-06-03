@@ -71,6 +71,7 @@ class SnesSpc {
             2, 8, 4, 5, 4, 5, 5, 6, 3, 4, 5, 4, 2, 2, 4, 3
         ];
 
+        this.bindInstructionMap();
         this.reset();
     }
 
@@ -106,7 +107,7 @@ class SnesSpc {
 
             try {
                 const eff = SnesSpcAddressing.resolve(this, mode);
-                SnesSpcDecoder.execute(this, instr, eff[0], eff[1]);
+                this.functions[instr](eff[0], eff[1], instr);
             } catch (e) {
                 console.error(`[SPC700] Execution Exception at PC $${this.br[SPC_REG_PC].toString(16)}:`, e);
             }
@@ -163,6 +164,20 @@ class SnesSpc {
     pop() {
         this.r[SPC_REG_SP]++;
         return this.mem.read(this.r[SPC_REG_SP] | 0x100);
+    }
+    // ========================================================================
+    // INSTRUCTION DISPATCH TABLE
+    // ========================================================================
+
+    /**
+     * Builds the per-instance dispatch array from the shared static TABLE.
+     * Closures capture `s` (this) once — V8 can constant-fold the receiver
+     * and apply inline-cache optimizations that are not available when calling
+     * a global static array with a dynamic receiver argument.
+     */
+    bindInstructionMap() {
+        const s = this;
+        this.functions = SnesSpcDecoder.TABLE.map(fn => (a, b, i) => fn(s, a, b, i));
     }
 }
 

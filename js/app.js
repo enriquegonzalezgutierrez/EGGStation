@@ -49,6 +49,9 @@ console.log("%c=============================", infoHeaderStyle);
 let activeOrchestrator = null;
 let activeController = null;
 
+// Global state for audio enablement
+window.audioEnabledState = true;
+
 /**
  * Toggles the visibility of the collapsible Developer diagnostics suite.
  */
@@ -197,6 +200,11 @@ function bootConsole(consoleType) {
             console.error(`[EGGStation::Swapper] Fatal exception during SNES engine boot:`, err);
         }
     }
+
+    // Apply current global audio state to the newly booted engine
+    if (activeOrchestrator && typeof activeOrchestrator.setAudioEnabled === 'function') {
+        activeOrchestrator.setAudioEnabled(window.audioEnabledState);
+    }
 }
 
 // Global DOM Loaded initialization
@@ -204,6 +212,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const consoleSelector = document.getElementById('consoleSelector');
     const devToggle = document.getElementById('dev-toggle-btn');
     const ejectBtn = document.getElementById('ejectBtn');
+    const audioToggleSelector = document.getElementById('audioToggleSelector');
     
     // Boot the default console (Sega Master System)
     console.log(`[EGGStation::Bootstrapper] Initializing default system configuration...`);
@@ -213,6 +222,19 @@ document.addEventListener("DOMContentLoaded", () => {
     if (consoleSelector) {
         consoleSelector.addEventListener('change', (e) => {
             bootConsole(e.target.value);
+        });
+    }
+
+    // Listen to audio output toggle changes
+    if (audioToggleSelector) {
+        // Synchronize initial UI selection with global state
+        window.audioEnabledState = (audioToggleSelector.value === 'enabled');
+        audioToggleSelector.addEventListener('change', (e) => {
+            const enabled = (e.target.value === 'enabled');
+            window.audioEnabledState = enabled;
+            if (activeOrchestrator && typeof activeOrchestrator.setAudioEnabled === 'function') {
+                activeOrchestrator.setAudioEnabled(enabled);
+            }
         });
     }
 

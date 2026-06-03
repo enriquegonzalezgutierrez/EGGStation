@@ -206,132 +206,127 @@ class SnesPostProcessor {
     // STANDARD 2D CPU SCALERS & FORMATTERS
     // ========================================================================
 
-    convertRGBToRGBA(src, width, height) {
+    convertRGBToRGBA(src32, dst32, width, height) {
         for (let y = 0; y < height; y++) {
+            const srcRow = y * width;
+            const dstRow1 = y * 2 * width;
+            const dstRow2 = (y * 2 + 1) * width;
+            
             for (let x = 0; x < width; x++) {
-                const srcIdx = (y * width + x) * 3;
-                
-                const dstIdx1 = (y * 2 * width + x) * 4;
-                const dstIdx2 = ((y * 2 + 1) * width + x) * 4;
-
-                const r = src[srcIdx];
-                const g = src[srcIdx + 1];
-                const b = src[srcIdx + 2];
-
-                // Copy row A
-                this.rgbaBuffer[dstIdx1] = r;
-                this.rgbaBuffer[dstIdx1 + 1] = g;
-                this.rgbaBuffer[dstIdx1 + 2] = b;
-                this.rgbaBuffer[dstIdx1 + 3] = 255;
-
-                // Copy row B (Vertical Line Doubling)
-                this.rgbaBuffer[dstIdx2] = r;
-                this.rgbaBuffer[dstIdx2 + 1] = g;
-                this.rgbaBuffer[dstIdx2 + 2] = b;
-                this.rgbaBuffer[dstIdx2 + 3] = 255;
+                const pixel = src32[srcRow + x];
+                dst32[dstRow1 + x] = pixel;
+                dst32[dstRow2 + x] = pixel;
             }
         }
     }
 
-    scale2X(src, dst, width, height) {
+    scale2X(src32, dst32, width, height) {
         const outWidth = width * 2;
-        const same = (offsetA, offsetB) => {
-            return src[offsetA] === src[offsetB] && 
-                   src[offsetA + 1] === src[offsetB + 1] && 
-                   src[offsetA + 2] === src[offsetB + 2];
-        };
 
         for (let y = 0; y < height; y++) {
             const prevY = y > 0 ? y - 1 : 0;
             const nextY = y < height - 1 ? y + 1 : height - 1;
 
+            const rowP = y * width;
+            const rowA = prevY * width;
+            const rowD = nextY * width;
+
+            const outY = y * 2;
+            const rowOut0 = outY * outWidth;
+            const rowOut1 = (outY + 1) * outWidth;
+
             for (let x = 0; x < width; x++) {
                 const prevX = x > 0 ? x - 1 : 0;
                 const nextX = x < width - 1 ? x + 1 : width - 1;
 
-                const pIdx = (x + y * width) * 4;
-                const aIdx = (x + prevY * width) * 4;
-                const cIdx = (prevX + y * width) * 4;
-                const bIdx = (nextX + y * width) * 4;
-                const dIdx = (x + nextY * width) * 4;
+                const p = src32[rowP + x];
+                let e0 = p, e1 = p, e2 = p, e3 = p;
 
-                const pr = src[pIdx], pg = src[pIdx+1], pb = src[pIdx+2];
-                let e0r = pr, e0g = pg, e0b = pb;
-                let e1r = pr, e1g = pg, e1b = pb;
-                let e2r = pr, e2g = pg, e2b = pb;
-                let e3r = pr, e3g = pg, e3b = pb;
+                const a = src32[rowA + x];
+                const b = src32[rowP + nextX];
+                const c = src32[rowP + prevX];
+                const d = src32[rowD + x];
 
-                if (same(cIdx, aIdx) && !same(cIdx, dIdx) && !same(aIdx, bIdx)) {
-                    e0r = src[aIdx]; e0g = src[aIdx+1]; e0b = src[aIdx+2];
+                if (c === a && c !== d && a !== b) {
+                    e0 = a;
                 }
-                if (same(aIdx, bIdx) && !same(aIdx, cIdx) && !same(bIdx, dIdx)) {
-                    e1r = src[bIdx]; e1g = src[bIdx+1]; e1b = src[bIdx+2];
+                if (a === b && a !== c && b !== d) {
+                    e1 = b;
                 }
-                if (same(dIdx, cIdx) && !same(dIdx, bIdx) && !same(cIdx, aIdx)) {
-                    e2r = src[cIdx]; e2g = src[cIdx+1]; e2b = src[cIdx+2];
+                if (d === c && d !== b && c !== a) {
+                    e2 = c;
                 }
-                if (same(bIdx, dIdx) && !same(bIdx, aIdx) && !same(dIdx, cIdx)) {
-                    e3r = src[dIdx]; e3g = src[dIdx+1]; e3b = src[dIdx+2];
+                if (b === d && b !== a && d !== c) {
+                    e3 = d;
                 }
 
-                const outY = y * 2, outX = x * 2;
-                const row0 = (outX + outY * outWidth) * 4;
-                const row1 = (outX + (outY + 1) * outWidth) * 4;
-
-                dst[row0] = e0r; dst[row0+1] = e0g; dst[row0+2] = e0b; dst[row0+3] = 255;
-                dst[row0+4] = e1r; dst[row0+5] = e1g; dst[row0+6] = e1b; dst[row0+7] = 255;
-                dst[row1] = e2r; dst[row1+1] = e2g; dst[row1+2] = e2b; dst[row1+3] = 255;
-                dst[row1+4] = e3r; dst[row1+5] = e3g; dst[row1+6] = e3b; dst[row1+7] = 255;
+                const outX = x * 2;
+                dst32[rowOut0 + outX] = e0;
+                dst32[rowOut0 + outX + 1] = e1;
+                dst32[rowOut1 + outX] = e2;
+                dst32[rowOut1 + outX + 1] = e3;
             }
         }
     }
 
-    scale4X(src, width, height) {
-        this.scale2X(src, this.upscaledBuffer, width, height); 
-        this.scale2X(this.upscaledBuffer, this.scale4xBuffer, width * 2, height * 2);
+    scale4X(src32, dst32, width, height) {
+        if (!this.upscaledBuffer32) {
+            this.upscaledBuffer32 = new Uint32Array(this.upscaledBuffer.buffer);
+        }
+        this.scale2X(src32, this.upscaledBuffer32, width, height); 
+        this.scale2X(this.upscaledBuffer32, dst32, width * 2, height * 2);
     }
 
-    applyScanlines(src, width, height) {
-        const dst = this.upscaledBuffer;
+    applyScanlines(src32, dst32, width, height) {
         const outWidth = width * 2;
 
         for (let y = 0; y < height; y++) {
+            const rowP = y * width;
+            const outY = y * 2;
+            const rowOut0 = outY * outWidth;
+            const rowOut1 = (outY + 1) * outWidth;
+
             for (let x = 0; x < width; x++) {
-                const pIdx = (x + y * width) * 4;
-                const r = src[pIdx], g = src[pIdx + 1], b = src[pIdx + 2];
+                const p = src32[rowP + x];
+                
+                const r = p & 0xff;
+                const g = (p >> 8) & 0xff;
+                const b = (p >> 16) & 0xff;
+                
+                const rScan = (r * 0.4) | 0;
+                const gScan = (g * 0.4) | 0;
+                const bScan = (b * 0.4) | 0;
+                const pScan = rScan | (gScan << 8) | (bScan << 16) | 0xff000000;
 
-                const outY = y * 2, outX = x * 2;
-                const row0 = (outX + outY * outWidth) * 4;
-                const row1 = (outX + (outY + 1) * outWidth) * 4;
-
-                dst[row0] = r; dst[row0+1] = g; dst[row0+2] = b; dst[row0+3] = 255;
-                dst[row0+4] = r; dst[row0+5] = g; dst[row0+6] = b; dst[row0+7] = 255;
-
-                dst[row1] = Math.floor(r * 0.4); 
-                dst[row1+1] = Math.floor(g * 0.4); 
-                dst[row1+2] = Math.floor(b * 0.4); 
-                dst[row1+3] = 255;
-                dst[row1+4] = Math.floor(r * 0.4); 
-                dst[row1+5] = Math.floor(g * 0.4); 
-                dst[row1+6] = Math.floor(b * 0.4); 
-                dst[row1+7] = 255;
+                const outX = x * 2;
+                dst32[rowOut0 + outX] = p;
+                dst32[rowOut0 + outX + 1] = p;
+                dst32[rowOut1 + outX] = pScan;
+                dst32[rowOut1 + outX + 1] = pScan;
             }
         }
     }
 
-    applyNtsdBleed(src, width, height) {
-        const dst = this.upscaledBuffer;
+    applyNtsdBleed(src32, dst32, width, height) {
+        const src8 = new Uint8Array(src32.buffer, src32.byteOffset, src32.length * 4);
 
         for (let y = 0; y < height; y++) {
             const rowOffset = y * width * 4;
-            for (let x = 0; x < width; x++) {
-                const prevX = x > 0 ? x - 1 : 0, nextX = x < width - 1 ? x + 1 : width - 1;
-                const pIdx = rowOffset + (x * 4), prevIdx = rowOffset + (prevX * 4), nextIdx = rowOffset + (nextX * 4);
+            const dstRow = y * width;
 
-                dst[pIdx] = Math.floor((src[prevIdx] * 0.25) + (src[pIdx] * 0.50) + (src[nextIdx] * 0.25));
-                dst[pIdx + 1] = Math.floor((src[prevIdx + 1] * 0.25) + (src[pIdx + 1] * 0.50) + (src[nextIdx + 1] * 0.25));
-                dst[pIdx + 2] = Math.floor((src[prevIdx + 2] * 0.25) + (src[pIdx + 2] * 0.50) + (src[nextIdx + 2] * 0.25));
-                dst[pIdx + 3] = 255;
+            for (let x = 0; x < width; x++) {
+                const prevX = x > 0 ? x - 1 : 0;
+                const nextX = x < width - 1 ? x + 1 : width - 1;
+
+                const pIdx = rowOffset + (x * 4);
+                const prevIdx = rowOffset + (prevX * 4);
+                const nextIdx = rowOffset + (nextX * 4);
+
+                const r = ((src8[prevIdx] * 0.25) + (src8[pIdx] * 0.50) + (src8[nextIdx] * 0.25)) | 0;
+                const g = ((src8[prevIdx + 1] * 0.25) + (src8[pIdx + 1] * 0.50) + (src8[nextIdx + 1] * 0.25)) | 0;
+                const b = ((src8[prevIdx + 2] * 0.25) + (src8[pIdx + 2] * 0.50) + (src8[nextIdx + 2] * 0.25)) | 0;
+
+                dst32[dstRow + x] = r | (g << 8) | (b << 16) | 0xff000000;
             }
         }
     }
@@ -343,11 +338,13 @@ class SnesPostProcessor {
     blit(ctx, src, width, height, postProcessMode, prevFrameBuffer) {
         const stretchedHeight = height * 2; 
 
-        // 1. Convert SNES RGB to RGBA with line doubling
-        this.convertRGBToRGBA(src, width, height);
-
-        // 2. GPU Mode 6: WebGL CRT-Royale Shader
+        // 1. GPU Mode 6: WebGL CRT-Royale Shader
         if (postProcessMode === 6 && this.webglInitialized) {
+            if (!this.rgba32) {
+                this.rgba32 = new Uint32Array(this.rgbaBuffer.buffer);
+            }
+            this.convertRGBToRGBA(src, this.rgba32, width, height);
+
             const gl = this.gl;
             if (gl.canvas.width !== width || gl.canvas.height !== stretchedHeight) {
                 gl.canvas.width = width;
@@ -357,18 +354,19 @@ class SnesPostProcessor {
             return;
         }
 
-        // 3. Fallback to Bilinear 2D
+        // WebGL fallback
         if (postProcessMode === 6) {
             postProcessMode = 1; 
         }
 
         let scaleFactor = 1;
-        if (postProcessMode === 2 || postProcessMode === 3 || postProcessMode === 5) scaleFactor = 2; 
+        if (postProcessMode === 2 || postProcessMode === 3) scaleFactor = 2; 
         if (postProcessMode === 4) scaleFactor = 4; 
 
         const targetWidth = width * scaleFactor;
         const targetHeight = stretchedHeight * scaleFactor;
 
+        // Resize Canvas if dimensions changed
         if (ctx.canvas.width !== targetWidth || ctx.canvas.height !== targetHeight) {
             ctx.canvas.width = targetWidth;
             ctx.canvas.height = targetHeight;
@@ -380,22 +378,28 @@ class SnesPostProcessor {
             this.glbImgData = ctx.createImageData(targetWidth, targetHeight);
         }
 
-        const activeLength = targetWidth * targetHeight * 4;
+        // Create a 32-bit view of target canvas image data buffer
+        const dst32 = new Uint32Array(this.glbImgData.data.buffer);
 
-        if (postProcessMode === 2) { 
-            this.scale2X(this.rgbaBuffer, this.upscaledBuffer, width, stretchedHeight);
-            this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
-        } else if (postProcessMode === 3) { 
-            this.applyScanlines(this.rgbaBuffer, width, stretchedHeight);
-            this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
-        } else if (postProcessMode === 4) { 
-            this.scale4X(this.rgbaBuffer, width, stretchedHeight);
-            this.glbImgData.data.set(this.scale4xBuffer.subarray(0, activeLength));
-        } else if (postProcessMode === 5) { 
-            this.applyNtsdBleed(this.rgbaBuffer, width, stretchedHeight);
-            this.glbImgData.data.set(this.upscaledBuffer.subarray(0, activeLength));
-        } else { 
-            this.glbImgData.data.set(this.rgbaBuffer.subarray(0, activeLength));
+        if (postProcessMode === 0 || postProcessMode === 1) {
+            // Write directly to canvas image data buffer
+            this.convertRGBToRGBA(src, dst32, width, height);
+        } else {
+            // Write first to internal temporary rgbaBuffer view
+            if (!this.rgba32) {
+                this.rgba32 = new Uint32Array(this.rgbaBuffer.buffer);
+            }
+            this.convertRGBToRGBA(src, this.rgba32, width, height);
+
+            if (postProcessMode === 2) { 
+                this.scale2X(this.rgba32, dst32, width, stretchedHeight);
+            } else if (postProcessMode === 3) { 
+                this.applyScanlines(this.rgba32, dst32, width, stretchedHeight);
+            } else if (postProcessMode === 4) { 
+                this.scale4X(this.rgba32, dst32, width, stretchedHeight);
+            } else if (postProcessMode === 5) { 
+                this.applyNtsdBleed(this.rgba32, dst32, width, stretchedHeight);
+            }
         }
 
         ctx.putImageData(this.glbImgData, 0, 0);

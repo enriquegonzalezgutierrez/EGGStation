@@ -136,6 +136,12 @@ class EmulatorOrchestrator {
         }
     }
 
+    setAudioEnabled(enabled) {
+        if (this.psg) {
+            this.psg.setAudioEnabled(enabled);
+        }
+    }
+
     updateShaderUniforms(curvature, scanlines, phosphor, bloom) {
         if (this.vdp && this.vdp.postProcessor) {
             this.vdp.postProcessor.updateShaderUniforms(curvature, scanlines, phosphor, bloom);

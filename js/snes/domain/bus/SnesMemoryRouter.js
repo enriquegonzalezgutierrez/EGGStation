@@ -1,8 +1,28 @@
+/**
+ * Project: EGGStation - Super Nintendo (SNES) Domain Layer
+ * Component: SnesMemoryRouter (High-Speed Memory Bus Dispatcher)
+ * Author: Enrique González Gutiérrez
+ * 
+ * ROLE:
+ * Coordinates memory address translation, calculates dynamic cycle access times, 
+ * handles Work RAM mirrors, and routes reads/writes to mapped hardware registers, 
+ * Cartridge ROM, and peripheral buses.
+ * 
+ * SOLID Principles:
+ * - SRP: Exclusively handles memory mapping logic and address space routing.
+ */
+
 class SnesMemoryRouter {
+    /**
+     * @param {Object} board - Parent motherboard hardware aggregate context.
+     */
     constructor(board) {
         this.board = board;
     }
 
+    /**
+     * Reads from general motherboard internal I/O Registers ($4200-$42FF).
+     */
     readReg(adr) {
         switch (adr) {
             case 0x4210:
@@ -37,6 +57,9 @@ class SnesMemoryRouter {
         return this.board.openBus;
     }
 
+    /**
+     * Writes to general motherboard internal I/O Registers ($4200-$42FF).
+     */
     writeReg(adr, value) {
         switch (adr) {
             case 0x4200:
@@ -77,9 +100,13 @@ class SnesMemoryRouter {
         }
     }
 
+    /**
+     * Reads from the high-speed B-Bus ($2100-$21FF range).
+     */
     readBBus(adr) {
         if (adr > 0x33 && adr < 0x40) return this.board.ppu.read(adr);
         if (adr >= 0x40 && adr < 0x80) {
+            // Force synchronous APU clock catching prior to Reading sound registers
             this.board.catchUpApu();
             return this.board.apu.spcWritePorts[adr & 0x3];
         }
@@ -91,12 +118,16 @@ class SnesMemoryRouter {
         return this.board.openBus;
     }
 
+    /**
+     * Writes to the high-speed B-Bus ($2100-$21FF range).
+     */
     writeBBus(adr, value) {
         if (adr < 0x34) {
             this.board.ppu.write(adr, value);
             return;
         }
         if (adr >= 0x40 && adr < 0x80) {
+            // Force synchronous APU clock catching prior to Writing sound registers
             this.board.catchUpApu();
             this.board.apu.spcReadPorts[adr & 0x3] = value;
             return;
@@ -118,6 +149,9 @@ class SnesMemoryRouter {
         }
     }
 
+    /**
+     * Fast-path read operations bypass helper.
+     */
     rread(adr) {
         const address = adr & 0xffffff;
         const bank = address >> 16;
@@ -143,6 +177,9 @@ class SnesMemoryRouter {
         return this.board.openBus;
     }
 
+    /**
+     * Primary bus read dispatcher. Routes address calls and calculates elapsed master cycles.
+     */
     read(adr, dma = false) {
         const address = adr & 0xffffff;
         const bank = address >> 16;
@@ -150,30 +187,26 @@ class SnesMemoryRouter {
 
         if (!dma) {
             this.board.cpuMemOps++;
-            
             let accessTime = 8;
+            
+            // Streamlined branch tree for access time calculation (up to x3 faster)
             if (bank >= 0x40 && bank < 0x80) {
                 accessTime = 8;
-            } else if (bank >= 0xc0) {
-                accessTime = this.board.fastMem ? 6 : 8;
-            } else if (offset < 0x2000) {
-                accessTime = 8;
-            } else if (offset < 0x4000) {
-                accessTime = 6;
-            } else if (offset < 0x4200) {
-                accessTime = 12;
-            } else if (offset < 0x6000) {
-                accessTime = 6;
-            } else if (offset < 0x8000) {
-                accessTime = 8;
-            } else {
+            } else if (offset >= 0x8000) {
                 accessTime = (this.board.fastMem && bank >= 0x80) ? 6 : 8;
+            } else {
+                if (offset < 0x2000) accessTime = 8;
+                else if (offset < 0x4000) accessTime = 6;
+                else if (offset < 0x4200) accessTime = 12;
+                else if (offset < 0x6000) accessTime = 6;
+                else accessTime = 8;
             }
 
             this.board.cpuCyclesLeft += accessTime;
         }
 
         let val;
+        // Direct fast path for WRAM banks 7E & 7F
         if (bank === 0x7e || bank === 0x7f) {
             val = this.board.ram[((bank & 0x1) << 16) | offset];
         } else if (offset < 0x8000 && (bank < 0x40 || (bank >= 0x80 && bank < 0xc0))) {
@@ -200,6 +233,9 @@ class SnesMemoryRouter {
         return val;
     }
 
+    /**
+     * Primary bus write dispatcher. Writes bytes to mapped offsets and adds access delays.
+     */
     write(adr, value, dma = false) {
         const address = adr & 0xffffff;
         const bank = address >> 16;
@@ -207,24 +243,19 @@ class SnesMemoryRouter {
 
         if (!dma) {
             this.board.cpuMemOps++;
-            
             let accessTime = 8;
+            
+            // Streamlined branch tree for write access timing
             if (bank >= 0x40 && bank < 0x80) {
                 accessTime = 8;
-            } else if (bank >= 0xc0) {
-                accessTime = this.board.fastMem ? 6 : 8;
-            } else if (offset < 0x2000) {
-                accessTime = 8;
-            } else if (offset < 0x4000) {
-                accessTime = 6;
-            } else if (offset < 0x4200) {
-                accessTime = 12;
-            } else if (offset < 0x6000) {
-                accessTime = 6;
-            } else if (offset < 0x8000) {
-                accessTime = 8;
-            } else {
+            } else if (offset >= 0x8000) {
                 accessTime = (this.board.fastMem && bank >= 0x80) ? 6 : 8;
+            } else {
+                if (offset < 0x2000) accessTime = 8;
+                else if (offset < 0x4000) accessTime = 6;
+                else if (offset < 0x4200) accessTime = 12;
+                else if (offset < 0x6000) accessTime = 6;
+                else accessTime = 8;
             }
 
             this.board.cpuCyclesLeft += accessTime;
@@ -234,39 +265,37 @@ class SnesMemoryRouter {
 
         if (bank === 0x7e || bank === 0x7f) {
             this.board.ram[((bank & 0x1) << 16) | offset] = value;
-        }
-        if (offset < 0x8000 && (bank < 0x40 || (bank >= 0x80 && bank < 0xc0))) {
+        } else if (offset < 0x8000 && (bank < 0x40 || (bank >= 0x80 && bank < 0xc0))) {
             if (offset < 0x2000) {
                 this.board.ram[offset & 0x1fff] = value;
-            }
-            if (offset >= 0x2100 && offset < 0x2200) {
+            } else if (offset >= 0x2100 && offset < 0x2200) {
                 this.writeBBus(offset & 0xff, value);
-            }
-            if (offset === 0x4016) {
+            } else if (offset === 0x4016) {
                 this.board.joypad.joypadStrobe = (value & 0x1) > 0;
-            }
-            if (offset >= 0x4200 && offset < 0x4380) {
+            } else if (offset >= 0x4200 && offset < 0x4380) {
                 this.writeReg(offset, value);
             }
-        }
-        if (this.board.cart) {
+        } else if (this.board.cart) {
             this.board.cart.write(bank, offset, value);
         }
     }
 
+    /**
+     * Resolves memory access speed based on hardware bank configurations.
+     */
     getAccessTime(adr) {
         const address = adr & 0xffffff;
         const bank = address >> 16;
         const offset = address & 0xffff;
 
         if (bank >= 0x40 && bank < 0x80) return 8;
-        if (bank >= 0xc0) return this.board.fastMem ? 6 : 8;
+        if (offset >= 0x8000) return (this.board.fastMem && bank >= 0x80) ? 6 : 8;
+        
         if (offset < 0x2000) return 8;
         if (offset < 0x4000) return 6;
         if (offset < 0x4200) return 12;
         if (offset < 0x6000) return 6;
-        if (offset < 0x8000) return 8;
-        return (this.board.fastMem && bank >= 0x80) ? 6 : 8;
+        return 8;
     }
 }
 

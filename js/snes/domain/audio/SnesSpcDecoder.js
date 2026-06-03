@@ -9,18 +9,7 @@
  * Depends on: SnesSpcInstructions.js (loaded before this file)
  */
 
-class SnesSpcDecoder {
-    /**
-     * Executes one decoded instruction via the static jump table.
-     * @param {SnesSpc} spc   - The SPC700 processor instance
-     * @param {number}  instr - Opcode byte (0x00–0xFF)
-     * @param {number}  adr   - Primary effective address
-     * @param {number}  adrh  - Secondary effective address
-     */
-    static execute(spc, instr, adr, adrh) {
-        SnesSpcDecoder.TABLE[instr](spc, adr, adrh, instr);
-    }
-}
+class SnesSpcDecoder {}
 
 // Build the static jump table once — shared by every SnesSpc instance.
 {

@@ -40,8 +40,8 @@ class SnesPpu {
         this.resolvedLayer = 0;
         this.resolvedPixel = 0;
 
-        // RGB Output (512x240 pixels)
-        this.pixelOutput = new Uint16Array(512 * 3 * 240);
+        // Packed RGBA Output (512x240 pixels)
+        this.pixelOutput = new Uint32Array(512 * 240);
 
         this.reset();
     }
