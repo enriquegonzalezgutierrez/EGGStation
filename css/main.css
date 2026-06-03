@@ -1,5 +1,5 @@
 /* 
- * Project: EGGStation - Super Nintendo Entertainment System Emulator
+ * Project: EGGStation - Sega & SNES Multi-System Emulator
  * Author: Enrique González Gutiérrez
  * 
  * Presentation Layer: EGGStation Style Sheet (Responsive & Immersive CRT Display)
@@ -8,6 +8,10 @@
  * 1. Desktop (Canvas center, glass sidebar, expanding developer suite)
  * 2. Mobile Portrait (Canvas top, D-PAD bottom, sidebar hidden in drawer)
  * 3. Mobile Landscape (Canvas 100%, overlaid translucent D-PAD)
+ * 
+ * PERFORMANCE OPTIMIZATIONS:
+ * - Employs GPU Hardware Layer Hoisting (translate3d, will-change) on display 
+ *   viewports to bypass UI Layout Thrashing during 60Hz canvas updates.
  */
 
 /* ==========================================================================
@@ -186,12 +190,18 @@ canvas {
     object-fit: contain; /* Automatically centers and scales display edge-to-edge */
 }
 
-/* Hardware standard pixel rendering */
-#smsdisplay {
+/* Hardware standard pixel rendering & GPU hardware acceleration triggers */
+#smsdisplay, #webgldisplay {
     image-rendering: -moz-crisp-edges;
     image-rendering: -webkit-crisp-edges;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
+    
+    /* Forces the Canvas onto its own GPU Compositing Layer to bypass UI layout processing */
+    transform: translate3d(0, 0, 0);
+    will-change: transform, contents;
+    backface-visibility: hidden;
+    perspective: 1000;
 }
 
 .hidden {
@@ -225,6 +235,7 @@ canvas {
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-left: 1px solid var(--glass-border);
+    will-change: transform; /* Protects other GPU layers from backdrop redraw drops */
 }
 
 #settings-panel {

@@ -1,29 +1,31 @@
 /**
- * Project: EGGStation - SNES Infrastructure Layer
- * Component: SnesCompatibilityLayer
+ * Project: EGGStation - Super Nintendo (SNES) Infrastructure Layer
+ * Component: SnesCompatibilityLayer (Shim/Adapter for Legacy Core)
+ * Author: Enrique González Gutiérrez
  * 
  * ROLE:
- * This class implements the Adapter pattern to provide a compatible environment
- * for the legacy SNES core. It satisfies the core's dependencies on global 
- * functions (clearArray, log, etc.) without polluting the global namespace 
- * permanently or allowing other systems to conflict with them.
+ * This class implements the Adapter pattern to satisfy the legacy SNES core's 
+ * dependencies on global functions (clearArray, log, hex formatters, etc.).
+ * It injects them safely into the global window namespace prior to loading 
+ * the legacy cpu.js/pipu.js files, ensuring smooth, error-free execution.
  * 
  * SOLID Principles:
- * - SRP: Handles only legacy core compatibility and utility formatting.
- * - OCP: Allows the legacy core to run without modifying its internal source code.
+ * - SRP: Handles exclusively global namespace shim injection and utility logging.
+ * - OCP: Allows the legacy core to run without modifying its internal legacy source code.
  */
 
 class SnesCompatibilityLayer {
     /**
-     * Injects required utilities into the global scope.
-     * This is necessary because the legacy core (pipu.js, cpu.js) was 
-     * authored to expect these functions at the window level.
+     * Injects required utilities into the global window scope.
+     * This is necessary because the unrefactored legacy core (pipu.js, cpu.js, snes.js) 
+     * was authored to expect these functions at the window level.
      */
     static inject() {
         if (window.SnesCompatibilityInjected) return;
 
         console.log("[EGGStation::SNES] Injecting Legacy Compatibility Layer...");
 
+        // Inject core expected helpers into global scope
         window.clearArray = this.clearArray;
         window.log = this.log;
         window.getByteRep = this.getByteRep;
@@ -34,9 +36,9 @@ class SnesCompatibilityLayer {
     }
 
     /**
-     * Efficiently zeros out typed arrays.
-     * Required by: pipu.js, apu.js, snes.js
-     * @param {TypedArray|Array} arr 
+     * Efficiently zeros out typed arrays or standard arrays.
+     * Required by: pipu.js, apu.js, snes.js, spc.js, dsp.js
+     * @param {TypedArray|Array} arr - The array target to clear.
      */
     static clearArray(arr) {
         if (!arr) return;
@@ -50,8 +52,8 @@ class SnesCompatibilityLayer {
     }
 
     /**
-     * Bridges internal hardware logs to the EGGStation diagnostic terminal.
-     * @param {string} text 
+     * Bridges internal hardware logs from the legacy core to the EGGStation diagnostic terminal.
+     * @param {string} text - Log text string.
      */
     static log(text) {
         const terminal = document.getElementById("log");
@@ -65,20 +67,21 @@ class SnesCompatibilityLayer {
 
     /**
      * Hexadecimal Formatters for Debugging and Disassembly.
+     * Required by: trace.js and internal disassembler traces.
      */
     static getByteRep(val) {
-        return (val & 0xFF).toString(16).padStart(2, '0').toUpperCase();
+        return ("0" + val.toString(16)).slice(-2).toUpperCase();
     }
 
     static getWordRep(val) {
-        return (val & 0xFFFF).toString(16).padStart(4, '0').toUpperCase();
+        return ("000" + val.toString(16)).slice(-4).toUpperCase();
     }
 
     static getLongRep(val) {
-        return (val & 0xFFFFFF).toString(16).padStart(6, '0').toUpperCase();
+        return ("00000" + val.toString(16)).slice(-6).toUpperCase();
     }
 }
 
-// Immediate injection to ensure pipu.js/cpu.js constructors don't fail 
-// when called by SnesOrchestrator.
+// Immediate injection to ensure pipu.js/cpu.js/snes.js constructors don't fail 
+// when loaded by index.html and accessed by SnesOrchestrator.
 SnesCompatibilityLayer.inject();

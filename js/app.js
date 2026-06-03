@@ -2,12 +2,12 @@
  * Project: EGGStation - Sega & SNES Multi-System Emulator
  * Author: Enrique González Gutiérrez
  * 
- * Application Entry Point: Composition Root, Welcome Banner, & Console Swapper (Debugger Purge)
+ * Application Entry Point: Composition Root, Welcome Banner, & Console Swapper
  * 
  * This file serves as the system Bootstrapper. It coordinates the hot-swapping 
  * between the Sega Master System, Sega Genesis, and Super Nintendo (SNES) emulators
  * dynamically, tearing down hardware registers, cleaning event listeners, and closing 
- * active audio pipelines on-the-fly to guarantee zero leakages.
+ * active audio pipelines on-the-fly to guarantee zero leakages and stable 60 FPS.
  * 
  * SOLID Principles:
  * - Single Responsibility Principle (SRP): Concentrates global system swapper
@@ -77,12 +77,20 @@ function bootConsole(consoleType) {
 
     // 1. Safe Teardown of the running console
     if (activeOrchestrator) {
-        console.log(`[EGGStation::Swapper] Active orchestrator found. Cancelling animation loop ID: ${activeOrchestrator.animationFrameId}`);
-        if (activeOrchestrator.animationFrameId) {
-            cancelAnimationFrame(activeOrchestrator.animationFrameId);
+        console.log(`[EGGStation::Swapper] Active orchestrator found. Stopping loop...`);
+        
+        // CRITICAL PERFORMANCE FIX: Terminate previous animation frame loop immediately
+        activeOrchestrator.isRunning = false;
+        if (typeof activeOrchestrator.stop === 'function') {
+            activeOrchestrator.stop();
         }
         
-        // Corrected: Safe Close checks state to prevent close-after-close state exceptions
+        if (activeOrchestrator.animationFrameId) {
+            cancelAnimationFrame(activeOrchestrator.animationFrameId);
+            activeOrchestrator.animationFrameId = null;
+        }
+        
+        // Close audio contexts to release CPU threads and browser audio channels
         if (activeOrchestrator.psg && activeOrchestrator.psg.context && activeOrchestrator.psg.context.state !== 'closed') {
             console.log(`[EGGStation::Audio] Closing active SMS audio context...`);
             activeOrchestrator.psg.context.close().catch(() => {});
@@ -93,9 +101,9 @@ function bootConsole(consoleType) {
             activeOrchestrator.audioCtx.close().catch(() => {});
         }
 
-        if (activeOrchestrator.dsp && activeOrchestrator.dsp.context && activeOrchestrator.dsp.context.state !== 'closed') {
+        if (activeOrchestrator.audioProcessor && activeOrchestrator.audioProcessor.audioCtx && activeOrchestrator.audioProcessor.audioCtx.state !== 'closed') {
             console.log(`[EGGStation::Audio] Closing active SNES audio context...`);
-            activeOrchestrator.dsp.context.close().catch(() => {});
+            activeOrchestrator.audioProcessor.audioCtx.close().catch(() => {});
         }
     }
 
@@ -261,8 +269,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (activeOrchestrator.audioCtx && activeOrchestrator.audioCtx.state !== 'closed') {
                     activeOrchestrator.audioCtx.close().catch(() => {});
                 }
-                if (activeOrchestrator.dsp && activeOrchestrator.dsp.context && activeOrchestrator.dsp.context.state !== 'closed') {
-                    activeOrchestrator.dsp.context.close().catch(() => {});
+                if (activeOrchestrator.audioProcessor && activeOrchestrator.audioProcessor.audioCtx && activeOrchestrator.audioProcessor.audioCtx.state !== 'closed') {
+                    activeOrchestrator.audioProcessor.audioCtx.close().catch(() => {});
                 }
             }
 

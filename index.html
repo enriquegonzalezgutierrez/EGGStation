@@ -137,7 +137,6 @@
                         <option value="4">Scale4X (Cartoon Smoothing)</option>
                         <option value="5">NTSC Analog Bleed</option>
                         <option value="6">WebGL2: CRT-Royale Shader</option>
-                        <option value="7">Sega 3D Glasses (Anaglyph Red/Cyan)</option>
                     </select>
                 </div>
                 
@@ -243,48 +242,23 @@
     <script src="js/genesis/presentation/GenesisUIController.js"></script>
 
     <!-- ========================================================= -->
-    <!-- SUPER NINTENDO (SNES) CORE - Clean DDD Architecture       -->
+    <!-- SUPER NINTENDO (SNES) CORE - Adapters & Stable Engine     -->
     <!-- ========================================================= -->
-    <!-- 1. Infrastructure Layer (Adapters, Shims & Processors) -->
+    <!-- 1. Infrastructure Layer (Compatibility Shim & Audio/Video Adapters) -->
     <script src="js/snes/infrastructure/SnesCompatibilityLayer.js"></script>
     <script src="js/snes/infrastructure/video/SnesPostProcessor.js"></script>
     <script src="js/snes/infrastructure/audio/SnesAudioProcessor.js"></script>
     
-    <!-- 2. Domain Layer (Encapsulated Hardware Entities) -->
-    <script src="js/snes/domain/cartridge/SnesCartridge.js"></script>
+    <!-- 2. Original Unrefactored Hardware Core Files (Loaded directly from js/snes/) -->
+    <script src="js/snes/cpu.js"></script>
+    <script src="js/snes/pipu.js"></script>
+    <script src="js/snes/spc.js"></script>
+    <script src="js/snes/dsp.js"></script>
+    <script src="js/snes/apu.js"></script>
+    <script src="js/snes/cart.js"></script>
+    <script src="js/snes/snes.js"></script>
     
-    <!-- Decoupled CPU ALU, Addressing, Operations, Flow, Decoder & Instructions Set Sub-Domain -->
-    <script src="js/snes/domain/cpu/SnesCpuAlu.js"></script>
-    <script src="js/snes/domain/cpu/SnesCpuAddressing.js"></script> 
-    <script src="js/snes/domain/cpu/SnesCpuOperations.js"></script>
-    <script src="js/snes/domain/cpu/SnesCpuFlow.js"></script>
-    <script src="js/snes/domain/cpu/SnesCpuDecoder.js"></script>
-    <script src="js/snes/domain/cpu/SnesCpuInstructions.js"></script>
-    <script src="js/snes/domain/cpu/SnesCpu.js"></script>
-    
-    <!-- Decoupled PPU Backgrounds, Sprites, Mode 7, Math & Compositor Sub-Domain -->
-    <script src="js/snes/domain/video/SnesPpuMathUnit.js"></script>
-    <script src="js/snes/domain/video/SnesPpuRegisterMapper.js"></script>
-    <script src="js/snes/domain/video/SnesPpuMode7Renderer.js"></script>
-    <script src="js/snes/domain/video/SnesPpuSpriteEvaluator.js"></script>
-    <script src="js/snes/domain/video/SnesPpuBackgroundRenderer.js"></script>
-    <script src="js/snes/domain/video/SnesPpuScanlineCompositor.js"></script>
-    <script src="js/snes/domain/video/SnesPpu.js"></script>
-    
-    <script src="js/snes/domain/audio/SnesSpcAddressing.js"></script>
-    <script src="js/snes/domain/audio/SnesSpcInstructions.js"></script>
-    <script src="js/snes/domain/audio/SnesSpcDecoder.js"></script>
-    <script src="js/snes/domain/audio/SnesSpc.js"></script>
-    <script src="js/snes/domain/audio/SnesDsp.js"></script>
-    <script src="js/snes/domain/audio/SnesApu.js"></script>
-    <script src="js/snes/domain/bus/SnesMathUnit.js"></script>
-    <script src="js/snes/domain/bus/SnesJoypad.js"></script>
-    <script src="js/snes/domain/bus/SnesDma.js"></script>
-    <script src="js/snes/domain/bus/SnesClock.js"></script>
-    <script src="js/snes/domain/bus/SnesMemoryRouter.js"></script>
-    <script src="js/snes/domain/bus/SnesMotherboard.js"></script>
-    
-    <!-- 3. Application & Presentation Layers (Mediators) -->
+    <!-- 3. Unified Application & Presentation Layers -->
     <script src="js/snes/application/SnesOrchestrator.js"></script>
     <script src="js/snes/presentation/SnesUIController.js"></script>
 

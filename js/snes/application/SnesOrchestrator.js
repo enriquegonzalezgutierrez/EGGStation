@@ -1,19 +1,16 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Application Layer
- * Component: SnesOrchestrator (Unified Version)
+ * Component: SnesOrchestrator (Adapter Version for Stable Core)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
  * Coordinates the execution, timing, and buffer transfers of the SNES subsystem.
- * It adheres to the unified visual rendering contract by passing explicit 
- * physical coordinates (512x224/239) to the SnesPostProcessor, matching the 
- * interface design of Sega Genesis and Master System.
+ * It acts as an Adapter to bridge the original unrefactored SNES core output
+ * (Uint16Array RGB) to the EGGStation viewport, PostProcessor and AudioProcessor.
  * 
  * SOLID Principles:
- * - Liskov Substitution Principle (LSP): Integrates seamlessly with the 
- *   standardized blit interface.
- * - Single Responsibility Principle (SRP): Manages orchestration state, loop rates,
- *   and buffer pipeline routing.
+ * - Liskov Substitution Principle (LSP): Fully compatible with EGGStation blit interfaces.
+ * - Single Responsibility Principle (SRP): Manages orchestration state and loop rates.
  */
 
 class SnesOrchestrator {
@@ -23,13 +20,20 @@ class SnesOrchestrator {
      * @param {Function} fpsUpdateCallback - Diagnostics hook to display FPS.
      */
     constructor(videoContext, glContext, fpsUpdateCallback) {
-        // Domain Core (Legacy Core Engine)
-        this.hardware = new SnesMotherboard();
+        // Domain Core: Instantiate original unrefactored "Snes" class
+        this.hardware = new Snes();
         
         // Context Dependencies
         this.ctx = videoContext;
         this.gl = glContext;
         this.onFpsUpdate = fpsUpdateCallback;
+
+        // CRITICAL RESOLUTION FIX: Forcefully resize the canvas to match SNES original output expectations
+        this.ctx.canvas.width = 512;
+        this.ctx.canvas.height = 480;
+
+        // Pre-allocated Canvas ImageData for high-speed 2D direct blitting (60 FPS path)
+        this.imgData = this.ctx.createImageData(512, 480);
 
         // Standardized Infrastructure Services
         this.postProcessor = new SnesPostProcessor(this.gl);
@@ -49,12 +53,12 @@ class SnesOrchestrator {
         this.fpsCount = 0;
         this.fpsTimer = 0;
 
-        // Pre-allocated GC-Free Audio Transfer Buffers (44100Hz / 60fps = 735 samples)
-        this.samplesPerFrame = 735;
-        this.transferBufferL = new Float32Array(this.samplesPerFrame);
-        this.transferBufferR = new Float32Array(this.samplesPerFrame);
+        // CRITICAL AUDIO SPEED FIX: Pre-allocated Float64Array to match original apu.js expectations
+        this.samplesPerFrame = this.audioProcessor.samplesPerFrame;
+        this.transferBufferL = new Float64Array(this.samplesPerFrame);
+        this.transferBufferR = new Float64Array(this.samplesPerFrame);
 
-        console.log("[EGGStation::SNES] Unified Orchestrator Layer Initialized.");
+        console.log("[EGGStation::SNES] Adapter Orchestrator Layer Initialized with Resolution Lock.");
     }
 
     /**
@@ -94,10 +98,10 @@ class SnesOrchestrator {
      */
     loadCartridge(romData, isHirom) {
         try {
-            const cart = SnesCartridge.loadRom(romData, isHirom);
-            if (!cart) throw new Error("ROM parsing failed.");
+            // Call original loader
+            const loaded = this.hardware.loadRom(romData, isHirom);
+            if (!loaded) throw new Error("ROM parsing failed.");
 
-            this.hardware.cart = cart;
             this.hardware.reset(true);
             this.start();
         } catch (error) {
@@ -136,43 +140,42 @@ class SnesOrchestrator {
     }
 
     /**
-     * Diagnostic execution loop. Measures exact millisecond metrics of each subsystem.
+     * Execution loop matching the original emulator's pacing.
      */
     executionLoop(timestamp) {
         if (!this.isRunning) return;
 
         if (!this.isPaused) {
-            // Diagnostics timing markers
-            const tStart = performance.now();
-
-            // 1. Core Hardware Tick
+            // 1. Run original Frame
             this.hardware.runFrame(false);
-            const tCoreEnd = performance.now();
 
-            // 2. Audio DSP stream
-            this.hardware.apu.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
+            // 2. Extract original audio samples
+            this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
             this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
-            const tAudioEnd = performance.now();
 
-            // 3. Standardized Visual Blit
-            const activeWidth = 512;
-            const activeHeight = this.hardware.ppu.frameOverscan ? 239 : 224;
+            // 3. Render Video (Dynamic Blitting routing)
+            const activeHeight = this.hardware.ppu.frameOverscan ? 240 : 225; // PPU overscan lines boundary
 
-            this.postProcessor.blit(
-                this.ctx,
-                this.hardware.ppu.pixelOutput,
-                activeWidth,
-                activeHeight,
-                this.postProcessMode,
-                null
-            );
-            const tVideoEnd = performance.now();
-
-            // Accumulate metrics for reporting
-            this.accumulatedCore += (tCoreEnd - tStart);
-            this.accumulatedAudio += (tAudioEnd - tCoreEnd);
-            this.accumulatedVideo += (tVideoEnd - tAudioEnd);
-            this.measuredFrames++;
+            if (this.postProcessMode === 0 || this.postProcessMode === 1) {
+                // 60 FPS DIRECT PATH: Direct copy of the pixel stream onto the 2D canvas (Zero allocation)
+                // Force canvas resolution boundaries matching direct blit expectations
+                if (this.ctx.canvas.width !== 512 || this.ctx.canvas.height !== 480) {
+                    this.ctx.canvas.width = 512;
+                    this.ctx.canvas.height = 480;
+                }
+                this.hardware.setPixels(this.imgData.data);
+                this.ctx.putImageData(this.imgData, 0, 0);
+            } else {
+                // FILTERED PATH: Delegate to SnesPostProcessor to handle scaling/shaders
+                this.postProcessor.blit(
+                    this.ctx,
+                    this.hardware.ppu.pixelOutput, // Original sequential 3-channel RGB Uint16Array
+                    512,
+                    activeHeight,
+                    this.postProcessMode,
+                    null
+                );
+            }
         }
 
         this.updatePerformanceMetrics(timestamp);
@@ -180,33 +183,32 @@ class SnesOrchestrator {
     }
 
     /**
-     * Modified performance reporting to print diagnostic metrics to the console.
+     * Ultra-fast on-the-fly converter to feed the WebGL post-processing shaders.
      */
-    updatePerformanceMetrics(timestamp) {
-        if (!this.accumulatedCore) {
-            this.accumulatedCore = 0;
-            this.accumulatedAudio = 0;
-            this.accumulatedVideo = 0;
-            this.measuredFrames = 0;
+    convertOriginalRGBToRGBA(src16, dst32, width, height) {
+        let srcIdx = 0;
+        for (let y = 0; y < height; y++) {
+            const dstRow1 = y * 2 * width;
+            const dstRow2 = (y * 2 + 1) * width;
+            
+            for (let x = 0; x < width; x++) {
+                const r = src16[srcIdx];
+                const g = src16[srcIdx + 1];
+                const b = src16[srcIdx + 2];
+                srcIdx += 3;
+                
+                // Pack directly as 32-bit little-endian RGBA (0xFF000000 is Alpha)
+                const pixel = r | (g << 8) | (b << 16) | 0xff000000;
+                dst32[dstRow1 + x] = pixel;
+                dst32[dstRow2 + x] = pixel;
+            }
         }
+    }
 
+    updatePerformanceMetrics(timestamp) {
         this.fpsCount++;
         if (timestamp - this.fpsTimer >= 1000) {
             if (this.onFpsUpdate) this.onFpsUpdate(this.fpsCount);
-            
-            // Print scientific report once per second to the browser console
-            // if (this.measuredFrames > 0) {
-            //     const avgCore = (this.accumulatedCore / this.measuredFrames).toFixed(2);
-            //     const avgAudio = (this.accumulatedAudio / this.measuredFrames).toFixed(2);
-            //     const avgVideo = (this.accumulatedVideo / this.measuredFrames).toFixed(2);
-            //     console.log(`[EGGStation Profile] FPS: ${this.fpsCount} | Avg Frame Time: Core: ${avgCore}ms, Audio: ${avgAudio}ms, Video: ${avgVideo}ms`);
-            // }
-
-            // Reset diagnostics
-            this.accumulatedCore = 0;
-            this.accumulatedAudio = 0;
-            this.accumulatedVideo = 0;
-            this.measuredFrames = 0;
             this.fpsCount = 0;
             this.fpsTimer = timestamp;
         }
@@ -214,9 +216,9 @@ class SnesOrchestrator {
 
     sendInput(buttonIndex, isPressed) {
         if (isPressed) {
-            this.hardware.joypad.setPad1ButtonPressed(buttonIndex);
+            this.hardware.setPad1ButtonPressed(buttonIndex);
         } else {
-            this.hardware.joypad.setPad1ButtonReleased(buttonIndex);
+            this.hardware.setPad1ButtonReleased(buttonIndex);
         }
     }
 

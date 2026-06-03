@@ -1,30 +1,44 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Presentation Layer
- * Component: SnesUIController (DOM & Canvas Toggle Version)
+ * Component: SnesUIController (Legacy Core Adapter Version)
  * Author: Enrique González Gutiérrez
  * 
  * ROLE:
- * Handles DOM events, physical inputs, and coordinates the visibility 
- * swapping between the 2D software Canvas and the WebGL2 hardware Canvas.
+ * Handles DOM events, physical keyboard inputs, mobile virtual gamepads, 
+ * and coordinates the display swapping between the standard 2D Canvas 
+ * and the WebGL2 advanced CRT shader canvas.
+ * 
+ * SOLID Principles:
+ * - SRP: Exclusively maps user actions to emulator hardware inputs and registers UI events.
  */
 
 class SnesUIController {
     /**
-     * @param {SnesOrchestrator} orchestrator 
+     * @param {SnesOrchestrator} orchestrator - The active SNES system adapter.
      */
     constructor(orchestrator) {
         this.orchestrator = orchestrator;
 
-        // SNES Port 1 Input Layout Register Mappings
+        // SNES Controller Port 1 Register Input Mappings
+        // Matches the standard Ricoh 5A22 controller read register mapping index
         this.inputMap = {
-            "z": 0, "a": 1, "shift": 2, "enter": 3,
-            "arrowup": 4, "arrowdown": 5, "arrowleft": 6, "arrowright": 7,
-            "x": 8, "s": 9, "d": 10, "c": 11
+            "z": 0,       // B button
+            "a": 1,       // Y button
+            "shift": 2,   // Select button
+            "enter": 3,   // Start button
+            "arrowup": 4,    // D-Pad Up
+            "arrowdown": 5,  // D-Pad Down
+            "arrowleft": 6,  // D-Pad Left
+            "arrowright": 7, // D-Pad Right
+            "x": 8,       // A button
+            "s": 9,       // X button
+            "d": 10,      // L shoulder trigger
+            "c": 11       // R shoulder trigger
         };
 
         this.initializeUIState();
         this.bindEvents();
-        console.log("[EGGStation::SNES] UI Presentation Mediator with Canvas Toggle active.");
+        console.log("[EGGStation::SNES] UI Presentation Mediator with Canvas Toggle initialized.");
     }
 
     /**
@@ -36,14 +50,14 @@ class SnesUIController {
         if (snesSection) snesSection.classList.remove('hidden');
         if (smsSection) smsSection.classList.add('hidden');
 
-        // Capture active filter selections on startup
+        // Capture active filter selections on startup from EGGStation control panel
         const activeVideoFilter = parseInt(document.getElementById('postProcessSelector')?.value || 0);
         const activeAudioFilter = parseInt(document.getElementById('audioFilterSelector')?.value || 0);
         
         this.updateVideoPipeline(activeVideoFilter);
         this.orchestrator.setAudioFilterMode(activeAudioFilter);
 
-        // Sync shader defaults
+        // Sync CRT shader defaults
         const curvature = document.getElementById('sh-curvature')?.value || 90;
         const scanlines = document.getElementById('sh-scanlines')?.value || 38;
         this.orchestrator.updateShaderUniforms(curvature / 100, scanlines / 100);
@@ -63,7 +77,7 @@ class SnesUIController {
         loaderBtn?.addEventListener('click', () => fileInput?.click());
         fileInput?.addEventListener('change', (e) => this.onFileSelected(e));
 
-        // Video filter selector triggers the UI Pipeline update
+        // Video filter selector triggers the UI Canvas visibility toggle
         videoSelector?.addEventListener('change', (e) => {
             this.updateVideoPipeline(parseInt(e.target.value));
         });
@@ -82,8 +96,8 @@ class SnesUIController {
     }
 
     /**
-     * UNIFIED CANVAS TOGGLE (Standardized with SMS/MD UI Controllers)
-     * Swaps display canvas DOM visibility based on the active render mode.
+     * UNIFIED CANVAS TOGGLE
+     * Swaps display canvas DOM visibility based on the active post-processing selection.
      */
     updateVideoPipeline(mode) {
         this.orchestrator.setPostProcessMode(mode);
@@ -93,7 +107,7 @@ class SnesUIController {
 
         if (!videoCanvas || !glCanvas) return;
 
-        // Mode 6 is WebGL2, any other mode is 2D Canvas
+        // Mode 6 is WebGL2 CRT Shader, any other mode is mapped to the 2D Canvas
         if (mode === 6) {
             videoCanvas.classList.add("hidden");
             glCanvas.classList.remove("hidden");
@@ -180,11 +194,16 @@ class SnesUIController {
         });
     }
 
+    /**
+     * Diagnostic developer tab: Updates CPU registers directly on the DOM grid.
+     */
     updateDebuggerUI() {
         const grid = document.getElementById('reg-grid');
         if (!grid || !this.orchestrator.isRunning) return;
 
         const cpu = this.orchestrator.hardware.cpu;
+        
+        // Formats absolute 24-bit Program Counter (Bank K + PC) and standard 16-bit registers
         grid.innerHTML = `
             <div class="reg-item"><span>PC:</span> $${getLongRep((cpu.r[1] << 16) | cpu.br[4])}</div>
             <div class="reg-item"><span>A:</span> $${getWordRep(cpu.br[0])}</div>
