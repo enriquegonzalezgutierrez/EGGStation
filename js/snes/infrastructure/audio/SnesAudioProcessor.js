@@ -20,7 +20,7 @@ class SnesAudioProcessor {
         // Initialize Web Audio API Context
         this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
-        // Setup samples rate depending on host context (e.g. 44100 / 60 = 735)
+        // Exact samples rate matching host context (e.g. 44100 / 60 = 735)
         this.samplesPerFrame = this.audioCtx.sampleRate / 60;
 
         // Legacy Lightweight Ring Buffer (Power of 2 size for high-speed bitwise masking)

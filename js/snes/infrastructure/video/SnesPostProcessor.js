@@ -2,13 +2,12 @@
  * Project: EGGStation - Super Nintendo (SNES) Post-Processor
  * Author: Enrique González Gutiérrez
  * 
- * Infrastructure Layer: SNES VDP Post-Processor Service (Legacy Adapter Version)
+ * Infrastructure Layer: SNES VDP Post-Processor Service (Stable 60 FPS Version)
  * 
  * ROLE:
  * Standardizes the SNES video rendering pipeline. 
- * Converts the legacy SNES 16-bit sequential RGB Uint16Array buffer to standard RGBA,
- * performs Vertical Line Doubling, and processes pixels through zero-allocation CPU scalers 
- * or a WebGL2 CRT-Royale Shader.
+ * Processes 32-bit RGBA packed arrays through zero-allocation CPU scalers 
+ * (Scale2X, Scale4X, NTSC Bleed) or WebGL2 CRT-Royale Shader.
  * 
  * SOLID Principles:
  * - Liskov Substitution Principle (LSP): Fully compatible with the EGGStation 
@@ -71,7 +70,6 @@ class SnesPostProcessor {
             }
         `;
 
-        // Shader mathematically identical to Sega Master System & Genesis
         const fsSource = `#version 300 es
             precision highp float;
             in vec2 vTexCoord;
@@ -203,27 +201,17 @@ class SnesPostProcessor {
     }
 
     // ========================================================================
-    // STANDARD 2D CPU SCALERS & FORMATTERS
+    // STANDARD 2D CPU SCALERS & FORMATTERS (Native 32-bit packed RGBA)
     // ========================================================================
 
-    /**
-     * Adaptador para el núcleo original: Convierte el Uint16Array secuencial (RGB) de SNES
-     * en un búfer compatible RGBA de 32-bits listo para los filtros y WebGL.
-     */
-    convertLegacyRGBToRGBA(src16, dst32, width, height) {
-        let srcIdx = 0;
+    convertRGBToRGBA(src32, dst32, width, height) {
         for (let y = 0; y < height; y++) {
+            const srcRow = y * width;
             const dstRow1 = y * 2 * width;
             const dstRow2 = (y * 2 + 1) * width;
             
             for (let x = 0; x < width; x++) {
-                const r = src16[srcIdx];
-                const g = src16[srcIdx + 1];
-                const b = src16[srcIdx + 2];
-                srcIdx += 3;
-                
-                // Pack directly as 32-bit little-endian RGBA (0xFF000000 is Alpha)
-                const pixel = r | (g << 8) | (b << 16) | 0xff000000;
+                const pixel = src32[srcRow + x];
                 dst32[dstRow1 + x] = pixel;
                 dst32[dstRow2 + x] = pixel;
             }
@@ -350,16 +338,17 @@ class SnesPostProcessor {
 
         // 1. GPU Mode 6: WebGL CRT-Royale Shader
         if (postProcessMode === 6 && this.webglInitialized) {
-            if (!this.rgba32) {
-                this.rgba32 = new Uint32Array(this.rgbaBuffer.buffer);
-            }
-            this.convertLegacyRGBToRGBA(src, this.rgba32, width, height);
-
             const gl = this.gl;
             if (gl.canvas.width !== width || gl.canvas.height !== stretchedHeight) {
                 gl.canvas.width = width;
                 gl.canvas.height = stretchedHeight;
             }
+            
+            // Fast direct 32-bit transfer using fast subarray
+            const targetLength = width * height;
+            const glbBuffer32 = new Uint32Array(this.rgbaBuffer.buffer, 0, targetLength);
+            glbBuffer32.set(src.subarray(0, targetLength)); // High speed native C++ array copy
+
             this.renderGL(width, stretchedHeight);
             return;
         }
@@ -391,23 +380,23 @@ class SnesPostProcessor {
         // Create a 32-bit view of target canvas image data buffer
         const dst32 = new Uint32Array(this.glbImgData.data.buffer);
 
-        // For direct Mode 0 & 1, SnesOrchestrator uses direct canvas writes, 
-        // but if called here, we apply conversion.
-        if (!this.rgba32) {
-            this.rgba32 = new Uint32Array(this.rgbaBuffer.buffer);
-        }
-        this.convertLegacyRGBToRGBA(src, this.rgba32, width, height);
-
         if (postProcessMode === 0 || postProcessMode === 1) {
-            dst32.set(this.rgba32);
-        } else if (postProcessMode === 2) { 
-            this.scale2X(this.rgba32, dst32, width, stretchedHeight);
-        } else if (postProcessMode === 3) { 
-            this.applyScanlines(this.rgba32, dst32, width, stretchedHeight);
-        } else if (postProcessMode === 4) { 
-            this.scale4X(this.rgba32, dst32, width, stretchedHeight);
-        } else if (postProcessMode === 5) { 
-            this.applyNtsdBleed(this.rgba32, dst32, width, stretchedHeight);
+            dst32.set(src.subarray(0, width * height)); // Direct 32-bit fast copy
+        } else {
+            // Write first to internal temporary rgbaBuffer view
+            const targetLength = width * height;
+            const rgba32 = new Uint32Array(this.rgbaBuffer.buffer, 0, targetLength);
+            rgba32.set(src.subarray(0, targetLength)); // Direct 32-bit fast copy
+
+            if (postProcessMode === 2) { 
+                this.scale2X(rgba32, dst32, width, stretchedHeight);
+            } else if (postProcessMode === 3) { 
+                this.applyScanlines(rgba32, dst32, width, stretchedHeight);
+            } else if (postProcessMode === 4) { 
+                this.scale4X(rgba32, dst32, width, stretchedHeight);
+            } else if (postProcessMode === 5) { 
+                this.applyNtsdBleed(rgba32, dst32, width, stretchedHeight);
+            }
         }
 
         ctx.putImageData(this.glbImgData, 0, 0);

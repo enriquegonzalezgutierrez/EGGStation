@@ -54,7 +54,7 @@ class SnesOrchestrator {
         this.fpsTimer = 0;
 
         // CRITICAL AUDIO SPEED FIX: Pre-allocated Float64Array to match original apu.js expectations
-        this.samplesPerFrame = this.audioProcessor.samplesPerFrame;
+        this.samplesPerFrame = Math.floor(this.audioProcessor.samplesPerFrame);
         this.transferBufferL = new Float64Array(this.samplesPerFrame);
         this.transferBufferR = new Float64Array(this.samplesPerFrame);
 
@@ -140,7 +140,7 @@ class SnesOrchestrator {
     }
 
     /**
-     * Execution loop matching the original emulator's pacing.
+     * Execution loop matching EGGStation standard pacing.
      */
     executionLoop(timestamp) {
         if (!this.isRunning) return;
@@ -149,16 +149,16 @@ class SnesOrchestrator {
             // 1. Run original Frame
             this.hardware.runFrame(false);
 
-            // 2. Extract original audio samples
+            // 2. Extract original audio samples (Direct transfer)
             this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
             this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
 
             // 3. Render Video (Dynamic Blitting routing)
-            const activeHeight = this.hardware.ppu.frameOverscan ? 240 : 225; // PPU overscan lines boundary
+            const activeHeight = this.hardware.ppu.frameOverscan ? 240 : 224; // PPU overscan lines boundary
 
             if (this.postProcessMode === 0 || this.postProcessMode === 1) {
                 // 60 FPS DIRECT PATH: Direct copy of the pixel stream onto the 2D canvas (Zero allocation)
-                // Force canvas resolution boundaries matching direct blit expectations
+                // Force canvas resolution boundaries matching PPU output
                 if (this.ctx.canvas.width !== 512 || this.ctx.canvas.height !== 480) {
                     this.ctx.canvas.width = 512;
                     this.ctx.canvas.height = 480;
@@ -166,10 +166,14 @@ class SnesOrchestrator {
                 this.hardware.setPixels(this.imgData.data);
                 this.ctx.putImageData(this.imgData, 0, 0);
             } else {
-                // FILTERED PATH: Delegate to SnesPostProcessor to handle scaling/shaders
+                // FILTERED PATH: Convert original 16-bit RGB stream to RGBA texture on the fly
+                if (!this.rgba32) {
+                    this.rgba32 = new Uint32Array(this.postProcessor.rgbaBuffer.buffer);
+                }
+                this.convertOriginalRGBToRGBA(this.hardware.ppu.pixelOutput, this.rgba32, 512, activeHeight);
                 this.postProcessor.blit(
                     this.ctx,
-                    this.hardware.ppu.pixelOutput, // Original sequential 3-channel RGB Uint16Array
+                    this.rgba32, // Passes the 32-bit converted RGBA array
                     512,
                     activeHeight,
                     this.postProcessMode,
