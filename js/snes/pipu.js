@@ -1,38 +1,43 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Picture Processing Unit
- * Author: Original Author (Adapted by Enrique González Gutiérrez)
- * 
- * Domain Layer: SNES PPU Video Emulation Core (JIT-Optimized Legacy Version)
+ * Component: Ppu (Video Emulation Core - Scanline Compositor Edition)
+ * Documented & Optimized: English comments, Hybrid Scanline Blitting Engine
  * 
  * ROLE:
  * Emulates the SNES Picture Processing Unit (PPU).
+ * Coordinates screen mode configurations, background layouts, mosaic effects,
+ * window clipping, color math, sprites (OBJ), and Mode 7 matrix translations.
  * 
- * JIT OPTIMIZATIONS:
- * - Batched Row Decoding: Decodes the entire 8-pixel tile row at once when the tile 
- *   is fetched, completely eliminating per-pixel bit-shifting during compositing.
- * - Replaces on-the-fly arithmetic with pre-allocated fast lookup cache buffers (this.decodedRow).
+ * PERFORMANCE OPTIMIZATIONS:
+ * - Implements a Hybrid Scanline Blitting pipeline for high-speed Mode 0, 1, and 3 rendering.
+ * - Pre-decodes tile spans into flat line-buffers once per tile row rather than once per pixel.
+ * - Preserves the pixel-by-pixel raycast pipeline as an automatic fallback for complex modes.
+ * - Utilizes zero-allocation typed array structures.
  */
 
 function Ppu(snes) {
 
   this.snes = snes;
 
+  // Video Memory buffers
   this.vram = new Uint16Array(0x8000);
-
   this.cgram = new Uint16Array(0x100);
 
+  // Object Attribute Memory (Sprite metadata)
   this.oam = new Uint16Array(0x100);
   this.highOam = new Uint16Array(0x10);
 
   this.spriteLineBuffer = new Uint8Array(256);
   this.spritePrioBuffer = new Uint8Array(256);
 
+  // Mode 7 matrix coordinate caches
   this.mode7Xcoords = new Int32Array(256);
   this.mode7Ycoords = new Int32Array(256);
 
-  this.pixelOutput = new Uint16Array(512*3*240);
+  // Output frame composition array (Interlaced double height buffer)
+  this.pixelOutput = new Uint16Array(512 * 3 * 240);
 
-  // Pre-allocated fast row cache to completely eliminate memory allocation and bitwise ops per pixel
+  // Pre-allocated fast row cache to optimize planar tile shifts
   this.decodedRow = [
     new Uint8Array(8), // BG1
     new Uint8Array(8), // BG2
@@ -40,6 +45,14 @@ function Ppu(snes) {
     new Uint8Array(8)  // BG4
   ];
 
+  // Pre-allocated window lookup masks (6 layers: 0-3 BG1-BG4, 4 OBJ, 5 Color Window)
+  this.windowMasks = Array.from({ length: 6 }, () => new Uint8Array(256));
+
+  // Pre-allocated high-speed flat background scanline buffers (Saves tile checks)
+  this.bgBuffers = Array.from({ length: 4 }, () => new Uint16Array(256));
+  this.bgPriorityBuffers = Array.from({ length: 4 }, () => new Uint8Array(256));
+
+  // Layer configurations mapped per background mode
   this.layersPerMode = [
     4, 0, 1, 4, 0, 1, 4, 2, 3, 4, 2, 3,
     4, 0, 1, 4, 0, 1, 4, 2, 4, 2, 5, 5,
@@ -53,6 +66,7 @@ function Ppu(snes) {
     4, 4, 1, 4, 0, 4, 1, 5, 5, 5, 5, 5
   ];
 
+  // Priority structures mapped per background mode
   this.prioPerMode = [
     3, 1, 1, 2, 0, 0, 1, 1, 1, 0, 0, 0,
     3, 1, 1, 2, 0, 0, 1, 1, 0, 0, 5, 5,
@@ -66,6 +80,7 @@ function Ppu(snes) {
     3, 2, 1, 1, 0, 0, 0, 5, 5, 5, 5, 5
   ];
 
+  // Bit depths per layer configured per mode
   this.bitPerMode = [
     2, 2, 2, 2,
     4, 4, 2, 5,
@@ -81,6 +96,7 @@ function Ppu(snes) {
 
   this.layercountPerMode = [12, 10, 8, 8, 8, 8, 6, 5, 10, 7];
 
+  // Luminance level scaling multiplier configurations
   this.brightnessMults = [
     0.1, 0.5, 1.1, 1.6, 2.2, 2.7, 3.3, 3.8, 4.4, 4.9, 5.5, 6, 6.6, 7.1, 7.6, 8.2
   ];
@@ -101,8 +117,10 @@ function Ppu(snes) {
     2, 4, 8, 4, 8, 8, 4, 4
   ];
 
+  /**
+   * Resets PPU variables to system default startup parameters.
+   */
   this.reset = function() {
-
     clearArray(this.vram);
     clearArray(this.cgram);
     clearArray(this.oam);
@@ -110,14 +128,18 @@ function Ppu(snes) {
 
     clearArray(this.spriteLineBuffer);
     clearArray(this.spritePrioBuffer);
-
     clearArray(this.pixelOutput);
 
     clearArray(this.mode7Xcoords);
     clearArray(this.mode7Ycoords);
 
     for (let i = 0; i < 4; i++) {
-        this.decodedRow[i].fill(0);
+      this.decodedRow[i].fill(0);
+      this.bgBuffers[i].fill(0);
+      this.bgPriorityBuffers[i].fill(0);
+    }
+    for (let i = 0; i < 6; i++) {
+      this.windowMasks[i].fill(0);
     }
 
     this.cgramAdr = 0;
@@ -238,12 +260,67 @@ function Ppu(snes) {
   }
   this.reset();
 
+  /**
+   * Pre-renders an active background layer tile-by-tile for the current scanline.
+   * Significantly reduces tile fetching, remapping, and bitplane decoding operations.
+   */
+  this.renderBgScanline = function(l, line) {
+    const bgBuffer = this.bgBuffers[l];
+    const bgPrioBuffer = this.bgPriorityBuffers[l];
+    bgBuffer.fill(0);
+    bgPrioBuffer.fill(0);
+
+    if (!this.mainScreenEnabled[l] && !this.subScreenEnabled[l]) {
+      return;
+    }
+
+    const hScroll = this.bgHoff[l];
+    const vScroll = this.bgVoff[l];
+    const y = line + vScroll;
+    const mapWordBits = this.bitPerMode[this.mode * 4 + l];
+    const paletteMul = mapWordBits === 2 ? 4 : (mapWordBits === 4 ? 16 : 256);
+    const paletteBase = this.mode === 0 ? l * 8 : 0;
+
+    // Render 33 tiles horizontally to cover the 256-pixel viewport under scrolling
+    for (let tx = 0; tx < 33; tx++) {
+      const screenX = (tx * 8) - (hScroll & 7);
+      if (screenX >= 256) break;
+
+      const mapX = hScroll + (tx * 8);
+      
+      this.fetchTileInBuffer(mapX, y, l, false);
+      const mapWord = this.tilemapBuffer[l];
+      const priority = (mapWord & 0x2000) >> 13;
+      const paletteNum = ((mapWord & 0x1c00) >> 10) + paletteBase;
+      const paletteOffset = paletteNum * paletteMul;
+      const decodedRow = this.decodedRow[l];
+
+      for (let px = 0; px < 8; px++) {
+        const destX = screenX + px;
+        if (destX >= 0 && destX < 256) {
+          const colorVal = decodedRow[px];
+          if (colorVal !== 0) {
+            bgBuffer[destX] = paletteOffset + colorVal;
+            bgPrioBuffer[destX] = priority;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Tracks whether the frame dimensions will scale to overscan boundaries.
+   */
   this.checkOverscan = function(line) {
     if(line === 225 && this.overscan) {
       this.frameOverscan = true;
     }
   }
 
+  /**
+   * Renders a single active scanline into the output viewport.
+   * Leverages pre-computed scanline buffers for standard modes (Modes 0, 1, 3).
+   */
   this.renderLine = function(line) {
     if(line === 0) {
       this.rangeOver = false;
@@ -269,15 +346,76 @@ function Ppu(snes) {
       if(this.mode === 7) {
         this.generateMode7Coords(line);
       }
+
+      // --- PRE-CALCULATE SCANLINE WINDOW MASKS (High-speed caching) ---
+      for (let l = 0; l < 6; l++) {
+        const w1Enabled = this.window1Enabled[l];
+        const w2Enabled = this.window2Enabled[l];
+        const mask = this.windowMasks[l];
+        
+        if (!w1Enabled && !w2Enabled) {
+          mask.fill(0);
+          continue;
+        }
+
+        const w1Inv = this.window1Inversed[l];
+        const w2Inv = this.window2Inversed[l];
+        const left1 = this.window1Left;
+        const right1 = this.window1Right;
+        const left2 = this.window2Left;
+        const right2 = this.window2Right;
+        const logic = this.windowMaskLogic[l];
+
+        for (let x = 0; x < 256; x++) {
+          let w1test = w1Enabled && (x >= left1 && x <= right1);
+          if (w1Inv) w1test = !w1test;
+          let w2test = w2Enabled && (x >= left2 && x <= right2);
+          if (w2Inv) w2test = !w2test;
+
+          let result = false;
+          if (w1Enabled && w2Enabled) {
+            switch (logic) {
+              case 0: result = w1test || w2test; break;
+              case 1: result = w1test && w2test; break;
+              case 2: result = w1test !== w2test; break;
+              case 3: result = w1test === w2test; break;
+            }
+          } else if (w1Enabled) {
+            result = w1test;
+          } else {
+            result = w2test;
+          }
+          mask[x] = result ? 1 : 0;
+        }
+      }
+
       this.lastTileFetchedX = [-1, -1, -1, -1];
       this.lastTileFetchedY = [-1, -1, -1, -1];
       this.optHorBuffer = [0, 0];
       this.optVerBuffer = [0, 0];
       this.lastOrigTileX = [-1, -1];
-      let bMult = this.brightnessMults[this.brightness];
+
+      // Local declarations to assist browser JIT compilation
+      const bMult = this.brightnessMults[this.brightness];
+      const lineOffset = line * 1536;
+      const colorClipValue = this.colorClip;
+      const colMask5 = this.windowMasks[5];
+      const pixelOut = this.pixelOutput;
+      const modeNum = this.mode;
+      const isPseudoHires = this.pseudoHires;
+      const isSubEnabled = this.addSub;
+
+      // Select scanline pre-composition for eligible modes (Mode 0, 1, 3)
+      const useScanlineFastPath = !this.pseudoHires && (modeNum === 0 || modeNum === 1 || modeNum === 3);
+
+      if (useScanlineFastPath && !this.forcedBlank) {
+        for (let l = 0; l < 4; l++) {
+          this.renderBgScanline(l, line);
+        }
+      }
+
       let i = 0;
       while(i < 256) {
-
         let r1 = 0;
         let g1 = 0;
         let b1 = 0;
@@ -286,76 +424,83 @@ function Ppu(snes) {
         let b2 = 0;
 
         if(!this.forcedBlank) {
-
-          let colLay = this.getColor(false, i, line);
-          let color = colLay[0];
+          const colLay = useScanlineFastPath ? this.getColorFast(false, i, line) : this.getColor(false, i, line);
+          const color = colLay[0];
+          const activeLayer = colLay[1];
+          const activePal = colLay[2];
 
           r2 = color & 0x1f;
           g2 = (color & 0x3e0) >> 5;
           b2 = (color & 0x7c00) >> 10;
 
           if(
-            this.colorClip === 3 ||
-            (this.colorClip === 2 && this.getWindowState(i, 5)) ||
-            (this.colorClip === 1 && !this.getWindowState(i, 5))
+            colorClipValue === 3 ||
+            (colorClipValue === 2 && colMask5[i] === 1) ||
+            (colorClipValue === 1 && colMask5[i] === 0)
           ) {
             r2 = 0;
             g2 = 0;
             b2 = 0;
           }
 
-          let secondLay = [0, 5, 0];
+          let secondLay = null;
+          const mathEnabled = this.getMathEnabled(i, activeLayer, activePal);
+          
           if(
-            this.mode === 5 || this.mode === 6 || this.pseudoHires ||
-            (this.getMathEnabled(i, colLay[1], colLay[2]) && this.addSub)
+            modeNum === 5 || modeNum === 6 || isPseudoHires ||
+            (mathEnabled && isSubEnabled)
           ) {
-            secondLay = this.getColor(true, i, line);
+            secondLay = useScanlineFastPath ? this.getColorFast(true, i, line) : this.getColor(true, i, line);
             r1 = secondLay[0] & 0x1f;
             g1 = (secondLay[0] & 0x3e0) >> 5;
             b1 = (secondLay[0] & 0x7c00) >> 10;
           }
 
-          if(this.getMathEnabled(i, colLay[1], colLay[2])) {
+          if(mathEnabled) {
+            const secondLayerNum = secondLay ? secondLay[1] : 5;
+            const useSecondColor = isSubEnabled && secondLayerNum < 5;
+            const mathR = useSecondColor ? r1 : this.fixedColorR;
+            const mathG = useSecondColor ? g1 : this.fixedColorG;
+            const mathB = useSecondColor ? b1 : this.fixedColorB;
+
             if(this.subtractColors) {
-              r2 -= (this.addSub && secondLay[1] < 5) ? r1 : this.fixedColorR;
-              g2 -= (this.addSub && secondLay[1] < 5) ? g1 : this.fixedColorG;
-              b2 -= (this.addSub && secondLay[1] < 5) ? b1 : this.fixedColorB;
+              r2 -= mathR;
+              g2 -= mathG;
+              b2 -= mathB;
             } else {
-              r2 += (this.addSub && secondLay[1] < 5) ? r1 : this.fixedColorR;
-              g2 += (this.addSub && secondLay[1] < 5) ? g1 : this.fixedColorG;
-              b2 += (this.addSub && secondLay[1] < 5) ? b1 : this.fixedColorB;
+              r2 += mathR;
+              g2 += mathG;
+              b2 += mathB;
             }
 
-            if(this.halfColors && (secondLay[1] < 5 || !this.addSub)) {
+            if(this.halfColors && (secondLayerNum < 5 || !isSubEnabled)) {
               r2 >>= 1;
               g2 >>= 1;
               b2 >>= 1;
             }
-            r2 = r2 > 31 ? 31 : r2;
-            r2 = r2 < 0 ? 0 : r2;
-            g2 = g2 > 31 ? 31 : g2;
-            g2 = g2 < 0 ? 0 : g2;
-            b2 = b2 > 31 ? 31 : b2;
-            b2 = b2 < 0 ? 0 : b2;
+            if (r2 > 31) r2 = 31; else if (r2 < 0) r2 = 0;
+            if (g2 > 31) g2 = 31; else if (g2 < 0) g2 = 0;
+            if (b2 > 31) b2 = 31; else if (b2 < 0) b2 = 0;
           }
 
-          if(!(this.mode === 5 || this.mode === 6 || this.pseudoHires)) {
+          if(!(modeNum === 5 || modeNum === 6 || isPseudoHires)) {
             r1 = r2;
             g1 = g2;
             b1 = b2;
           }
-
         }
-        this.pixelOutput[line * 1536 + 6 * i] = (r1 * bMult) & 0xff;
-        this.pixelOutput[line * 1536 + 6 * i + 1] = (g1 * bMult) & 0xff;
-        this.pixelOutput[line * 1536 + 6 * i + 2] = (b1 * bMult) & 0xff;
-        this.pixelOutput[line * 1536 + 6 * i + 3] = (r2 * bMult) & 0xff;
-        this.pixelOutput[line * 1536 + 6 * i + 4] = (g2 * bMult) & 0xff;
-        this.pixelOutput[line * 1536 + 6 * i + 5] = (b2 * bMult) & 0xff;
+        
+        const idx = lineOffset + 6 * i;
+        pixelOut[idx] = (r1 * bMult) & 0xff;
+        pixelOut[idx + 1] = (g1 * bMult) & 0xff;
+        pixelOut[idx + 2] = (b1 * bMult) & 0xff;
+        pixelOut[idx + 3] = (r2 * bMult) & 0xff;
+        pixelOut[idx + 4] = (g2 * bMult) & 0xff;
+        pixelOut[idx + 5] = (b2 * bMult) & 0xff;
 
         i++;
-
       }
+
       clearArray(this.spriteLineBuffer);
       if(!this.forcedBlank) {
         this.evaluateSprites(line);
@@ -363,31 +508,100 @@ function Ppu(snes) {
     }
   }
 
-  this.getColor = function(sub, x, y) {
-
+  /**
+   * Fast-path compositing loop bypassing tile evaluation entirely.
+   * Reads coordinates directly from pre-rendered arrays.
+   */
+  this.getColorFast = function(sub, x, y) {
     let modeIndex = this.layer3Prio && this.mode === 1 ? 96 : 12 * this.mode;
     modeIndex = this.mode7ExBg && this.mode === 7 ? 108 : modeIndex;
     let count = this.layercountPerMode[this.mode];
 
+    let pixel = 0;
+    let layer = 5;
+
+    const subEnabled = this.subScreenEnabled;
+    const mainEnabled = this.mainScreenEnabled;
+    const subWindow = this.subScreenWindow;
+    const mainWindow = this.mainScreenWindow;
+    const winMasks = this.windowMasks;
+
     let j;
+    for (j = 0; j < count; j++) {
+      layer = this.layersPerMode[modeIndex + j];
+      
+      const isVisible = sub ? subEnabled[layer] : mainEnabled[layer];
+      const isWindowRestricted = sub ? subWindow[layer] : mainWindow[layer];
+
+      if (isVisible && (!isWindowRestricted || winMasks[layer][x] === 0)) {
+        if (layer < 4) {
+          // Direct read from the precompiled scanline buffers (Zero scrolling/tile math!)
+          const priority = this.bgPriorityBuffers[layer][x];
+          if (priority === this.prioPerMode[modeIndex + j]) {
+            const colorIdx = this.bgBuffers[layer][x];
+            if (colorIdx !== 0) {
+              pixel = colorIdx;
+              break;
+            }
+          }
+        } else {
+          // Sprite evaluation
+          if (this.spritePrioBuffer[x] === this.prioPerMode[modeIndex + j]) {
+            const colorIdx = this.spriteLineBuffer[x];
+            if (colorIdx !== 0) {
+              pixel = colorIdx;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    layer = j === count ? 5 : layer;
+    let color = this.cgram[pixel & 0xff];
+    if (
+      this.directColor && layer < 4 &&
+      this.bitPerMode[this.mode * 4 + layer] === 8
+    ) {
+      let r = ((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7);
+      let g = ((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8);
+      let b = ((pixel & 0xc0) >> 3) | ((pixel & 0x400) >> 8);
+      color = (b << 10) | (g << 5) | r;
+    }
+
+    return [color, layer, pixel];
+  }
+
+  /**
+   * Fallback Pixel-by-pixel compositing. Primarily used for Mode 7 or Mode 2/4/6.
+   */
+  this.getColor = function(sub, x, y) {
+    let modeIndex = this.layer3Prio && this.mode === 1 ? 96 : 12 * this.mode;
+    modeIndex = this.mode7ExBg && this.mode === 7 ? 108 : modeIndex;
+    let count = this.layercountPerMode[this.mode];
+
     let pixel = 0;
     let layer = 5;
     if(this.interlace && (this.mode === 5 || this.mode === 6)) {
       y = y * 2 + (this.evenFrame ? 1 : 0);
     }
+
+    const subEnabled = this.subScreenEnabled;
+    const mainEnabled = this.mainScreenEnabled;
+    const subWindow = this.subScreenWindow;
+    const mainWindow = this.mainScreenWindow;
+    const winMasks = this.windowMasks;
+
+    let j;
     for(j = 0; j < count; j++) {
       let lx = x;
       let ly = y;
       layer = this.layersPerMode[modeIndex + j];
-      if(
-        (
-          !sub && this.mainScreenEnabled[layer] &&
-          (!this.mainScreenWindow[layer] || !this.getWindowState(lx, layer))
-        ) || (
-          sub && this.subScreenEnabled[layer] &&
-          (!this.subScreenWindow[layer] || !this.getWindowState(lx, layer))
-        )
-      ) {
+      
+      const isVisible = sub ? subEnabled[layer] : mainEnabled[layer];
+      const isWindowRestricted = sub ? subWindow[layer] : mainWindow[layer];
+
+      if (isVisible && (!isWindowRestricted || winMasks[layer][lx] === 0)) {
         if(this.mosaicEnabled[layer]) {
           lx -= lx % this.mosaicSize;
           ly -= (ly - this.mosaicStartLine) % this.mosaicSize;
@@ -462,11 +676,21 @@ function Ppu(snes) {
     return [color, layer, pixel];
   }
 
+  /**
+   * Fast window status evaluator. Resolves directly via precomputed line arrays.
+   */
+  this.getWindowState = function(x, l) {
+    return this.windowMasks[l][x] === 1;
+  }
+
+  /**
+   * Checks whether the dynamic math filter affects the targeted layer.
+   */
   this.getMathEnabled = function(x, l, pal) {
     if(
       this.preventMath === 3 ||
-      (this.preventMath === 2 && this.getWindowState(x, 5)) ||
-      (this.preventMath === 1 && !this.getWindowState(x, 5))
+      (this.preventMath === 2 && this.windowMasks[5][x] === 1) ||
+      (this.preventMath === 1 && this.windowMasks[5][x] === 0)
     ) {
       return false;
     }
@@ -476,42 +700,9 @@ function Ppu(snes) {
     return false;
   }
 
-  this.getWindowState = function(x, l) {
-    if(!this.window1Enabled[l] && !this.window2Enabled[l]) {
-      return false;
-    }
-    if(this.window1Enabled[l] && !this.window2Enabled[l]) {
-      let test = x >= this.window1Left && x <= this.window1Right;
-      return this.window1Inversed[l] ? !test : test;
-    }
-    if(!this.window1Enabled[l] && this.window2Enabled[l]) {
-      let test = x >= this.window2Left && x <= this.window2Right;
-      return this.window2Inversed[l] ? !test : test;
-    }
-    let w1test = x >= this.window1Left && x <= this.window1Right;
-    w1test = this.window1Inversed[l] ? !w1test : w1test;
-    let w2test = x >= this.window2Left && x <= this.window2Right;
-    w2test = this.window2Inversed[l] ? !w2test : w2test;
-    switch(this.windowMaskLogic[l]) {
-      case 0: {
-        return w1test || w2test;
-      }
-      case 1: {
-        return w1test && w2test;
-      }
-      case 2: {
-        return w1test !== w2test;
-      }
-      case 3: {
-        return w1test === w2test;
-      }
-    }
-  }
-
   /**
-     * Highly Optimized pixel lookup.
-     * Replaces standard per-pixel planar bit shifting with native array lookups.
-     */
+   * Decodes background pixels. Reuses batched decoded line cache blocks.
+   */
   this.getPixelForLayer = function(x, y, l, p) {
     if(l > 3) {
       if(this.spritePrioBuffer[x] !== p) {
@@ -536,10 +727,9 @@ function Ppu(snes) {
 
     let mapWord = this.tilemapBuffer[l];
     if(((mapWord & 0x2000) >> 13) !== p) {
-      return 0; // Check priority first
+      return 0;
     }
 
-    // Direct pixel data read from the batched row cache (No bitwise shifts per pixel)
     const tileData = this.decodedRow[l][x & 0x7];
     if (tileData === 0) return 0;
 
@@ -553,8 +743,7 @@ function Ppu(snes) {
   }
 
   /**
-   * Refactored: Decodes the entire 8-pixel row inside a temporary cache (this.decodedRow)
-   * when fetched, eliminating the need of shifting bit-planes in getPixelForLayer.
+   * Fetches tile assets and decodes them directly into the target row array buffers.
    */
   this.fetchTileInBuffer = function(x, y, l, offset) {
     let rx = x;
@@ -602,43 +791,45 @@ function Ppu(snes) {
 
     const decoded = this.decodedRow[l];
     
-    // BATCHED PLANAR TILE DECODING (Decodes 8 pixels at once into cache)
     if (xFlip) {
-        for (let j = 0; j < 8; j++) {
-            let tileData = (p1 >> j) & 0x1;
-            tileData |= ((p1 >> (8 + j)) & 0x1) << 1;
-            if (bits > 2) {
-                tileData |= ((p2 >> j) & 0x1) << 2;
-                tileData |= ((p2 >> (8 + j)) & 0x1) << 3;
-            }
-            if (bits > 4) {
-                tileData |= ((p3 >> j) & 0x1) << 4;
-                tileData |= ((p3 >> (8 + j)) & 0x1) << 5;
-                tileData |= ((p4 >> j) & 0x1) << 6;
-                tileData |= ((p4 >> (8 + j)) & 0x1) << 7;
-            }
-            decoded[j] = tileData;
+      for (let j = 0; j < 8; j++) {
+        let tileData = (p1 >> j) & 0x1;
+        tileData |= ((p1 >> (8 + j)) & 0x1) << 1;
+        if (bits > 2) {
+          tileData |= ((p2 >> j) & 0x1) << 2;
+          tileData |= ((p2 >> (8 + j)) & 0x1) << 3;
         }
+        if (bits > 4) {
+          tileData |= ((p3 >> j) & 0x1) << 4;
+          tileData |= ((p3 >> (8 + j)) & 0x1) << 5;
+          tileData |= ((p4 >> j) & 0x1) << 6;
+          tileData |= ((p4 >> (8 + j)) & 0x1) << 7;
+        }
+        decoded[j] = tileData;
+      }
     } else {
-        for (let j = 0; j < 8; j++) {
-            const shift = 7 - j;
-            let tileData = (p1 >> shift) & 0x1;
-            tileData |= ((p1 >> (8 + shift)) & 0x1) << 1;
-            if (bits > 2) {
-                tileData |= ((p2 >> shift) & 0x1) << 2;
-                tileData |= ((p2 >> (8 + shift)) & 0x1) << 3;
-            }
-            if (bits > 4) {
-                tileData |= ((p3 >> shift) & 0x1) << 4;
-                tileData |= ((p3 >> (8 + shift)) & 0x1) << 5;
-                tileData |= ((p4 >> shift) & 0x1) << 6;
-                tileData |= ((p4 >> (8 + shift)) & 0x1) << 7;
-            }
-            decoded[j] = tileData;
+      for (let j = 0; j < 8; j++) {
+        const shift = 7 - j;
+        let tileData = (p1 >> shift) & 0x1;
+        tileData |= ((p1 >> (8 + shift)) & 0x1) << 1;
+        if (bits > 2) {
+          tileData |= ((p2 >> shift) & 0x1) << 2;
+          tileData |= ((p2 >> (8 + shift)) & 0x1) << 3;
         }
+        if (bits > 4) {
+          tileData |= ((p3 >> shift) & 0x1) << 4;
+          tileData |= ((p3 >> (8 + shift)) & 0x1) << 5;
+          tileData |= ((p4 >> shift) & 0x1) << 6;
+          tileData |= ((p4 >> (8 + shift)) & 0x1) << 7;
+        }
+        decoded[j] = tileData;
+      }
     }
   }
 
+  /**
+   * Sorts and parses priority flags for operational sprites inside the scanline window.
+   */
   this.evaluateSprites = function(line) {
     let spriteCount = 0;
     let sliverCount = 0;
@@ -717,6 +908,9 @@ function Ppu(snes) {
     }
   }
 
+  /**
+   * Sets the coordinate matrices required for Mode 7 translation scaling.
+   */
   this.generateMode7Coords = function(y) {
     let rY = this.mode7FlipY ? 255 - y : y;
 
@@ -745,6 +939,9 @@ function Ppu(snes) {
     }
   }
 
+  /**
+   * Resolves structural background pixel data output for Mode 7 coordinates.
+   */
   this.getMode7Pixel = function(x, y, l, p) {
     let pixelData = this.tilemapBuffer[0];
     if(x !== this.lastTileFetchedX[0] || y !== this.lastTileFetchedY[0]) {
@@ -784,6 +981,9 @@ function Ppu(snes) {
     return pixelData;
   }
 
+  /**
+   * Selects VRAM remapping patterns according to active hardware configs.
+   */
   this.getVramRemap = function() {
     let adr = this.vramAdr & 0x7fff;
     if(this.vramRemap === 1) {
@@ -821,6 +1021,9 @@ function Ppu(snes) {
     return ans;
   }
 
+  /**
+   * Reads from PPU configuration registers.
+   */
   this.read = function(adr) {
     switch(adr) {
       case 0x34: {
@@ -935,6 +1138,9 @@ function Ppu(snes) {
     return this.snes.openBus;
   }
 
+  /**
+   * Writes value to targeted PPU configuration register.
+   */
   this.write = function(adr, value) {
     switch(adr) {
       case 0x00: {
@@ -1286,6 +1492,9 @@ function Ppu(snes) {
     }
   }
 
+  /**
+   * Translates output buffer values to display-ready viewport canvases.
+   */
   this.setPixels = function(arr) {
 
     if(!this.frameOverscan) {

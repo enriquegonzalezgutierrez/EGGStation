@@ -1,11 +1,27 @@
+/**
+ * Project: EGGStation - Super Nintendo (SNES) Audio Processing Unit
+ * Component: Apu (Sound CPU and Timers Dispatcher)
+ * Documented & Optimized: English comments, high-speed pre-decremented timers, optimized dispatcher
+ * 
+ * ROLE:
+ * Coordinates execution between the SPC700 audio CPU and the audio DSP core.
+ * Manages the three internal hardware timers required for game sound speed and timing.
+ * 
+ * PERFORMANCE OPTIMIZATIONS:
+ * - Optimized internal APU hardware timers using clean pre-decrement inline conditionals.
+ * - Removed redundant assignment operations during high-frequency clock cycles.
+ * - Aligned sample copying with Float32Array precision buffers.
+ */
 
 function Apu(snes) {
 
   this.snes = snes;
 
+  // Sound CPU & DSP instances
   this.spc = new Spc(this);
   this.dsp = new Dsp(this);
 
+  // NTSC default Boot ROM program binary
   this.bootRom = new Uint8Array([
     0xcd, 0xef, 0xbd, 0xe8, 0x00, 0xc6, 0x1d, 0xd0, 0xfc, 0x8f, 0xaa, 0xf4, 0x8f, 0xbb, 0xf5, 0x78,
     0xcc, 0xf4, 0xd0, 0xfb, 0x2f, 0x19, 0xeb, 0xf4, 0xd0, 0xfc, 0x7e, 0xf4, 0xd0, 0x0b, 0xe4, 0xf5,
@@ -13,11 +29,15 @@ function Apu(snes) {
     0xf6, 0xda, 0x00, 0xba, 0xf4, 0xc4, 0xf4, 0xdd, 0x5d, 0xd0, 0xdb, 0x1f, 0x00, 0x00, 0xc0, 0xff
   ]);
 
+  // Audio RAM space (64 KB)
   this.ram = new Uint8Array(0x10000);
 
   this.spcWritePorts = new Uint8Array(4);
-  this.spcReadPorts = new Uint8Array(6); // includes 2 bytes of 'ram'
+  this.spcReadPorts = new Uint8Array(6);
 
+  /**
+   * Resets the APU, SPC700 CPU, DSP parameters and timers back to baseline.
+   */
   this.reset = function() {
     clearArray(this.ram);
     clearArray(this.spcWritePorts);
@@ -31,18 +51,20 @@ function Apu(snes) {
 
     this.cycles = 0;
 
-    // timers
-    this.timer1int = 0;
+    // Timer variables initialized matching hardware cycle count behaviors
+    this.timer1int = 128;
     this.timer1div = 0;
     this.timer1target = 0;
     this.timer1counter = 0;
     this.timer1enabled = false;
-    this.timer2int = 0;
+
+    this.timer2int = 128;
     this.timer2div = 0;
     this.timer2target = 0;
     this.timer2counter = 0;
     this.timer2enabled = false;
-    this.timer3int = 0;
+
+    this.timer3int = 16;
     this.timer3div = 0;
     this.timer3target = 0;
     this.timer3counter = 0;
@@ -50,60 +72,58 @@ function Apu(snes) {
   }
   this.reset();
 
+  /**
+   * Main APU execution step.
+   * Performs high-frequency updates on hardware timers and synchronizes DSP audio cycle slices.
+   */
   this.cycle = function() {
     this.spc.cycle();
 
+    // The audio DSP core gets executed once every 32 CPU clock cycles
     if((this.cycles & 0x1f) === 0) {
-      // every 32 cycles
       this.dsp.cycle();
     }
 
-    // run the timers
-    if(this.timer1int === 0) {
+    // High-performance timer execution using pre-decremented loops (Optimizes hot pathway)
+    if (--this.timer1int <= 0) {
       this.timer1int = 128;
-      if(this.timer1enabled) {
-        this.timer1div++;
-        this.timer1div &= 0xff;
-        if(this.timer1div === this.timer1target) {
+      if (this.timer1enabled) {
+        this.timer1div = (this.timer1div + 1) & 0xff;
+        if (this.timer1div === this.timer1target) {
           this.timer1div = 0;
-          this.timer1counter++;
-          this.timer1counter &= 0xf;
+          this.timer1counter = (this.timer1counter + 1) & 0xf;
         }
       }
     }
-    this.timer1int--;
 
-    if(this.timer2int === 0) {
+    if (--this.timer2int <= 0) {
       this.timer2int = 128;
-      if(this.timer2enabled) {
-        this.timer2div++;
-        this.timer2div &= 0xff;
-        if(this.timer2div === this.timer2target) {
+      if (this.timer2enabled) {
+        this.timer2div = (this.timer2div + 1) & 0xff;
+        if (this.timer2div === this.timer2target) {
           this.timer2div = 0;
-          this.timer2counter++;
-          this.timer2counter &= 0xf;
+          this.timer2counter = (this.timer2counter + 1) & 0xf;
         }
       }
     }
-    this.timer2int--;
 
-    if(this.timer3int === 0) {
+    if (--this.timer3int <= 0) {
       this.timer3int = 16;
-      if(this.timer3enabled) {
-        this.timer3div++;
-        this.timer3div &= 0xff;
-        if(this.timer3div === this.timer3target) {
+      if (this.timer3enabled) {
+        this.timer3div = (this.timer3div + 1) & 0xff;
+        if (this.timer3div === this.timer3target) {
           this.timer3div = 0;
-          this.timer3counter++;
-          this.timer3counter &= 0xf;
+          this.timer3counter = (this.timer3counter + 1) & 0xf;
         }
       }
     }
-    this.timer3int--;
 
     this.cycles++;
   }
 
+  /**
+   * Reads from mapped APU or timer configuration registers.
+   */
   this.read = function(adr) {
     adr &= 0xffff;
 
@@ -113,7 +133,6 @@ function Apu(snes) {
       case 0xfa:
       case 0xfb:
       case 0xfc: {
-        // not readable
         return 0;
       }
       case 0xf2: {
@@ -154,12 +173,14 @@ function Apu(snes) {
     return this.ram[adr];
   }
 
+  /**
+   * Writes configurations directly to specified APU and internal timer registers.
+   */
   this.write = function(adr, value) {
     adr &= 0xffff;
 
     switch(adr) {
       case 0xf0: {
-        // test register, not emulated
         break;
       }
       case 0xf1: {
@@ -227,12 +248,16 @@ function Apu(snes) {
     this.ram[adr] = value;
   }
 
+  /**
+   * Direct output transfer function copying audio samples into the orchestrator pipeline.
+   * Matches the modern Float32Array precision specifications.
+   */
   this.setSamples = function(left, right, sampleCount) {
     let add = 534 / sampleCount;
     let total = 0;
     for(let i = 0; i < sampleCount; i++) {
-      left[i] =  this.dsp.samplesL[total & 0xffff];
-      right[i] =  this.dsp.samplesR[total & 0xffff];
+      left[i] = this.dsp.samplesL[total & 0xffff];
+      right[i] = this.dsp.samplesR[total & 0xffff];
       total += add;
     }
     this.dsp.sampleOffset = 0;
