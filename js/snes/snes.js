@@ -831,23 +831,7 @@ function Snes() {
    * Evaluates memory speed access cycles for targeted bank offsets.
    */
   this.getAccessTime = function(adr) {
-    const bank = (adr >> 16) & 0xff;
-    const offset = adr & 0xffff;
-    
-    // Banks 0x40-0x7F
-    if (bank >= 0x40 && bank < 0x80) return 8;
-    
-    // Banks 0xC0-0xFF
-    if (bank >= 0xc0) return this.fastMem ? 6 : 8;
-    
-    // Banks 0x00-0x3F and 0x80-0xBF
-    if (offset < 0x2000) return 8;
-    if (offset < 0x4000) return 6;
-    if (offset < 0x4200) return 12;
-    if (offset < 0x6000) return 6;
-    if (offset < 0x8000) return 8;
-    
-    return (this.fastMem && bank >= 0x80) ? 6 : 8;
+    return SnesMemoryMap.getAccessCycles(adr, this.fastMem);
   }
 
   this.setPixels = function(arr) {
@@ -867,67 +851,15 @@ function Snes() {
   }
 
   this.loadRom = function(rom, isHirom) {
-    if(rom.length % 0x8000 === 0) {
-      header = this.parseHeader(rom, isHirom);
-    } else if((rom.length - 512) % 0x8000 === 0) {
-      rom = new Uint8Array(Array.prototype.slice.call(rom, 512));
-      header = this.parseHeader(rom, isHirom);
-    } else {
-      log("Failed to load rom: Incorrect size - " + rom.length);
-      return false;
-    }
-
-    if(rom.length < header.romSize) {
-      let extraData = rom.length - (header.romSize / 2);
-      log("Extending rom to account for extra data");
-      let nRom = new Uint8Array(header.romSize);
-      for(let i = 0; i < nRom.length; i++) {
-        if(i < (header.romSize / 2)) {
-          nRom[i] = rom[i];
-        } else {
-          nRom[i] = rom[(header.romSize / 2) + (i % extraData)];
-        }
-      }
-      rom = nRom;
-    }
-    this.cart = new Cart(rom, header, isHirom);
+    rom = SnesCartridge.stripSmcHeader(rom);
+    const header = SnesCartridge.parseHeader(rom, isHirom);
+    
+    this.cart = new SnesCartridge(rom, header, isHirom);
     return true;
   }
 
   this.parseHeader = function(rom, isHirom) {
-    let str = "";
-    let header;
-    if(!isHirom) {
-      for(let i = 0; i < 21; i++) {
-        str += String.fromCharCode(rom[0x7fc0 + i]);
-      }
-      header = {
-        name: str,
-        type: rom[0x7fd5] & 0xf,
-        speed: rom[0x7fd5] >> 4,
-        chips: rom[0x7fd6],
-        romSize: 0x400 << rom[0x7fd7],
-        ramSize: 0x400 << rom[0x7fd8]
-      };
-    } else {
-      for(let i = 0; i < 21; i++) {
-        str += String.fromCharCode(rom[0xffc0 + i]);
-      }
-      header = {
-        name: str,
-        type: rom[0xffd5] & 0xf,
-        speed: rom[0xffd5] >> 4,
-        chips: rom[0xffd6],
-        romSize: 0x400 << rom[0xffd7],
-        ramSize: 0x400 << rom[0xffd8]
-      };
-    }
-    if(header.romSize < rom.length) {
-      let bankCount = Math.pow(2, Math.ceil(Math.log2(rom.length / 0x8000)));
-      header.romSize = bankCount * 0x8000;
-      log("Loaded with romSize of " + getLongRep(header.romSize));
-    }
-    return header;
+    return SnesCartridge.parseHeader(rom, isHirom);
   }
 
 }
