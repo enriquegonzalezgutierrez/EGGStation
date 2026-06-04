@@ -36,9 +36,29 @@ class SnesUIController {
             "c": 11       // R shoulder trigger
         };
 
+        // State tracker for physical gamepads to process edge-detection (press/release only)
+        this.gamepadState = {
+            b: false,      // idx 0
+            y: false,      // idx 1
+            select: false, // idx 2
+            start: false,  // idx 3
+            up: false,     // idx 4
+            down: false,   // idx 5
+            left: false,   // idx 6
+            right: false,  // idx 7
+            a: false,      // idx 8
+            x: false,      // idx 9
+            l: false,      // idx 10
+            r: false       // idx 11
+        };
+
         this.initializeUIState();
         this.bindEvents();
-        console.log("[EGGStation::SNES] UI Presentation Mediator with Canvas Toggle initialized.");
+
+        // Initiate the hardware gamepad polling loop
+        this.pollGamepads();
+
+        console.log("[EGGStation::SNES] UI Presentation Mediator with Canvas Toggle and Gamepad support initialized.");
     }
 
     /**
@@ -93,6 +113,79 @@ class SnesUIController {
         window.addEventListener('keyup', (e) => this.handleKeyboardInput(e, false));
 
         this.mapVirtualControls();
+    }
+
+    /**
+     * Continuous polling loop for the HTML5 Gamepad API.
+     * Scans and maps the first active gamepad.
+     */
+    pollGamepads() {
+        // Safe check: Stop loop if the active controller changes
+        if (typeof activeController !== 'undefined' && activeController !== null && activeController !== this) {
+            return;
+        }
+
+        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+        let gp = null;
+
+        for (let i = 0; i < gamepads.length; i++) {
+            if (gamepads[i]) {
+                gp = gamepads[i];
+                break;
+            }
+        }
+
+        if (gp) {
+            const DEADZONE = 0.5;
+
+            const leftStickH = gp.axes[0] || 0;
+            const leftStickV = gp.axes[1] || 0;
+            const dpadAxisH  = gp.axes[4] || gp.axes[6] || gp.axes[2] || 0;
+            const dpadAxisV  = gp.axes[5] || gp.axes[7] || gp.axes[3] || 0;
+
+            // 1. Map D-pad / sticks movement
+            const up    = gp.buttons[12]?.pressed || leftStickV < -DEADZONE || dpadAxisV < -DEADZONE;
+            const down  = gp.buttons[13]?.pressed || leftStickV > DEADZONE  || dpadAxisV > DEADZONE;
+            const left  = gp.buttons[14]?.pressed || leftStickH < -DEADZONE || dpadAxisH < -DEADZONE;
+            const right = gp.buttons[15]?.pressed || leftStickH > DEADZONE  || dpadAxisH > DEADZONE;
+
+            // 2. Map standard SNES button layout
+            const b      = gp.buttons[0]?.pressed; // Button South (A Nintendo / B Xbox)
+            const a      = gp.buttons[1]?.pressed; // Button East  (B Nintendo / A Xbox)
+            const y      = gp.buttons[2]?.pressed; // Button West  (Y Nintendo / X Xbox)
+            const x      = gp.buttons[3]?.pressed; // Button North (X Nintendo / Y Xbox)
+            const l      = gp.buttons[4]?.pressed; // Left Bumper
+            const r      = gp.buttons[5]?.pressed; // Right Bumper
+            const select = gp.buttons[8]?.pressed; // Select / Back button
+            const start  = gp.buttons[9]?.pressed; // Start button
+
+            // Helper to dispatch inputs with edge-detection
+            const triggerInput = (key, isPressed, idx) => {
+                if (isPressed && !this.gamepadState[key]) {
+                    this.orchestrator.sendInput(idx, true);
+                    this.gamepadState[key] = true;
+                } else if (!isPressed && this.gamepadState[key]) {
+                    this.orchestrator.sendInput(idx, false);
+                    this.gamepadState[key] = false;
+                }
+            };
+
+            // Process inputs through standard orchestrator mapping indexes
+            triggerInput('b', b, 0);
+            triggerInput('y', y, 1);
+            triggerInput('select', select, 2);
+            triggerInput('start', start, 3);
+            triggerInput('up', up, 4);
+            triggerInput('down', down, 5);
+            triggerInput('left', left, 6);
+            triggerInput('right', right, 7);
+            triggerInput('a', a, 8);
+            triggerInput('x', x, 9);
+            triggerInput('l', l, 10);
+            triggerInput('r', r, 11);
+        }
+
+        requestAnimationFrame(() => this.pollGamepads());
     }
 
     /**
