@@ -1,67 +1,96 @@
-# EGGStation Development Roadmap
+# EGGStation: Unified Multi-System UI & Save-State Roadmap
 
-This document outlines the strategic engineering milestones planned to push EGGStation to the absolute limits of web-based hardware emulation. These phases focus on microsecond-accurate synchronization, temporal physics, advanced visual shaders, and hardware accessory emulation.
-
----
-
-## Phase 1: Microsecond Synchronization & Dynamic Rate Control (DRC)
-**Target Layer:** `Infrastructure Layer (Audio)` & `Application Layer (Orchestrator)`
-
-To prevent audio crackling and micro-stutters during execution jitter or minor browser thread delays, EGGStation will transition from fixed frame-rate slicing to a closed-loop **Dynamic Rate Control (DRC)** paradigm.
-
-### Technical Implementation:
-- Monitor the exact sample queue backlog inside the `ScriptProcessorNode` / Web Audio destination buffer.
-- Implement an Exponential Moving Average (EMA) to calculate the mean buffer fill level.
-- If the buffer drifts below the safe threshold, decrease the emulated CPU clock target by up to `0.5%` continuously. If the buffer is approaching capacity, accelerate the cycle target by `0.5%`.
-- **Target File modifications:** `Sega315_5124_Psg.js` (buffer queue queries) and `EmulatorOrchestrator.js` (dynamic calculation of `targetCycles`).
+This document outlines the strategic engineering phases required to unify the User Interface (UI), **Developer Diagnostics Suite (Dev Mode)**, and **IndexedDB-backed Savestates** across all three emulated consoles: Sega Master System (SMS), Sega Genesis / Mega Drive (MD), and Super Nintendo (SNES).
 
 ---
 
-## Phase 2: Temporal Rewinding (Real-Time Time Travel)
-**Target Layer:** `Application Layer` & `Infrastructure Layer (Storage)`
+## 1. Architectural Vision & Goals
 
-Implement real-time delta-compressed frame rewinding, allowing users to reverse gameplay smoothly by holding an assigned controller button.
+The objective is to eliminate peripheral gaps between systems, bringing the advanced diagnostics and temporal controls of the Sega Mark III and Genesis to the Super Nintendo domain.
 
-### Technical Implementation:
-- Implement a circular **Ring Buffer State Cache** inside the `EmulatorOrchestrator`.
-- Every `6 frames` (100ms), capture a lightweight delta-state (saving only differences in Work RAM, VRAM, registers, and mapper status since the previous keyframe to minimize memory footprints).
-- Bind an input (e.g., `Backspace` or Left Trigger on physical gamepads) to suspend the emulator's forward execution loop.
-- When active, traverse the state cache backward, loading the reconstructed binary structures sequentially at `60Hz` (mirroring backward gameplay).
+*   **Responsive UI Alignment:** Maintain a liquid, viewport-locked glassmorphic interface that adapts smoothly to mobile, tablet, and 4K desktop screens without flexbox or grid overlapping issues.
+*   **Unified State Persistence:** Expand the asynchronous IndexedDB serialization engine (`WebIndexedDBSerializer`) to capture, restore, and generate thumbnail preview screenshots for all three console platforms.
+*   **Monomorphic Dev Mode Diagnostics:** Extend register grids, program disassemblers, and VRAM tile rasterizers so that developers can debug Z80, M68K, and 65816/SPC700 assembly instructions in real-time.
 
----
+```
+       UNIFIED PERSISTENCE & DIAGNOSTICS ARCHITECTURE
 
-## Phase 3: Hardware Peripheral Emulation (3D Glasses & Light Phaser)
-**Target Layer:** `Domain Layer (MMU/Cartridge)` & `Infrastructure Layer (VDP/Post-Processor)`
-
-Emulate classic Sega Master System hardware expansion peripherals on modern display standards.
-
-### Technical Implementation:
-- **Sega 3D Glasses (Active Shutter):** Detect CRAM/VRAM write sequences targeting frame-alternate stereoscopic buffers. Modify `VdpPostProcessor.js` to process both frames concurrently and render them on the GPU as a high-fidelity **Anaglyph (Red/Cyan) Stereoscopic** composite.
-- **Light Phaser (Lightgun):** Capture mouse coordinates or screen-touch coordinates over the viewport. Map coordinate matrices directly onto the VDP's horizontal/vertical electron beam synchronization registers (`hcounter` and `vcounter`) when a fire trigger event is registered.
-
----
-
-## Phase 4: Runtime Uniform Customization (Interactive Shader GUI)
-**Target Layer:** `Presentation Layer (CSS/UI)` & `Infrastructure Layer (WebGL2 Post-Processor)`
-
-Turn static post-processing pipelines into dynamic, user-adjustable variables by connecting HTML control sliders directly to WebGL2 shader uniforms.
-
-### Technical Implementation:
-- Expose uniform floats in the CRT-Royale fragment shader within `VdpPostProcessor.js`:
-  - `u_CurveRadius` (Barrel screen distortion)
-  - `u_ScanlineOpacity` (Scanline blending strength)
-  - `u_PhosphorTriad` (Aperture grille pixel structure density)
-  - `u_BloomIntensity` (High-contrast halation)
-- Modify `UIController.js` to bind range sliders from the hardware settings panel, dynamically calling `gl.uniform1f` inside the WebGL render pass without compiling or linking the shader program again.
+  [ Snes / Genesis / SMS Orchestrators ]  ===> [ Snes / Genesis / SMS UI Controllers ]
+                   |                                            |
+                   | (Capture/Restore State)                    | (Update UI Registers/Disasm)
+                   v                                            v
+     [ WebIndexedDBSerializer ]                   [ Diagnostic Dev Mode Grid ]
+                   |                                            |
+                   v (Async Save/Load)                          v (Canvas Rasterizer)
+       [ Browser IndexedDB ]                        [ VRAM Pattern Viewer ]
+```
 
 ---
 
-## Phase 5: Developer Diagnostics & Debugger Suite
-**Target Layer:** `Presentation Layer` & `Domain Layer (Z80 / Disassembler)`
+## 2. Hito 1: Unified Responsive UI & Sidebar Refactoring
 
-Provide homebrew developers and ROM-hackers with an integrated suite of diagnostics and step-by-step CPU execution analysis.
+Currently, the sidebar holds placeholders for some console configurations. We will re-engineer the presentation layer to standardise control groups.
 
-### Technical Implementation:
-- **CPU Step Debugger:** Add a "Developer Panel" that uses `Z80Disassembler.js` to show the assembly instructions ahead of and behind the current PC. Add execution controls: `Play`, `Pause`, `Step-Into` (executes precisely one CPU instruction), and `Breakpoints`.
-- **Memory Map Viewer:** Render the active 16KB cartridge banks and 8KB Work RAM as interactive hexadecimal tables.
-- **VRAM Pattern Inspector:** Draw active tiles loaded inside VRAM onto a secondary HTML Canvas, showing background matrices and active sprite patterns in real-time.
+### Objectives:
+*   **Clean DOM Structure:** Restructure `#settings-panel` in `index.html` into generic, reusable flex blocks.
+*   **Responsive Viewport Bounds:** Guarantee that `#smsdisplay` and `#webgldisplay` scale smoothly, locking their aspect ratios via CSS (`aspect-ratio: 4/3`) to prevent layout shifting when swapping active console viewports.
+*   **Unified Sidebar Panels:**
+    *   **Control Panel:** Consolidated system selectors, TV standard switches, and audio DSP options.
+    *   **Save State Panel:** A unified canvas thumbnail preview (`#savestateImg`) and triggers (Save/Load) mapped for the active orchestrator.
+
+---
+
+## 3. Hito 2: Universal Savestates & Previews (IndexedDB)
+
+While SMS and MD have state serialization, SNES requires a dedicated state-molding schema to serialize its multi-bus, dual-CPU, and DSP registers.
+
+### Objectives:
+*   **SNES State Serialization Schema:** Extend `WebIndexedDBSerializer` to capture and restore the complete internal state of the SNES:
+    *   **Ricoh 5A22 CPU:** PC, SR, registers (A, X, Y, DP, SP, DB, PB), and interrupt lines.
+    *   **Sony SPC700 APU:** PC, registers, internal APU RAM (64KB), and timer dividers.
+    *   **SnesDsp Synthesizer:** Internal registers, volume registers, and channel envelopes.
+    *   **SnesPpu Video Core:** VRAM (64KB), CGRAM, OAM, scroll registers, and window masks.
+*   **Pre-Allocated Thumbnail Previews:**
+    *   Implement an automated `captureScreenshot()` method inside `SnesOrchestrator.js` that copies the active VDP/PPU frame buffer onto a hidden $256 \times 240$ canvas.
+    *   Store the canvas string data securely inside IndexedDB as a compressed binary attachment alongside the state registers.
+    *   Update the sidebar's `#savestateImg` thumbnail automatically upon saving or loading states.
+
+---
+
+## 4. Hito 3: Universal Dev Mode & CPU Register Grids
+
+Currently, only the Z80 (SMS) and M68K (MD) have fully structured debugger grids. We will standardise the developer suite to dynamically format itself based on the active console.
+
+### Objectives:
+*   **Dynamic DOM Register Grid:** When hot-swapping consoles, the presenter will clear the `#reg-grid` and inject the corresponding processor registers:
+    *   **SMS Mode:** Renders Z80 registers (AF, BC, DE, HL, IX, IY, SP, PC).
+    *   **Genesis Mode:** Renders M68K registers (D0-D7, A0-A7, PC, SR).
+    *   **SNES Mode:** Renders Ricoh 65816 registers (A, X, Y, DP, SP, DB, PB, PC, Flags) and secondary Sony SPC700 registers (A, X, Y, SP, PC, Flags).
+*   **Unified Disassembly Console:**
+    *   Create a lightweight 65816 assembly instruction decoder.
+    *   Display 5 lines of disassembly centered around the active Program Counter (PC) in real-time when the developer panel is expanded.
+
+---
+
+## 5. Hito 4: Universal VRAM Pattern Tile Visualizer
+
+We will expand the diagnostic `#vram-canvas` to decode and render the raw graphics memory of all three systems.
+
+### Objectives:
+*   **Universal Tile Rasterizer:**
+    *   **Sega SMS (Hito Complete):** Decodes 4bpp planar tiles (`$0000 - $3FFF`) using the active CRAM background palette.
+    *   **Sega Genesis (Hito Complete):** Decodes 4bpp Genesis tiles using the active VDP CRAM registers.
+    *   **Super Nintendo (Pending):** Implement a dynamic VRAM tile scanner. Since SNES supports multiple tile formats (2bpp, 4bpp, 8bpp depending on active screen mode), the rasterizer will detect the current PPU mode and render tiles onto the diagnostic canvas in real-time.
+
+---
+
+## 6. Hito 5: Unified Input Gamepads & Shortcuts
+
+We will unify controller configurations and keyboard hotkeys across all systems.
+
+### Objectives:
+*   **Standardized Keyboard Shortcuts:**
+    *   `F2` / `F3`: Save and Load state across all three systems.
+    *   `Backspace` (Hold): Universal real-time gameplay rewind.
+    *   `\`: Universal fast-forward toggle.
+*   **Universal Gamepad Poller:** Map generic USB/Bluetooth controllers to standard SNES layouts (`SnesUIController.js`), falling back cleanly to standard layouts for SMS/Mark III and Sega Genesis.
