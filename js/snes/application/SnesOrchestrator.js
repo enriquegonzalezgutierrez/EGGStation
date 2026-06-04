@@ -161,7 +161,7 @@ class SnesOrchestrator {
     }
 
     /**
-     * Execution loop throttled to match real hardware refresh rates.
+     * Execution loop throttled and optimized to run at exact hardware speed.
      */
     executionLoop(timestamp) {
         if (!this.isRunning) return;
@@ -177,6 +177,7 @@ class SnesOrchestrator {
         this.accumulatedTime += elapsed;
 
         const targetFrameDuration = 1000.0 / 60.098; // SNES exact frame interval
+        let framesRun = 0;
 
         // Process frames synchronously with actual time elapsed
         while (this.accumulatedTime >= targetFrameDuration) {
@@ -184,12 +185,15 @@ class SnesOrchestrator {
                 this.hardware.runFrame(false);
                 this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
                 this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
+                
+                this.fpsCount++; // Measure true emulated frames
+                framesRun++;
             }
             this.accumulatedTime -= targetFrameDuration;
         }
 
-        // Render to canvas only once per animation tick
-        if (!this.isPaused) {
+        // OPTIMIZATION: Only redraw/convert if we actually ran at least one new frame!
+        if (framesRun > 0 && !this.isPaused) {
             const activeHeight = this.hardware.ppu.frameOverscan ? 240 : 224;
 
             if (this.postProcessMode === 0 || this.postProcessMode === 1) {

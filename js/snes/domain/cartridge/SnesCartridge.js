@@ -23,6 +23,7 @@
             this.data = romData;
             this.header = headerData;
             this.isHirom = isHirom;
+            this.isPal = headerData.isPal; // Store region flag
 
             this.sram = new Uint8Array(headerData.ramSize);
             this.hasSram = headerData.chips > 0;
@@ -48,9 +49,6 @@
 
         /**
          * Reads a byte from the cartridge ROM or SRAM space.
-         * @param {number} bank - 8-bit memory bank.
-         * @param {number} adr - 16-bit offset address.
-         * @returns {number} Unsigned 8-bit value.
          */
         read(bank, adr) {
             if (!this.isHirom) {
@@ -78,9 +76,6 @@
 
         /**
          * Writes a byte to the cartridge SRAM space.
-         * @param {number} bank - 8-bit memory bank.
-         * @param {number} adr - 16-bit offset address.
-         * @param {number} value - Unsigned 8-bit value to write.
          */
         write(bank, adr, value) {
             if (!this.isHirom) {
@@ -108,8 +103,6 @@
 
         /**
          * Cleans legacy 512-byte SMC headers from raw ROM buffers if present.
-         * @param {Uint8Array} rawData - Raw uploaded ROM buffer.
-         * @returns {Uint8Array} Standard cleaned ROM buffer.
          */
         static stripSmcHeader(rawData) {
             if ((rawData.length - 512) % 0x8000 === 0) {
@@ -120,10 +113,38 @@
         }
 
         /**
+         * Automatically detects if a ROM uses HiROM or LoROM memory mapping.
+         * Verifies checksum complements matching standard hardware rules.
+         * @param {Uint8Array} rom - Cleaned ROM data.
+         * @returns {boolean} True if HiROM is detected, false otherwise.
+         */
+        static detectHirom(rom) {
+            const loromSum = rom[0x7FDC] | (rom[0x7FDD] << 8);
+            const loromComp = rom[0x7FDA] | (rom[0x7FDB] << 8);
+            
+            const hiromSum = rom[0xFFDC] | (rom[0xFFDD] << 8);
+            const hiromComp = rom[0xFFDA] | (rom[0xFFDB] << 8);
+
+            const loromValid = ((loromSum ^ loromComp) === 0xFFFF) && (loromSum !== 0 && loromSum !== 0xFFFF);
+            const hiromValid = ((hiromSum ^ hiromComp) === 0xFFFF) && (hiromSum !== 0 && hiromSum !== 0xFFFF);
+
+            if (hiromValid && !loromValid) {
+                return true;
+            }
+            if (loromValid && !hiromValid) {
+                return false;
+            }
+
+            // Fallback: check map mode byte at offset 0x15 ($7FD5 / $FFD5)
+            const hiromMap = rom[0xFFD5];
+            if ((hiromMap & 0x0F) === 1) {
+                return true;
+            }
+            return false;
+        }
+
+        /**
          * Parses the internal SNES header metadata fields.
-         * @param {Uint8Array} rom - Standard headerless ROM buffer.
-         * @param {boolean} isHirom - Mapping mode flag.
-         * @returns {Object} Structured metadata object.
          */
         static parseHeader(rom, isHirom) {
             let str = "";
@@ -132,6 +153,10 @@
             for (let i = 0; i < 21; i++) {
                 str += String.fromCharCode(rom[headerOffset + i]);
             }
+
+            // Region code byte is located at offset 0x19 of the internal SNES header ($FFD9/$7FD9)
+            const regionCode = rom[headerOffset + 0x19];
+            const isPal = (regionCode >= 0x02 && regionCode <= 0x0C);
             
             const header = {
                 name: str.trim(),
@@ -139,7 +164,8 @@
                 speed: rom[headerOffset + 0x15] >> 4,
                 chips: rom[headerOffset + 0x16],
                 romSize: 0x400 << rom[headerOffset + 0x17],
-                ramSize: 0x400 << rom[headerOffset + 0x18]
+                ramSize: 0x400 << rom[headerOffset + 0x18],
+                isPal: isPal
             };
 
             if (header.romSize < rom.length) {

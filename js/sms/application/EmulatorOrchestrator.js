@@ -35,7 +35,10 @@ class EmulatorOrchestrator {
         this.animationFrameId = null;
         this.lastTime = 0;
         this.accumulatedTime = 0;
-        this.framesRendered = 0;
+
+        // Structured FPS counters aligned to 1-second real-world intervals
+        this.fpsCount = 0;
+        this.fpsTimer = 0;
 
         // GC-Free Static Buffer Ring Pool for real-time rewinding
         this.maxRewindStates = 100; 
@@ -177,7 +180,8 @@ class EmulatorOrchestrator {
 
         this.lastTime = performance.now();
         this.accumulatedTime = 0;
-        this.framesRendered = 0;
+        this.fpsCount = 0;
+        this.fpsTimer = this.lastTime;
 
         this.animationFrameId = requestAnimationFrame(this.loop);
     }
@@ -447,7 +451,6 @@ class EmulatorOrchestrator {
             if (this.psg) this.psg.setMuted(true);
             
             if (this.rewindActiveCount > 0) {
-                // Shift rewind history backward by 2 steps per frame
                 for (let i = 0; i < 2; i++) {
                     if (this.rewindActiveCount > 0) {
                         this.rewindHistoryPointer = (this.rewindHistoryPointer - 1 + this.maxRewindStates) % this.maxRewindStates;
@@ -477,6 +480,7 @@ class EmulatorOrchestrator {
             if (this.psg) this.psg.setMuted(true);
             for (let i = 0; i < 4; i++) {
                 this.executeFrame(targetFps);
+                this.fpsCount++; // Count fast forwarded frames too
             }
             this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
         } else {
@@ -488,6 +492,7 @@ class EmulatorOrchestrator {
                 this.executeFrame(targetFps);
                 this.accumulatedTime -= targetFrameTime;
                 frameExecuted = true;
+                this.fpsCount++; // Count actual emulated frames
             }
             
             if (frameExecuted) {
@@ -501,10 +506,13 @@ class EmulatorOrchestrator {
             }
         }
 
-        this.framesRendered++;
-        if (deltaTime > 0 && this.framesRendered % 10 === 0) {
-            const currentFps = (1000 / deltaTime).toFixed(1);
-            if (this.onFpsUpdate) this.onFpsUpdate(currentFps);
+        // True 1-second interval tracker for standard non-flickering FPS diagnostics
+        if (currentTime - this.fpsTimer >= 1000) {
+            if (this.onFpsUpdate) {
+                this.onFpsUpdate(this.fpsCount); // Sends only the raw integer to avoid doubling "FPS"
+            }
+            this.fpsCount = 0;
+            this.fpsTimer = currentTime;
         }
 
         this.animationFrameId = requestAnimationFrame(this.loop);

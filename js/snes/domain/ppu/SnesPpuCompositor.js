@@ -493,11 +493,13 @@
             case 0x3e: {
                 let val = this.timeOver ? 0x80 : 0;
                 val |= this.rangeOver ? 0x40 : 0;
+                val |= this.isPal ? 0x10 : 0; // Bit 4: PAL mode flag (0=NTSC, 1=PAL)
                 return val | 0x1;
             }
             case 0x3f: {
                 let val = this.evenFrame ? 0x80 : 0;
                 val |= this.countersLatched ? 0x40 : 0;
+                val |= this.isPal ? 0x10 : 0; // Bit 4: PAL mode flag (0=NTSC, 1=PAL)
                 if (this.snes.ppuLatch) {
                     this.countersLatched = false;
                 }

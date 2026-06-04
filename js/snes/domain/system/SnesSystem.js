@@ -207,7 +207,10 @@
             if (this.xPos === 1364) {
                 this.xPos = 0;
                 this.yPos++;
-                if (this.yPos === 262) {
+                
+                // OPTIMIZATION: Dynamically adjust scanlines limit according to game region (NTSC: 262, PAL: 312)
+                const maxLines = (this.ppu && this.ppu.isPal) ? 312 : 262;
+                if (this.yPos === maxLines) {
                     this.catchUpApu();
                     this.yPos = 0;
                     this.frames++;
@@ -276,8 +279,14 @@
 
         loadRom(rom, isHirom) {
             rom = SnesCartridge.stripSmcHeader(rom);
-            const header = SnesCartridge.parseHeader(rom, isHirom);
-            this.cart = new SnesCartridge(rom, header, isHirom);
+            
+            // Auto-detect HiROM mapping on startup (bypasses manual dropdown settings)
+            const detectedHirom = SnesCartridge.detectHirom(rom);
+            const header = SnesCartridge.parseHeader(rom, detectedHirom);
+            this.cart = new SnesCartridge(rom, header, detectedHirom);
+            
+            // Set regional configuration automatically to the PPU
+            this.ppu.isPal = header.isPal;
             return true;
         }
 

@@ -52,6 +52,7 @@
         }
 
         reset() {
+            this.isPal = false;
             this.vram.fill(0);
             this.cgram.fill(0);
             this.oam.fill(0);
