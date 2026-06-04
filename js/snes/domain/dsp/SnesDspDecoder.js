@@ -16,7 +16,8 @@
 
         if (this.prevFlags[ch] === 1 || this.prevFlags[ch] === 3) {
             let sampleAdr = (this.dirPage << 8) + (this.srcn[ch] * 4);
-            let loopAdr = this.apu.ram[sampleAdr & 0xffff];
+            // Read Bytes 2 & 3 of the directory entry to retrieve the correct Loop Address
+            let loopAdr = this.apu.ram[(sampleAdr + 2) & 0xffff];
             loopAdr |= this.apu.ram[(sampleAdr + 3) & 0xffff] << 8;
             this.decodeOffset[ch] = loopAdr;
             
