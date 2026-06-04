@@ -138,7 +138,44 @@
         }
     };
 
-    SnesSystem.prototype.getAccessTime = function(adr) {
-        return SnesMemoryMap.getAccessCycles(adr, this.fastMem);
+    /**
+     * Highly optimized, inlined memory access cycle calculator.
+     * Eliminates static class lookups and call stack overhead on hot execution paths.
+     * @param {number} address - 24-bit physical address.
+     * @returns {number} CPU master cycles (6, 8, or 12).
+     */
+    SnesSystem.prototype.getAccessTime = function(address) {
+        const bank = (address >> 16) & 0xFF;
+        const offset = address & 0xFFFF;
+        
+        // Banks 0x40-0x7F: Cartridge SlowROM / WRAM mirrors (Always 8 cycles)
+        if (bank >= 0x40 && bank < 0x80) {
+            return 8;
+        }
+        
+        // Banks 0xC0-0xFF: Cartridge High Banks (Speed depends on FastROM toggle)
+        if (bank >= 0xC0) {
+            return this.fastMem ? 6 : 8;
+        }
+        
+        // Banks 0x00-0x3F and 0x80-0xBF (System Area & Low Cartridge Banks)
+        if (offset < 0x2000) {
+            return 8; // WRAM Mirrors (8 cycles)
+        }
+        if (offset < 0x4000) {
+            return 6; // PPU / APU Hardware I/O Ports (Fast: 6 cycles)
+        }
+        if (offset < 0x4200) {
+            return 12; // Old Joypad Ports / CPU Registers (X-Slow: 12 cycles)
+        }
+        if (offset < 0x6000) {
+            return 6; // Hardware I/O Ports / DMA Registers (Fast: 6 cycles)
+        }
+        if (offset < 0x8000) {
+            return 8; // Expansion RAM / DSP (8 cycles)
+        }
+        
+        // Offset >= 0x8000 in low banks
+        return (this.fastMem && bank >= 0x80) ? 6 : 8;
     };
 }

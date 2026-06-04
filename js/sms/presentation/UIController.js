@@ -431,16 +431,16 @@ class UIController {
             const rewind = gp.buttons[6]?.pressed || gp.buttons[7]?.pressed;
 
             // Diagnostic Logger: Emits active button and axis parameters to the host debugger console
-            for (let b = 0; b < gp.buttons.length; b++) {
-                if (gp.buttons[b]?.pressed) {
-                    console.log(`[EGGStation::SMS Diagnostics] Button ${b} is PRESSED`);
-                }
-            }
-            for (let a = 0; a < gp.axes.length; a++) {
-                if (Math.abs(gp.axes[a]) > DEADZONE) {
-                    console.log(`[EGGStation::SMS Diagnostics] Axis ${a} Value is active: ${gp.axes[a].toFixed(2)}`);
-                }
-            }
+            // for (let b = 0; b < gp.buttons.length; b++) {
+            //     if (gp.buttons[b]?.pressed) {
+            //         console.log(`[EGGStation::SMS Diagnostics] Button ${b} is PRESSED`);
+            //     }
+            // }
+            // for (let a = 0; a < gp.axes.length; a++) {
+            //     if (Math.abs(gp.axes[a]) > DEADZONE) {
+            //         console.log(`[EGGStation::SMS Diagnostics] Axis ${a} Value is active: ${gp.axes[a].toFixed(2)}`);
+            //     }
+            // }
 
             // Helper to trigger hardware pins only on state change (edge detection)
             const triggerInput = (key, isPressed, onPress, onRelease) => {
