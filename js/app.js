@@ -79,7 +79,6 @@ function bootConsole(consoleType) {
     if (activeOrchestrator) {
         console.log(`[EGGStation::Swapper] Active orchestrator found. Stopping loop...`);
         
-        // CRITICAL PERFORMANCE FIX: Terminate previous animation frame loop immediately
         activeOrchestrator.isRunning = false;
         if (typeof activeOrchestrator.stop === 'function') {
             activeOrchestrator.stop();
@@ -90,64 +89,64 @@ function bootConsole(consoleType) {
             activeOrchestrator.animationFrameId = null;
         }
         
-        // Close audio contexts to release CPU threads and browser audio channels
+        // Close audio contexts safely
         if (activeOrchestrator.psg && activeOrchestrator.psg.context && activeOrchestrator.psg.context.state !== 'closed') {
-            console.log(`[EGGStation::Audio] Closing active SMS audio context...`);
             activeOrchestrator.psg.context.close().catch(() => {});
         }
         
         if (activeOrchestrator.audioCtx && activeOrchestrator.audioCtx.state !== 'closed') {
-            console.log(`[EGGStation::Audio] Closing active Genesis audio context...`);
             activeOrchestrator.audioCtx.close().catch(() => {});
         }
 
         if (activeOrchestrator.audioProcessor && activeOrchestrator.audioProcessor.audioCtx && activeOrchestrator.audioProcessor.audioCtx.state !== 'closed') {
-            console.log(`[EGGStation::Audio] Closing active SNES audio context...`);
             activeOrchestrator.audioProcessor.audioCtx.close().catch(() => {});
         }
     }
 
-    // 2. Clone DOM elements to safely purge old event listeners (avoids keyboard key overlaps)
-    console.log(`[EGGStation::Swapper] Re-binding DOM cartridge upload slots to clear listeners...`);
+    // 2. Clone DOM elements to safely purge old event listeners
     const oldLoaderBtn = document.getElementById('romLoaderBtn');
-    const newLoaderBtn = oldLoaderBtn.cloneNode(true);
-    oldLoaderBtn.parentNode.replaceChild(newLoaderBtn, oldLoaderBtn);
+    if (oldLoaderBtn && oldLoaderBtn.parentNode) {
+        const newLoaderBtn = oldLoaderBtn.cloneNode(true);
+        oldLoaderBtn.parentNode.replaceChild(newLoaderBtn, oldLoaderBtn);
+    }
 
     const oldSelector = document.getElementById('cartridgeSelector');
-    const newSelector = oldSelector.cloneNode(true);
-    oldSelector.parentNode.replaceChild(newSelector, oldSelector);
+    if (oldSelector && oldSelector.parentNode) {
+        const newSelector = oldSelector.cloneNode(true);
+        oldSelector.parentNode.replaceChild(newSelector, oldSelector);
+    }
 
-    // Clone the Debugger control buttons container synchronously during hot-swaps
     const dbgSection = document.getElementById('developer-suite');
-    if (dbgSection) {
+    if (dbgSection && dbgSection.parentNode) {
         const newDbgSection = dbgSection.cloneNode(true);
         dbgSection.parentNode.replaceChild(newDbgSection, dbgSection);
     }
 
     // 3. Setup canvas viewport contexts
     const videoCanvas = document.getElementById("smsdisplay");
-    const videoContext = videoCanvas.getContext("2d", { willReadFrequently: true });
+    const videoContext = videoCanvas ? videoCanvas.getContext("2d", { willReadFrequently: true }) : null;
     
     const glCanvas = document.getElementById("webgldisplay");
     let glContext = null;
-    try {
-        glContext = glCanvas.getContext("webgl2") || glCanvas.getContext("experimental-webgl2");
-    } catch (e) {
-        console.warn("[EGGStation::Canvas] WebGL2 context acquisition failed: ", e);
+    if (glCanvas) {
+        try {
+            glContext = glCanvas.getContext("webgl2") || glCanvas.getContext("experimental-webgl2");
+        } catch (e) {
+            console.warn("[EGGStation::Canvas] WebGL2 context acquisition failed: ", e);
+        }
     }
 
-    // Clean viewport frames to prevent previous console artifacts from displaying
-    if (videoContext) {
+    // Clean viewport frames
+    if (videoContext && videoCanvas) {
         videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
     }
-    if (glContext) {
+    if (glContext && glCanvas) {
         glContext.clearColor(0.0, 0.0, 0.0, 1.0);
         glContext.clear(glContext.COLOR_BUFFER_BIT);
     }
 
     // Reset default layout views
-    const fileSelectorEl = document.getElementById("fileselector");
-    if (fileSelectorEl) fileSelectorEl.classList.remove("hidden");
+    document.getElementById("fileselector")?.classList.remove("hidden");
 
     const fpsSpan = document.getElementById("fpsSpan");
     if (fpsSpan) fpsSpan.textContent = "0.0 FPS";
@@ -155,8 +154,8 @@ function bootConsole(consoleType) {
     // 4. Instantiate and Boot the Selected Console Engine
     if (consoleType === "SMS") {
         try {
-            // Show Master System specific options
-            document.getElementById('sms-config-section').classList.remove('hidden');
+            // Show Master System specific options safely
+            document.getElementById('sms-config-section')?.classList.remove('hidden');
 
             activeOrchestrator = new EmulatorOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");
@@ -172,14 +171,15 @@ function bootConsole(consoleType) {
     } 
     else if (consoleType === "GEN") {
         try {
-            // Hide Master System configurations
-            document.getElementById('sms-config-section').classList.add('hidden');
+            // Hide Master System configurations safely
+            document.getElementById('sms-config-section')?.classList.add('hidden');
             
-            // Hide WebGL canvas inline and show standard 2D canvas
-            glCanvas.style.display = "none";
-            glCanvas.style.visibility = "hidden";
-            glCanvas.style.position = "absolute";
-            videoCanvas.classList.remove('hidden');
+            if (glCanvas) {
+                glCanvas.style.display = "none";
+                glCanvas.style.visibility = "hidden";
+                glCanvas.style.position = "absolute";
+            }
+            videoCanvas?.classList.remove('hidden');
 
             activeOrchestrator = new GenesisOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");
@@ -194,8 +194,8 @@ function bootConsole(consoleType) {
     }
     else if (consoleType === "SNES") {
         try {
-            // Hide Master System configurations
-            document.getElementById('sms-config-section').classList.add('hidden');
+            // Hide Master System configurations safely
+            document.getElementById('sms-config-section')?.classList.add('hidden');
             
             activeOrchestrator = new SnesOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");

@@ -344,10 +344,10 @@ class SnesPostProcessor {
                 gl.canvas.height = stretchedHeight;
             }
             
-            // Fast direct 32-bit transfer using fast subarray
-            const targetLength = width * height;
+            // Fast direct 32-bit transfer using fast subarray of full stretched height
+            const targetLength = width * stretchedHeight;
             const glbBuffer32 = new Uint32Array(this.rgbaBuffer.buffer, 0, targetLength);
-            glbBuffer32.set(src.subarray(0, targetLength)); // High speed native C++ array copy
+            glbBuffer32.set(src.subarray(0, targetLength));
 
             this.renderGL(width, stretchedHeight);
             return;
@@ -381,12 +381,12 @@ class SnesPostProcessor {
         const dst32 = new Uint32Array(this.glbImgData.data.buffer);
 
         if (postProcessMode === 0 || postProcessMode === 1) {
-            dst32.set(src.subarray(0, width * height)); // Direct 32-bit fast copy
+            dst32.set(src.subarray(0, width * stretchedHeight)); // Copies full 100% stretched lines
         } else {
-            // Write first to internal temporary rgbaBuffer view
-            const targetLength = width * height;
+            // Write first to internal temporary rgbaBuffer view of full stretched dimensions
+            const targetLength = width * stretchedHeight;
             const rgba32 = new Uint32Array(this.rgbaBuffer.buffer, 0, targetLength);
-            rgba32.set(src.subarray(0, targetLength)); // Direct 32-bit fast copy
+            rgba32.set(src.subarray(0, targetLength)); 
 
             if (postProcessMode === 2) { 
                 this.scale2X(rgba32, dst32, width, stretchedHeight);

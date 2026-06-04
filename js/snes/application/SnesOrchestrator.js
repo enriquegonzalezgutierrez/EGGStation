@@ -176,7 +176,9 @@ class SnesOrchestrator {
         this.lastFrameTime = timestamp;
         this.accumulatedTime += elapsed;
 
-        const targetFrameDuration = 1000.0 / 60.098; // SNES exact frame interval
+        // OPTIMIZATION: Dynamically adjust target FPS according to the active cartridge region (PAL: 50.0 Hz, NTSC: 60.098 Hz)
+        const targetFps = (this.hardware.ppu && this.hardware.ppu.isPal) ? 50.0 : 60.098;
+        const targetFrameDuration = 1000.0 / targetFps;
         let framesRun = 0;
 
         // Process frames synchronously with actual time elapsed
@@ -192,7 +194,7 @@ class SnesOrchestrator {
             this.accumulatedTime -= targetFrameDuration;
         }
 
-        // OPTIMIZATION: Only redraw/convert if we actually ran at least one new frame!
+        // Only redraw/convert if we actually ran at least one new frame!
         if (framesRun > 0 && !this.isPaused) {
             const activeHeight = this.hardware.ppu.frameOverscan ? 240 : 224;
 

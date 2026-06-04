@@ -19,17 +19,14 @@
         constructor(snes) {
             this.snes = snes;
 
-            // 1. Allocate memory buffers and registers first (GC Free)
             this.ram = new Uint8Array(0x10000);
             this.spcWritePorts = new Uint8Array(4);
             this.spcReadPorts = new Uint8Array(6);
 
-            // 2. Initialize modular hardware timers
-            this.timer1 = new SnesApuTimer(128); // Timer 1: 8kHz interval divisor
-            this.timer2 = new SnesApuTimer(128); // Timer 2: 8kHz interval divisor
-            this.timer3 = new SnesApuTimer(16);  // Timer 3: 64kHz interval divisor
+            this.timer1 = new SnesApuTimer(128); 
+            this.timer2 = new SnesApuTimer(128); 
+            this.timer3 = new SnesApuTimer(16);  
 
-            // 3. Set up the Boot ROM binary
             this.bootRom = new Uint8Array([
                 0xcd, 0xef, 0xbd, 0xe8, 0x00, 0xc6, 0x1d, 0xd0, 0xfc, 0x8f, 0xaa, 0xf4, 0x8f, 0xbb, 0xf5, 0x78,
                 0xcc, 0xf4, 0xd0, 0xfb, 0x2f, 0x19, 0xeb, 0xf4, 0xd0, 0xfc, 0x7e, 0xf4, 0xd0, 0x0b, 0xe4, 0xf5,
@@ -41,7 +38,6 @@
             this.dspRomReadable = true;
             this.cycles = 0;
 
-            // 4. Instantiate sound CPU and DSP after all dependency structures are ready
             this.spc = new SnesSpc(this);
             this.dsp = new Dsp(this);
 
@@ -72,15 +68,29 @@
         cycle() {
             this.spc.cycle();
 
-            // DSP coordinates updates once every 32 audio cycles
             if ((this.cycles & 0x1f) === 0) {
                 this.dsp.cycle();
             }
 
-            // Sync high-speed modular timers
             this.timer1.tick();
             this.timer2.tick();
             this.timer3.tick();
+
+            // Periodic telemetry check (Outputs SPC700 PC once every ~50,000 ticks)
+            if (this.cycles % 50000 === 0) {
+                const pc = this.spc.br[0]; // SPC700 PC Register
+                const sp = this.spc.r[3];  // SPC700 SP Register
+                const iplActive = this.dspRomReadable;
+                
+                // If PC remains within $FFC0-$FFFF, the game is stuck in the IPL Bootloader (Handshake failed)
+                // console.log(
+                //     `%c[EGGStation::APU-Diag] Cycles: ${this.cycles} | ` +
+                //     `SPC700 PC: $${getWordRep(pc)} | ` +
+                //     `SP: $${getByteRep(sp)} | ` +
+                //     `IPL ROM (Bootloader) Active: ${iplActive}`,
+                //     "color: #00d3ff; font-family: monospace;"
+                // );
+            }
 
             this.cycles++;
         }
@@ -216,6 +226,6 @@
         module.exports = SnesApu;
     } else if (typeof window !== 'undefined') {
         window.SnesApu = SnesApu;
-        window.Apu = SnesApu; // Backward compatibility alias
+        window.Apu = SnesApu; 
     }
 }

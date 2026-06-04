@@ -127,13 +127,13 @@ class SnesUIController {
         const file = event.target.files[0];
         if (!file) return;
 
-        const isHirom = document.getElementById('ishirom-toggle')?.value === "true";
         try {
             const buffer = await file.arrayBuffer();
             if (file.name.toLowerCase().endsWith('.zip')) {
-                this.decompressZipArchive(buffer, isHirom);
+                // Pass false as fallback mapper, the core will auto-detect HiROM/LoROM
+                this.decompressZipArchive(buffer, false);
             } else {
-                this.bootRom(new Uint8Array(buffer), isHirom);
+                this.bootRom(new Uint8Array(buffer), false);
             }
         } catch (error) {
             console.error("[EGGStation::SNES] File IO Exception:", error);

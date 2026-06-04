@@ -186,6 +186,8 @@
                     break;
                 }
                 case 0x4c: {
+                    // Log KON (Key On) trigger events to see if sound channels are actually fired
+                    // console.log(`%c[EGGStation::DSP-Diag] Key On (KON) Triggered: 0x${value.toString(16).toUpperCase()}`, "color: #04d361; font-weight: bold;");
                     let test = 1;
                     for (let i = 0; i < 8; i++) {
                         if ((value & test) > 0) {
@@ -220,6 +222,9 @@
                     this.resetFlag = (value & 0x80) > 0;
                     this.mute = (value & 0x40) > 0;
                     this.noiseRate = SnesDsp.rates[value & 0x1f];
+                    
+                    // Log DSP Mute status modifications
+                    // console.log(`%c[EGGStation::DSP-Diag] Synthesizer Mute State: ${this.mute} | Reset Flag: ${this.resetFlag}`, "color: #ff007f; font-weight: bold;");
                     break;
                 }
                 case 0x7c: {
