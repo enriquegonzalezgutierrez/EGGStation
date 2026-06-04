@@ -256,8 +256,13 @@
     <script src="js/snes/domain/cpu/SnesCpuArithmetic.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuLogic.js"></script>
 
-    <!-- 3. Original Unrefactored Hardware Core Files (Loaded directly from js/snes/) -->
-    <script src="js/snes/pipu.js"></script>
+    <!-- 5. PPU & Graphics Sub-Domain -->
+    <script src="js/snes/domain/ppu/SnesPpu.js"></script>
+    <script src="js/snes/domain/ppu/SnesPpuTables.js"></script>
+    <script src="js/snes/domain/ppu/SnesPpuBackground.js"></script>
+    <script src="js/snes/domain/ppu/SnesPpuSprite.js"></script>
+    <script src="js/snes/domain/ppu/SnesPpuMode7.js"></script>
+    <script src="js/snes/domain/ppu/SnesPpuCompositor.js"></script>    
     <!-- 2. SPC700 Audio CPU Sub-Domain -->
     <script src="js/snes/domain/spc/SnesSpc.js"></script>
     <script src="js/snes/domain/spc/SnesSpcAddressing.js"></script>
