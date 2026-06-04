@@ -1,21 +1,23 @@
 /**
- * Project: EGGStation - Sega & SNES Multi-System Emulator
- * Author: Enrique González Gutiérrez
+ * Project: EGGStation - Unified Multi-System Console Virtual Environment
+ * Component: System Bootstrapper and Console Swapper
+ * Language: Vanilla ES6+ JavaScript
  * 
- * Application Entry Point: Composition Root, Welcome Banner, & Console Swapper
+ * ROLE:
+ * This file serves as the system Bootstrapper (Composition Root). It manages the 
+ * lifecycle of the active emulation engines, coordinates clean hot-swapping between 
+ * Sega Master System, Sega Genesis, and SNES, and prevents memory leaks or audio pipeline 
+ * clashes by tearing down active web audio nodes and frame request loops cleanly.
  * 
- * This file serves as the system Bootstrapper. It coordinates the hot-swapping 
- * between the Sega Master System, Sega Genesis, and Super Nintendo (SNES) emulators
- * dynamically, tearing down hardware registers, cleaning event listeners, and closing 
- * active audio pipelines on-the-fly to guarantee zero leakages and stable 60 FPS.
- * 
- * SOLID Principles:
- * - Single Responsibility Principle (SRP): Concentrates global system swapper
- *   orchestration, DOM cleanup, and hardware Cartridge Ejection.
+ * SOLID PRINCIPLES:
+ * - Single Responsibility Principle (SRP): Concentrates system swapper states, 
+ *   canvas context creation, and background audio suspension.
+ * - Open/Closed Principle (OCP): New systems can be registered in the boot 
+ *   mapping without modifying existing swapper routines.
  */
 
 // ========================================================================
-// EGGSTATION RETRO SYNTHWAVE WELCOME BANNER (Author Signature)
+// EGGSTATION RETRO WELCOME BANNER (Author Signature)
 // ========================================================================
 const eggstationLogo = `
  _____ _____ _____ _____ _         _   _       
@@ -44,12 +46,12 @@ console.log(
 console.log("%c=============================", infoHeaderStyle);
 
 // ========================================================================
-// CONSOLE HOT-SWAPPING BOOTSTRAPPER (COMPOSITION ROOT)
+// CONSOLE HOT-SWAPPING COORDINATOR
 // ========================================================================
 let activeOrchestrator = null;
 let activeController = null;
 
-// Global state for audio enablement
+// Global tracking of active user audio permission
 window.audioEnabledState = true;
 
 /**
@@ -69,13 +71,17 @@ function toggleDeveloperSuite() {
     }
 }
 
+/**
+ * Shuts down active hardware loops, clears DOM event listeners, and boots the selected console.
+ * @param {string} consoleType - "SMS", "GEN", or "SNES"
+ */
 function bootConsole(consoleType) {
     console.log(`%c[EGGStation::Swapper] Purging hardware components for swap to ${consoleType}...`, "color: #7f00ff; font-weight: bold;");
 
     // Nullify active controller reference first to prevent gamepad poll loops from firing
     activeController = null;
 
-    // 1. Safe Teardown of the running console
+    // 1. Safe Teardown of the active console
     if (activeOrchestrator) {
         console.log(`[EGGStation::Swapper] Active orchestrator found. Stopping loop...`);
         
@@ -154,9 +160,6 @@ function bootConsole(consoleType) {
     // 4. Instantiate and Boot the Selected Console Engine
     if (consoleType === "SMS") {
         try {
-            // Show Master System specific options safely
-            document.getElementById('sms-config-section')?.classList.remove('hidden');
-
             activeOrchestrator = new EmulatorOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");
                 if (fpsElement) fpsElement.textContent = `${fps} FPS`;
@@ -171,16 +174,6 @@ function bootConsole(consoleType) {
     } 
     else if (consoleType === "GEN") {
         try {
-            // Hide Master System configurations safely
-            document.getElementById('sms-config-section')?.classList.add('hidden');
-            
-            if (glCanvas) {
-                glCanvas.style.display = "none";
-                glCanvas.style.visibility = "hidden";
-                glCanvas.style.position = "absolute";
-            }
-            videoCanvas?.classList.remove('hidden');
-
             activeOrchestrator = new GenesisOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");
                 if (fpsElement) fpsElement.textContent = `${fps} FPS`;
@@ -194,9 +187,6 @@ function bootConsole(consoleType) {
     }
     else if (consoleType === "SNES") {
         try {
-            // Hide Master System configurations safely
-            document.getElementById('sms-config-section')?.classList.add('hidden');
-            
             activeOrchestrator = new SnesOrchestrator(videoContext, glContext, (fps) => {
                 const fpsElement = document.getElementById("fpsSpan");
                 if (fpsElement) fpsElement.textContent = `${fps} FPS`;
@@ -209,9 +199,38 @@ function bootConsole(consoleType) {
         }
     }
 
-    // Apply current global audio state to the newly booted engine
-    if (activeOrchestrator && typeof activeOrchestrator.setAudioEnabled === 'function') {
-        activeOrchestrator.setAudioEnabled(window.audioEnabledState);
+    // 5. Auto-sync active visual and audio filter settings across hot-swaps
+    const postProcessSelector = document.getElementById('postProcessSelector');
+    const audioFilterSelector = document.getElementById('audioFilterSelector');
+    
+    const activeVideoFilter = postProcessSelector ? parseInt(postProcessSelector.value, 10) : 0;
+    const activeAudioFilter = audioFilterSelector ? parseInt(audioFilterSelector.value, 10) : 0;
+
+    if (activeOrchestrator) {
+        if (typeof activeOrchestrator.setPostProcessMode === 'function') {
+            activeOrchestrator.setPostProcessMode(activeVideoFilter);
+        } else {
+            activeOrchestrator.postProcessMode = activeVideoFilter;
+        }
+
+        if (typeof activeOrchestrator.setAudioFilterMode === 'function') {
+            activeOrchestrator.setAudioFilterMode(activeAudioFilter);
+        } else {
+            activeOrchestrator.audioFilterMode = activeAudioFilter;
+        }
+
+        if (typeof activeOrchestrator.setAudioEnabled === 'function') {
+            activeOrchestrator.setAudioEnabled(window.audioEnabledState);
+        }
+    }
+
+    // Trigger immediate viewport & canvas layout adjustments based on the active filter
+    if (activeController) {
+        if (typeof activeController.handlePostProcessChange === 'function') {
+            activeController.handlePostProcessChange(activeVideoFilter);
+        } else if (typeof activeController.updateVideoPipeline === 'function') {
+            activeController.updateVideoPipeline(activeVideoFilter);
+        }
     }
 }
 

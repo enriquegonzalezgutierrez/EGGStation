@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>EGGStation | Ultimate Web Emulator</title>
+    <title>EGGStation | Unified Multi-System Console Virtual Environment</title>
     
     <!-- Synthwave / Glassmorphism UI Stylesheet -->
     <link rel="stylesheet" href="css/main.css">
     
-    <!-- External Compression Libraries (Decompression of .zip ROMs) -->
+    <!-- External Compression Libraries (For decompression of zipped ROM packages) -->
     <script src="js/snes/lib/zip.js"></script>
     <script src="js/snes/lib/inflate.js"></script>
     <script src="js/snes/lib/deflate.js"></script>
@@ -18,7 +18,7 @@
     <!-- Main Grid App Container -->
     <div id="app-container">
 
-        <!-- HEADER: Branding & Global Console Selectors -->
+        <!-- HEADER: Branding & System Swapper -->
         <header id="top-bar">
             <div class="brand">
                 <img src="img/eggstation-visualizer.png" alt="EGGStation Logo" class="brand-logo">
@@ -26,6 +26,7 @@
             </div>
             
             <div class="system-stats">
+                <!-- Swapping console types triggers hardware-level hot-rebooting -->
                 <select id="consoleSelector" class="sys-selector">
                     <option value="SMS">Sega Master System</option>
                     <option value="GEN">Sega Genesis / Mega Drive</option>
@@ -36,25 +37,30 @@
             </div>
         </header>
 
-        <!-- STAGE: CRT Viewport & ROM Overlay -->
+        <!-- STAGE: Aspect-Ratio Television Viewport & ROM Overlay -->
         <main id="stage">
             <div id="crt-wrapper">
-                <!-- Hardware 2D Canvas (Primary output) -->
+                <!-- Hardware 2D Canvas (Primary frame output) -->
                 <canvas id="smsdisplay"></canvas>
-                <!-- WebGL2 Canvas (CRT-Royale / Advanced Shaders) -->
+                
+                <!-- WebGL2 Canvas (Target for unified CRT-Royale Shader across all consoles) -->
                 <canvas id="webgldisplay" class="hidden"></canvas>
                 
                 <!-- Overlay ROM Uploader -->
                 <div id="fileselector" class="overlay-center">
                     <button id="romLoaderBtn" class="btn primary-btn pulse-anim">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
                         INSERT CARTRIDGE
                     </button>
-                    <input type="file" id="cartridgeSelector" accept=".sms,.sg,.md,.gen,.bin,.smd,.sfc,.smc" style="display: none;">
+                    <input type="file" id="cartridgeSelector" accept=".sms,.sg,.md,.gen,.bin,.smd,.sfc,.smc,.zip" style="display: none;">
                 </div>
             </div>
 
-            <!-- Virtual On-Screen Gamepad for Mobile Views -->
+            <!-- Virtual On-Screen Gamepad for Mobile Viewports -->
             <section id="virtual-gamepad">
                 <div class="d-pad">
                     <button class="v-dir" id="v-up"></button>
@@ -76,19 +82,10 @@
             </section>
         </main>
 
-        <!-- SIDEBAR: Settings & Hardware Toggles -->
+        <!-- SIDEBAR: Settings & Hardware Toggles (Monomorphic UI) -->
         <aside id="settings-panel" class="glass-panel">
             <div class="panel-section">
                 <h3>System Configuration</h3>
-                
-                <!-- SNES Specific Config -->
-                <div class="control-group hidden" id="snes-config-section">
-                    <label>Cartridge Mode</label>
-                    <select id="ishirom-toggle">
-                        <option value="false">LoROM (Standard)</option>
-                        <option value="true">HiROM (Enhanced)</option>
-                    </select>
-                </div>
 
                 <div class="control-group">
                     <label>Audio Output</label>
@@ -140,6 +137,7 @@
                 </div>
             </div>
 
+            <!-- Persistence Panel linked to IndexedDB storage engine -->
             <div class="panel-section">
                 <h3>Temporal Physics</h3>
                 <div class="savestate-preview">
@@ -152,7 +150,7 @@
             </div>
         </aside>
 
-        <!-- DEVELOPER SUITE: Hardware Diagnostics -->
+        <!-- DEVELOPER SUITE: Hardware Diagnostics (Grows dynamically on desktop) -->
         <footer id="developer-suite" class="glass-panel hidden">
             <div class="dev-section">
                 <h4>Execution Core</h4>
@@ -161,10 +159,21 @@
                     <button id="dbg-pause" class="btn dev-btn">⏸ PAUSE</button>
                 </div>
             </div>
+            
             <div class="dev-section">
                 <h4>Hardware Registers</h4>
+                <!-- Cleared and structured dynamically with Z80, M68K, or 65816 labels by UIControllers -->
                 <div class="registers-grid" id="reg-grid"></div>
             </div>
+
+            <div class="dev-section">
+                <h4>Diagnostic VRAM Viewer</h4>
+                <div class="vram-preview-wrapper">
+                    <!-- Standard diagnostic canvas populated with active pattern tables -->
+                    <canvas id="vram-canvas" width="128" height="192"></canvas>
+                </div>
+            </div>
+
             <div class="dev-section">
                 <h4>System Logs</h4>
                 <div id="log" class="terminal-box"></div>
