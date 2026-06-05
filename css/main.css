@@ -74,7 +74,7 @@ body {
         "header header"
         "stage sidebar"
         "debugger debugger";
-    grid-template-rows: 60px 1fr 280px;
+    grid-template-rows: 60px 1fr 340px; /* PHASE 4: Increased from 280px for standard fitting */
 }
 
 /* ==========================================================================
@@ -180,11 +180,14 @@ body {
     /* Prepares GPU memory mapping context for CRT Warm-Up/Power-Off animations */
     transform-origin: center center;
     will-change: transform, filter, opacity;
+
+    /* PHASE 4: Snychronize CRT vertical resize transitions with Dev Suite panel curtain */
+    transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 /* Dynamically compress CRT height when developer panel expands downward */
 #app-container.dev-mode #crt-wrapper {
-    max-height: calc(100vh - 440px);
+    max-height: calc(100vh - 500px); /* PHASE 4: Adjusted from 440px to balance the grid */
 }
 
 canvas {
@@ -452,11 +455,11 @@ select:hover, .btn:hover {
 .registers-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 8px 16px;
+    gap: 4px 16px; /* PHASE 4: Compressed gap from 8px */
     font-family: monospace;
-    font-size: 0.95rem;
+    font-size: 0.85rem; /* PHASE 4: Compressed font size from 0.95rem */
     background: rgba(0, 0, 0, 0.2);
-    padding: 12px;
+    padding: 8px 12px; /* PHASE 4: Compressed padding */
     border-radius: 6px;
     border: 1px solid var(--glass-border);
 }

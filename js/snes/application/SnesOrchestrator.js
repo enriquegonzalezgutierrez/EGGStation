@@ -106,7 +106,7 @@ class SnesOrchestrator {
                         arr[destOffset1 + 3] = 255;
                     }
                     if (writeRow2) {
-                        arr[destOffset2] = r; // <--- CORREGIDO
+                        arr[destOffset2] = r; 
                         arr[destOffset2 + 1] = g;
                         arr[destOffset2 + 2] = b;
                         arr[destOffset2 + 3] = 255;
@@ -452,5 +452,98 @@ class SnesOrchestrator {
                 console.error("[SnesOrchestrator] Load State failed:", err);
             }
         }
+    }
+
+    // ========================================================================
+    // DEVELOPE SUITE DIAGNOSTICS HOOKS (PHASE 4)
+    // ========================================================================
+
+    /**
+     * PHASE 4: Return current Ricoh 5A22 CPU registers as a polymorphic dictionary.
+     */
+    getRegisters() {
+        if (!this.hardware || !this.hardware.cpu) return {};
+        const cpu = this.hardware.cpu;
+        const getWordRep = (val) => ("000" + val.toString(16)).slice(-4).toUpperCase();
+        const getByteRep = (val) => ("0" + val.toString(16)).slice(-2).toUpperCase();
+        
+        return {
+            A: getWordRep(cpu.br[0]),
+            X: getWordRep(cpu.br[1]),
+            Y: getWordRep(cpu.br[2]),
+            SP: getWordRep(cpu.br[3]),
+            PC: getWordRep(cpu.br[4]),
+            DPR: getWordRep(cpu.br[5]),
+            DBR: getByteRep(cpu.r[0]),
+            K: getByteRep(cpu.r[1]),
+            P: getByteRep(cpu.getP())
+        };
+    }
+
+    /**
+     * PHASE 4: Return the active program disassembly around PC as a string array.
+     */
+    getDisassembly() {
+        if (!this.hardware || !this.hardware.cpu) return [];
+        const lines = [];
+        const cpu = this.hardware.cpu;
+        const pcHex = ((cpu.r[1] << 16) | cpu.br[4]).toString(16).toUpperCase().padStart(6, '0');
+        const opHex = this.hardware.read((cpu.r[1] << 16) | cpu.br[4]).toString(16).toUpperCase().padStart(2, '0');
+        lines.push(`${pcHex}: OPCODE 0x${opHex}`);
+        return lines;
+    }
+
+    /**
+     * PHASE 4: Decodes SNES custom 4bpp (16-color) planar VRAM pattern tables in real-time.
+     * Renders decoded sprite and background character tiles to the diagnostics canvas.
+     */
+    drawVramDiagnostics(ctx) {
+        if (!this.hardware || !this.hardware.ppu) return;
+        
+        const imgData = ctx.createImageData(128, 192);
+        const vram = this.hardware.ppu.vram; // 32,768 words of 16-bit
+        
+        // Render 384 tiles (16 columns * 24 rows of 8x8 tiles) in standard SNES 4bpp format
+        for (let tileIdx = 0; tileIdx < 384; tileIdx++) {
+            const tileX = tileIdx % 16;
+            const tileY = Math.floor(tileIdx / 16);
+            const destBaseX = tileX * 8;
+            const destBaseY = tileY * 8;
+            
+            // Each SNES 4bpp tile block is exactly 16 words (32 bytes) long
+            const tileWordOffset = tileIdx * 16;
+            
+            for (let row = 0; row < 8; row++) {
+                // Word A (Planes 0 & 1) and Word B (Planes 2 & 3) snychronously fetched
+                const wordA = vram[(tileWordOffset + row) & 0x7fff];
+                const wordB = vram[(tileWordOffset + 8 + row) & 0x7fff];
+                
+                for (let col = 0; col < 8; col++) {
+                    const shift = 7 - col;
+                    
+                    // Decodes 4 planes using precise bit shifting mask algorithms
+                    const bit0 = (wordA >> shift) & 1;
+                    const bit1 = (wordA >> (8 + shift)) & 1;
+                    const bit2 = (wordB >> shift) & 1;
+                    const bit3 = (wordB >> (8 + shift)) & 1;
+                    
+                    // Pack bits into a final 4-bit Color Index (0 to 15)
+                    const colorIdx = bit0 | (bit1 << 1) | (bit2 << 2) | (bit3 << 3);
+                    
+                    // Map 4-bit palette index snychronously to greyscale (Luminance scaling)
+                    const rgb = colorIdx * 17; 
+                    
+                    const pixelX = destBaseX + col;
+                    const pixelY = destBaseY + row;
+                    const destIdx = (pixelX + (pixelY * 128)) * 4;
+                    
+                    imgData.data[destIdx]     = rgb;
+                    imgData.data[destIdx + 1] = rgb;
+                    imgData.data[destIdx + 2] = rgb;
+                    imgData.data[destIdx + 3] = 255;
+                }
+            }
+        }
+        ctx.putImageData(imgData, 0, 0);
     }
 }

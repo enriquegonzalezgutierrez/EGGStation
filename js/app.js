@@ -79,6 +79,7 @@ function toggleDeveloperSuite() {
  */
 function teardownActiveConsole() {
     activeController = null;
+    window.activeController = null; // Clean global references
 
     if (activeOrchestrator) {
         console.log(`[EGGStation::Swapper] Halting active orchestrator loop...`);
@@ -106,6 +107,9 @@ function teardownActiveConsole() {
             }
         });
     }
+    
+    activeOrchestrator = null;
+    window.activeOrchestrator = null; // Clean global references
 
     // Clone DOM elements to safely purge old event listeners from previous UIControllers
     const elementsToClone = ['romLoaderBtn', 'cartridgeSelector', 'developer-suite'];
@@ -184,7 +188,11 @@ function bootConsole(consoleType) {
                 throw new Error(`Unknown console type: ${consoleType}`);
         }
         
-        // PHASE 4: Dynamically draw the correct active system preview thumbnail on boot
+        // PHASE 4: Expose active orchestrator instances on the global window scope snychronously
+        window.activeOrchestrator = activeOrchestrator;
+        window.activeController = activeController;
+        
+        // Dynamically draw the correct active system preview thumbnail on boot
         updateSaveStatePreview();
         
         console.log(`%c[EGGStation::Swapper] ${consoleType} Engine instantiated successfully.`, "color: #04d361; font-weight: bold;");
