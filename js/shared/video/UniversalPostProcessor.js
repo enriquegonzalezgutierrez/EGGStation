@@ -4,7 +4,7 @@
  * File: js/shared/video/UniversalPostProcessor.js
  * 
  * Role:
- * Infrastructure Layer: Universal Video Post-Processor Service.
+ * Infrastructure Layer: Universal Video Post-Processor Service (Crash-Proof Edition).
  * Consolidates WebGL2 CRT-Royale Shader execution and CPU-based fallback scaling 
  * algorithms (Scale2X, Scale4X, Scanlines, NTSC Bleed) into a single, high-performance, 
  * polymorphic rendering engine.
@@ -28,18 +28,10 @@
 
 class UniversalPostProcessor {
     /**
-     * Polymorphic Constructor.
-     * Supports both single argument initialization: (gl) -> SNES
-     * and dual argument initialization: (vdp, gl) -> SMS and Genesis.
+     * @param {WebGL2RenderingContext} gl - WebGL2 context used for GPU shaders.
      */
-    constructor(arg1, arg2) {
-        if (arg2 !== undefined) {
-            this.vdp = arg1;
-            this.gl = arg2;
-        } else {
-            this.vdp = null;
-            this.gl = arg1;
-        }
+    constructor(gl) {
+        this.gl = gl;
 
         // Zero-Allocation Ring Buffers (Pre-allocated to prevent GC spikes)
         // Accommodates max system target boundaries: SNES High-Res (512x480) * 4x Scale
@@ -339,29 +331,40 @@ class UniversalPostProcessor {
 
     /**
      * Blits the emulated system's raw backbuffer array to the output target context.
-     * Supports dynamic polymorphic signatures to preserve SMS compatibility out-of-the-box.
      * 
      * @param {CanvasRenderingContext2D} ctx - Target 2D Canvas Context.
      * @param {ArrayBufferView} src - Flat 32-bit packed or 8-bit array frame backbuffer.
-     * @param {number} widthOrHeight - Width (Gen/SNES) OR Height (SMS compatibility).
-     * @param {number} heightOrMode - Height (Gen/SNES) OR PostProcessMode (SMS compatibility).
-     * @param {number} [postProcessMode] - Selected filter index (0-6).
+     * @param {number} width - Emulated screen width.
+     * @param {number} height - Emulated screen height.
+     * @param {number} postProcessMode - Selected filter index (0-6).
      * @param {ArrayBufferView} [prevFrameBuffer] - Historical frame buffer for anaglyph 3D composting.
      */
-    blit(ctx, src, widthOrHeight, heightOrMode, postProcessMode, prevFrameBuffer) {
-        let actualWidth, actualHeight, actualMode, actualPrev;
+    blit(ctx, src, width, height, postProcessMode, prevFrameBuffer) {
+        let actualWidth = Number(width);
+        let actualHeight = Number(height);
+        let actualMode = Number(postProcessMode);
+        let actualPrev = prevFrameBuffer;
 
         // SMS Polymorphic Signature Adapter: (ctx, src, yScreenLines, postProcessMode)
+        // Detects if the call parameters shift due to SMS legacy dimensions mapping
         if (postProcessMode === undefined && prevFrameBuffer === undefined) {
-            actualWidth = 256;             // SMS resolution is always 256 wide
-            actualHeight = widthOrHeight;  // yScreenLines (192, 224 or 240)
-            actualMode = heightOrMode;     // postProcessMode
+            actualWidth = 256;                 // SMS resolution is always 256 wide
+            actualHeight = Number(width);      // yScreenLines (192, 224 or 240)
+            actualMode = Number(height);       // postProcessMode
             actualPrev = null;
-        } else {
-            actualWidth = widthOrHeight;
-            actualHeight = heightOrMode;
-            actualMode = postProcessMode;
-            actualPrev = prevFrameBuffer;
+        }
+
+        // --- DEFENSIVE CRASH PROTECTION LAYER (Zero / NaN / Undefined fallback) ---
+        if (!actualWidth || isNaN(actualWidth) || actualWidth <= 0) {
+            console.warn(`[UniversalPostProcessor] Invalid width detected: ${width}. Falling back to 256.`);
+            actualWidth = 256;
+        }
+        if (!actualHeight || isNaN(actualHeight) || actualHeight <= 0) {
+            console.warn(`[UniversalPostProcessor] Invalid height detected: ${height}. Falling back to 192.`);
+            actualHeight = 192;
+        }
+        if (isNaN(actualMode)) {
+            actualMode = 0;
         }
 
         // Enforce 32-bit view over input buffer
@@ -454,11 +457,3 @@ class UniversalPostProcessor {
         gl.bindVertexArray(null);
     }
 }
-
-// ========================================================================
-// POLYMORPHIC COMPATIBILITY SHIMS
-// Bridges legacy engine references directly to the UniversalPostProcessor
-// ========================================================================
-window.VdpPostProcessor = UniversalPostProcessor;
-window.GenesisPostProcessor = UniversalPostProcessor;
-window.SnesPostProcessor = UniversalPostProcessor;

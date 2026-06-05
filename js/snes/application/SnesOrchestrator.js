@@ -1,10 +1,21 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Application Layer
- * Component: SnesOrchestrator (Application Ticker and Viewport Link)
+ * Author: Enrique González Gutiérrez
+ * File: js/snes/application/SnesOrchestrator.js
  * 
- * ROLE:
+ * Role:
+ * Application Layer: SnesOrchestrator (Application Ticker and Viewport Link).
  * Manages execution loops, synchronization ticks, input delivery, and transfers
  * video/audio output buffers to infrastructure processor nodes.
+ * 
+ * SOLID Principles Applied:
+ * 1. Single Responsibility Principle (SRP): Exclusively coordinates execution loops, 
+ *    frame timing synchronization, and audio/video stream buffering.
+ * 2. Liskov Substitution Principle (LSP): Fully implements the unified orchestrator 
+ *    interface expected by the app.js Bootstrapper (loadRom, stop, setAudioEnabled).
+ * 3. Dependency Inversion Principle (DIP): Depends directly on the shared 
+ *    UniversalPostProcessor abstraction rather than tight coupling to legacy 
+ *    custom post-processors.
  */
 
 class SnesOrchestrator {
@@ -25,7 +36,8 @@ class SnesOrchestrator {
 
         this.imgData = this.ctx.createImageData(512, 480);
 
-        this.postProcessor = new SnesPostProcessor(this.gl);
+        // PHASE 4: Instantiate the UniversalPostProcessor directly
+        this.postProcessor = new UniversalPostProcessor(this.gl);
         this.audioProcessor = new SnesAudioProcessor();
         this.audioProcessor.orchestrator = this;
 
@@ -49,7 +61,7 @@ class SnesOrchestrator {
 
         this.injectOptimizedPixelCopier();
 
-        console.log("[EGGStation::SNES] Orchestrator Layer Initialized with Delta-Time Sync.");
+        console.log("[SnesOrchestrator] Orchestrator Layer Initialized.");
     }
 
     injectOptimizedPixelCopier() {
@@ -130,7 +142,7 @@ class SnesOrchestrator {
             this.hardware.reset(true);
             this.start();
         } catch (error) {
-            console.error("[EGGStation::SNES] Core loading exception:", error);
+            console.error("[SnesOrchestrator] Core loading exception:", error);
             throw error;
         }
     }
@@ -168,7 +180,6 @@ class SnesOrchestrator {
 
         let elapsed = timestamp - this.lastFrameTime;
         
-        // Prevent speed surges or spiral-of-death during sudden browser stutters
         if (elapsed > 100) {
             elapsed = 100;
         }
@@ -176,25 +187,22 @@ class SnesOrchestrator {
         this.lastFrameTime = timestamp;
         this.accumulatedTime += elapsed;
 
-        // OPTIMIZATION: Dynamically adjust target FPS according to the active cartridge region (PAL: 50.0 Hz, NTSC: 60.098 Hz)
         const targetFps = (this.hardware.ppu && this.hardware.ppu.isPal) ? 50.0 : 60.098;
         const targetFrameDuration = 1000.0 / targetFps;
         let framesRun = 0;
 
-        // Process frames synchronously with actual time elapsed
         while (this.accumulatedTime >= targetFrameDuration) {
             if (!this.isPaused) {
                 this.hardware.runFrame(false);
                 this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
                 this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
                 
-                this.fpsCount++; // Measure true emulated frames
+                this.fpsCount++; 
                 framesRun++;
             }
             this.accumulatedTime -= targetFrameDuration;
         }
 
-        // Only redraw/convert if we actually ran at least one new frame!
         if (framesRun > 0 && !this.isPaused) {
             const activeHeight = this.hardware.ppu.frameOverscan ? 240 : 224;
 

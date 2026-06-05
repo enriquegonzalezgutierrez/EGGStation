@@ -1,12 +1,21 @@
-/* 
+/**
  * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
+ * File: js/sms/infrastructure/video/Sega315_5124_Vdp.js
  * 
- * Infrastructure Layer: Sega 315-5124 VDP (Sequential Pointer Optimized)
- * 
+ * Role:
+ * Infrastructure Layer: Sega 315-5124 custom VDP (Sequential Pointer Optimized).
  * Emulates the central control bus, ports, registers, and timing synchronizations.
  * Optimized with linear pointer increments to remove expensive coordinate index multiplications
  * from the high-frequency pixel rendering hot paths.
+ * 
+ * SOLID Principles Applied:
+ * 1. Single Responsibility Principle (SRP): Responsible strictly for raw scanline 
+ *    drawing, sprite evaluation, and VDP register tracking. It delegates upscaling 
+ *    and shaders to UniversalPostProcessor.
+ * 2. Dependency Inversion Principle (DIP): No longer depends on a concrete, 
+ *    tightly-coupled legacy post-processor. It now instantiates and communicates 
+ *    directly with the universal shared UniversalPostProcessor.
  */
 
 class Sega315_5124_Vdp {
@@ -90,7 +99,8 @@ class Sega315_5124_Vdp {
             230,206,128, 33,176,59, 201,91,186, 204,204,204, 255,255,255
         ]);
 
-        this.postProcessor = new VdpPostProcessor(this, glContext);
+        // PHASE 4: Instantiate the UniversalPostProcessor directly without tight coupling
+        this.postProcessor = new UniversalPostProcessor(glContext);
     }
 
     cleanSpriteBuffer() {

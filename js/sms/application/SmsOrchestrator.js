@@ -10,10 +10,12 @@
  * 
  * SOLID Principles Applied:
  * 1. Single Responsibility Principle (SRP): Isolates loop orchestration, frame 
- *    pacing, and GC-Free state serialization pooling from the DOM and input handlers.
- * 2. Liskov Substitution Principle (LSP): Fully implements the implicit universal 
- *    orchestrator interface expected by the `app.js` Bootstrapper (loadRom, stop, 
- *    togglePause, setAudioEnabled, etc.), ensuring safe hot-swapping.
+ *    pacing, and state serialization mapping from the DOM and input controllers.
+ * 2. Liskov Substitution Principle (LSP): Fully implements the unified orchestrator 
+ *    interface expected by the app.js Bootstrapper (loadRom, stop, setAudioEnabled).
+ * 3. Dependency Inversion Principle (DIP): Relies directly on the abstract 
+ *    Universal IndexedDbManager client rather than tightly coupling to legacy 
+ *    custom serializer scripts.
  */
 
 class SmsOrchestrator {
@@ -66,7 +68,9 @@ class SmsOrchestrator {
         this.cartridge = null;
         
         this.ioController = new Sega315_5297();
-        this.serializer = new WebIndexedDBSerializer(); 
+        
+        // PHASE 4: Bind directly to the clean generic database client
+        this.serializer = new IndexedDbManager(); 
 
         this.loop = this.loop.bind(this);
     }
@@ -222,10 +226,79 @@ class SmsOrchestrator {
         }
     }
 
+    /**
+     * PHASE 4: Self-serialize standard engine properties to be handled by the Database Client.
+     */
     async saveState() {
         if (this.isRunning && this.cartridge) {
             try {
-                await this.serializer.serialize(this.cartridge.cartridgeName, this.cpu, this.vdp, this.mmu, this.psg);
+                // Collect mapper slots indices directly from DOM mapping
+                const slotsIndices = [-1, -1, -1];
+                for (let i = 0; i < 3; i++) {
+                    slotsIndices[i] = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[i]);
+                }
+
+                const statePayload = {
+                    cpu: {
+                        registers: { ...this.cpu.registers },
+                        shadowRegisters: { ...this.cpu.shadowRegisters },
+                        maskableInterruptsEnabled: this.cpu.maskableInterruptsEnabled,
+                        maskableInterruptWaiting: this.cpu.maskableInterruptWaiting,
+                        interruptMode: this.cpu.interruptMode,
+                        totCycles: this.cpu.totCycles,
+                        NMIWaiting: this.cpu.NMIWaiting,
+                        m_bAfterEI: this.cpu.m_bAfterEI
+                    },
+                    vdp: {
+                        colorRam: new Uint8Array(this.vdp.colorRam),
+                        vRam: new Uint8Array(this.vdp.vRam),
+                        currentScanlineIndex: this.vdp.currentScanlineIndex,
+                        lineCounter: this.vdp.lineCounter,
+                        controlWordFlag: this.vdp.controlWordFlag,
+                        controlWord: this.vdp.controlWord,
+                        dataPortReadWriteAddress: this.vdp.dataPortReadWriteAddress,
+                        dataPortWriteMode: this.vdp.dataPortWriteMode,
+                        readBufferByte: this.vdp.readBufferByte,
+                        statusFlags: this.vdp.statusFlags,
+                        nameTableBaseAddress: this.vdp.nameTableBaseAddress,
+                        spriteAttributeTableBaseAddress: this.vdp.spriteAttributeTableBaseAddress,
+                        spritePatternGeneratorBaseAddress: this.vdp.spritePatternGeneratorBaseAddress,
+                        vcounter: this.vdp.vcounter,
+                        hcounter: this.vdp.hcounter,
+                        register00: this.vdp.register00, register01: this.vdp.register01,
+                        register02: this.vdp.register02, register03: this.vdp.register03,
+                        register04: this.vdp.register04, register05: this.vdp.register05,
+                        register06: this.vdp.register06, register07: this.vdp.register07,
+                        register08: this.vdp.register08, register09: this.vdp.register09,
+                        register0a: this.vdp.register0a
+                    },
+                    mmu: {
+                        systemWorkRam: new Uint8Array(this.mmu.systemWorkRam),
+                        mapperSlot2IsCartridgeRam: this.mmu.mapper.mapperSlot2IsCartridgeRam,
+                        cartridgeRam: this.mmu.mapper.cartridgeRam ? new Uint8Array(this.mmu.mapper.cartridgeRam) : null,
+                        slotsIndices: slotsIndices
+                    },
+                    psg: {
+                        volregister: [...this.psg.volregister],
+                        toneregister: [...this.psg.toneregister],
+                        wavePos: [...this.psg.wavePos],
+                        chan2belatched: this.psg.chan2belatched,
+                        what2latch: this.psg.what2latch,
+                        latch: this.psg.latch,
+                        internalClock: this.psg.internalClock,
+                        internalClockPos: this.psg.internalClockPos
+                    }
+                };
+
+                await this.serializer.save(this.cartridge.cartridgeName, statePayload);
+
+                // Save UI snapshot thumbnail to localStorage
+                if (this.vdp.glbFrameBuffer) {
+                    const smallArray = Array.from(this.vdp.glbFrameBuffer);
+                    localStorage.setItem('savestateScreenshot', JSON.stringify(smallArray));
+                    localStorage.setItem('cartName', this.cartridge.cartridgeName);
+                }
+
                 console.log("[SmsOrchestrator] State Saved.");
             } catch (err) {
                 console.error("[SmsOrchestrator] Save State failed:", err);
@@ -233,16 +306,84 @@ class SmsOrchestrator {
         }
     }
 
+    /**
+     * PHASE 4: Load and reconstruct serialized state values directly.
+     */
     async loadState() {
         if (this.isRunning && this.cartridge) {
             try {
-                const status = await this.serializer.deserialize(this.cartridge.cartridgeName, this.cpu, this.vdp, this.mmu, this.psg);
-                if (status === 0 && this.psg) {
-                    this.psg.syncWorkletState();
-                    this.rewindActiveCount = 0;
-                    this.rewindHistoryPointer = 0;
-                    console.log("[SmsOrchestrator] State Loaded.");
+                const state = await this.serializer.load(this.cartridge.cartridgeName);
+                if (!state) {
+                    console.error(`[SmsOrchestrator] No saved state found for [${this.cartridge.cartridgeName}]`);
+                    return;
                 }
+
+                // 1. Reconstitute CPU State
+                Object.assign(this.cpu.registers, state.cpu.registers);
+                Object.assign(this.cpu.shadowRegisters, state.cpu.shadowRegisters);
+                this.cpu.maskableInterruptsEnabled = state.cpu.maskableInterruptsEnabled;
+                this.cpu.maskableInterruptWaiting = state.cpu.maskableInterruptWaiting;
+                this.cpu.interruptMode = state.cpu.interruptMode;
+                this.cpu.totCycles = state.cpu.totCycles;
+                this.cpu.NMIWaiting = state.cpu.NMIWaiting;
+                this.cpu.m_bAfterEI = state.cpu.m_bAfterEI;
+
+                // 2. Reconstitute VDP State
+                this.vdp.colorRam.set(state.vdp.colorRam);
+                this.vdp.vRam.set(state.vdp.vRam);
+                this.vdp.currentScanlineIndex = state.vdp.currentScanlineIndex;
+                this.vdp.lineCounter = state.vdp.lineCounter;
+                this.vdp.controlWordFlag = state.vdp.controlWordFlag;
+                this.vdp.controlWord = state.vdp.controlWord;
+                this.vdp.dataPortReadWriteAddress = state.vdp.dataPortReadWriteAddress;
+                this.vdp.dataPortWriteMode = state.vdp.dataPortWriteMode;
+                this.vdp.readBufferByte = state.vdp.readBufferByte;
+                this.vdp.statusFlags = state.vdp.statusFlags;
+                this.vdp.nameTableBaseAddress = state.vdp.nameTableBaseAddress;
+                this.vdp.spriteAttributeTableBaseAddress = state.vdp.spriteAttributeTableBaseAddress;
+                this.vdp.spritePatternGeneratorBaseAddress = state.vdp.spritePatternGeneratorBaseAddress;
+                this.vdp.vcounter = state.vdp.vcounter;
+                this.vdp.hcounter = state.vdp.hcounter;
+                this.vdp.register00 = state.vdp.register00; this.vdp.register01 = state.vdp.register01;
+                this.vdp.register02 = state.vdp.register02; this.vdp.register03 = state.vdp.register03;
+                this.vdp.register04 = state.vdp.register04; this.vdp.register05 = state.vdp.register05;
+                this.vdp.register06 = state.vdp.register06; this.vdp.register07 = state.vdp.register07;
+                this.vdp.register08 = state.vdp.register08; this.vdp.register09 = state.vdp.register09;
+                this.vdp.register0a = state.vdp.register0a;
+
+                // 3. Reconstitute Memory Bus State
+                this.mmu.systemWorkRam.set(state.mmu.systemWorkRam);
+                if (state.mmu.cartridgeRam && this.mmu.mapper?.cartridgeRam) {
+                    this.mmu.mapper.cartridgeRam.set(state.mmu.cartridgeRam);
+                }
+                if (this.mmu.mapper) {
+                    this.mmu.mapper.mapperSlot2IsCartridgeRam = state.mmu.mapperSlot2IsCartridgeRam;
+                    const slotIndices = state.mmu.slotsIndices;
+                    if (slotIndices[0] !== -1) this.mmu.mapper.mapperSlots[0] = this.mmu.mapper.romBanks[slotIndices[0]];
+                    if (slotIndices[1] !== -1) this.mmu.mapper.mapperSlots[1] = this.mmu.mapper.romBanks[slotIndices[1]];
+                    if (slotIndices[2] !== -1) this.mmu.mapper.mapperSlots[2] = this.mmu.mapper.romBanks[slotIndices[2]];
+                }
+
+                // 4. Reconstitute PSG Audio State
+                this.psg.volregister = state.psg.volregister;
+                this.psg.toneregister = state.psg.toneregister;
+                this.psg.wavePos = state.psg.wavePos;
+                this.psg.chan2belatched = state.psg.chan2belatched;
+                this.psg.what2latch = state.psg.what2latch;
+                this.psg.latch = state.psg.latch;
+                this.psg.internalClock = state.psg.internalClock;
+                this.psg.internalClockPos = state.psg.internalClockPos;
+
+                this.psg.syncWorkletState();
+                this.rewindActiveCount = 0;
+                this.rewindHistoryPointer = 0;
+
+                // Recalculate voice steps
+                for (let i = 0; i < 4; i++) {
+                    this.psg.recalculateVoiceStep(i);
+                }
+
+                console.log("[SmsOrchestrator] State Loaded.");
             } catch (err) {
                 console.error("[SmsOrchestrator] Load State failed:", err);
             }
@@ -471,7 +612,9 @@ class SmsOrchestrator {
 
         // Handle active rewinding
         if (this.isRewinding) {
-            if (this.psg) this.psg.setMuted(true);
+            if (this.psg) {
+                this.psg.setMuted(true);
+            }
             
             if (this.rewindActiveCount > 0) {
                 for (let i = 0; i < 2; i++) {

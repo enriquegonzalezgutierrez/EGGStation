@@ -1,22 +1,21 @@
 /**
  * Project: EGGStation - Sega Genesis / Mega Drive Emulator
  * Author: Enrique González Gutiérrez
+ * File: js/genesis/application/GenesisOrchestrator.js
  * 
- * Application Layer: Sega Genesis Orchestrator
- * 
+ * Role:
+ * Application Layer: Sega Genesis Orchestrator.
  * Coordinates the master system synchronization, clock cycle divisions, 
  * frame pacing, and maps physical CPU buses to the VDP, PSG, and FM coprocessors.
  * 
- * Aligned with hardware standards to resolve:
- * 1. Linear Scanline Rendering Pipeline: Guarantees that the VDP's high-fidelity 
- *    `endScanline` renderer is executed exactly once per line, resolving the 
- *    H-Flip/V-Flip bypass bug caused by asynchronous cycle execution.
- * 2. Full Application State Integration: Restores Savestates, Real-Time Rewind, 
- *    and Hardware Pause triggers decoupled from the DOM.
- * 
- * SOLID Principles:
- * - Single Responsibility Principle (SRP): Isolates loop orchestration, frame 
- *   timing, and audio buffer dispatching from the DOM.
+ * SOLID Principles Applied:
+ * 1. Single Responsibility Principle (SRP): Isolates loop orchestration, frame 
+ *    timing, and audio buffer dispatching from the DOM.
+ * 2. Liskov Substitution Principle (LSP): Fully implements the unified orchestrator 
+ *    interface expected by the app.js Bootstrapper (loadRom, stop, setAudioEnabled).
+ * 3. Dependency Inversion Principle (DIP): Relies directly on the abstract 
+ *    Universal IndexedDbManager client rather than tightly coupling to legacy 
+ *    custom serializer scripts.
  */
 
 class GenesisOrchestrator {
@@ -50,7 +49,7 @@ class GenesisOrchestrator {
         this.lastDeltaTime = 0; 
 
         // State Serializer and GC-Free Rewind Pool
-        this.serializer = new WebIndexedDBSerializer();
+        this.serializer = new IndexedDbManager();
         this.maxRewindStates = 100; 
         this.rewindHistory = [];
         this.rewindHistoryPointer = 0;
@@ -92,7 +91,8 @@ class GenesisOrchestrator {
         this.prevFrameBuffer = new Uint8ClampedArray(320 * 240 * 4);
         this.postProcessMode = 0; 
 
-        this.postProcessor = new GenesisPostProcessor(this.vdp, this.glContext);
+        // PHASE 4: Use the UniversalPostProcessor directly
+        this.postProcessor = new UniversalPostProcessor(this.glContext);
         this.loop = this.loop.bind(this);
     }
 
@@ -202,7 +202,6 @@ class GenesisOrchestrator {
 
     /**
      * Loads a cartridge binary, mounts it on the bus, and then triggers the CPU hardware reset.
-     * Supports both single-argument (romBuffer) and dual-argument (filename, romBuffer) signatures.
      * @param {string|ArrayBuffer} filenameOrBuffer - The ROM filename or raw buffer.
      * @param {ArrayBuffer} [optionalBuffer] - The raw ROM array buffer if filename is provided.
      */
@@ -211,31 +210,17 @@ class GenesisOrchestrator {
             cancelAnimationFrame(this.animationFrameId);
         }
 
-        // Auto-resolve parameter mismatch: if second argument is present, it is the buffer,
-        // otherwise the first argument is the buffer.
         const romBuffer = optionalBuffer !== undefined ? optionalBuffer : filenameOrBuffer;
 
         if (!romBuffer || !(romBuffer instanceof ArrayBuffer)) {
-            console.error("[EGGStation::Orchestrator] Fatal: Invalid ROM ArrayBuffer passed to loadRom.");
+            console.error("[GenesisOrchestrator] Fatal: Invalid ROM ArrayBuffer passed to loadRom.");
             return;
         }
 
-        // 1. Prepare system components (Clears old arrays)
         this.initialise();
-        
-        // 2. Mount the ROM cartridge into the 68K memory bus space
         this.bus.setCartridge(romBuffer);
-
-        // Synchronize the auto-detected TV standard and region speed directly 
-        // with the orchestrator loop parameters. This guarantees that PAL region games 
-        // will run synchronously at PAL speeds (50Hz) and bypass region checks successfully.
         this.setTvStandard(this.bus.tvStandard === 1 ? "PAL" : "NTSC");
-        
-        // 3. Trigger CPU hardware reset *AFTER* the ROM cartridge is successfully mounted!
-        // This ensures the CPU correctly reads vector tables from address 0x000000 and 0x000004.
         this.m68k.reset();
-        
-        // 4. Fire up audio systems
         this.startAudio();
 
         this.isRunning = true;
@@ -250,9 +235,20 @@ class GenesisOrchestrator {
         this.lastTime = performance.now();
         this.accumulatedTime = 0;
 
-        console.log("GenesisOrchestrator::Sega Genesis Engine Booted Successfully.");
+        console.log("[GenesisOrchestrator] Sega Genesis Engine Booted Successfully.");
 
         this.animationFrameId = requestAnimationFrame(this.loop);
+    }
+    
+    stop() {
+        this.isRunning = false;
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+        if (this.audioCtx && this.audioCtx.state !== 'closed') {
+            this.audioCtx.close().catch(() => {});
+        }
     }
 
     setAudioEnabled(enabled) {
@@ -280,33 +276,113 @@ class GenesisOrchestrator {
     }
 
     triggerPauseButton() {
-        // On Sega Genesis, Pause is mapped to the Start button on Controller 1.
-        // This triggers a brief press/release cycle.
         if (this.controllerManager && this.isRunning) {
             this.controllerManager.write(0, this.currentCycle, 0);
         }
     }
 
+    /**
+     * PHASE 4: Self-serialize standard engine properties to be handled by the Database Client.
+     */
     async saveState() {
         if (this.isRunning && this.bus.cartridgeRom) {
             try {
-                await this.serializer.serialize("GENESIS_SAVESTATE", this.m68k, this.vdp, this.bus, this.psg);
-                console.log("GenesisOrchestrator::State Saved.");
+                const statePayload = {
+                    m68k: {
+                        d: Array.from(this.m68k.d),
+                        a: Array.from(this.m68k.a),
+                        pc: this.m68k.pc,
+                        sr: this.m68k.sr,
+                        usp: this.m68k.usp,
+                        ssp: this.m68k.ssp,
+                        irqPending: this.m68k.irqPending,
+                        cyclesRemaining: this.m68k.cyclesRemaining,
+                        flags: {
+                            n: this.m68k.fN,
+                            z: this.m68k.fZ,
+                            v: this.m68k.fV,
+                            c: this.m68k.fC,
+                            x: this.m68k.fX
+                        }
+                    },
+                    vdp: {
+                        regs: Array.from(this.vdp.regs),
+                        vram: Array.from(this.vdp.vRam),
+                        cram: Array.from(this.vdp.cram),
+                        vsram: Array.from(this.vdp.vsram)
+                    },
+                    mmu: {
+                        workRam: Array.from(this.bus.workRam),
+                        externalRam: Array.from(this.bus.externalRam),
+                        bankRegisters: Array.from(this.bus.bankRegisters)
+                    },
+                    psg: {
+                        tonesCountdown: Array.from(this.psg.tonesCountdown),
+                        tonesCountdownMaster: Array.from(this.psg.tonesCountdownMaster),
+                        tonesAttenuation: Array.from(this.psg.tonesAttenuation),
+                        tonesOutputState: Array.from(this.psg.tonesOutputState),
+                        noiseType: this.psg.noiseType,
+                        noiseShiftRegister: this.psg.noiseShiftRegister,
+                        noiseOut: this.psg.noiseOut
+                    }
+                };
+                await this.serializer.save("GENESIS_SAVESTATE", statePayload);
+                console.log("[GenesisOrchestrator] State Saved.");
             } catch (err) {
-                console.error("GenesisOrchestrator::Save State failed:", err);
+                console.error("[GenesisOrchestrator] Save State failed:", err);
             }
         }
     }
 
+    /**
+     * PHASE 4: Load and reconstruct serialized state values directly.
+     */
     async loadState() {
         if (this.isRunning && this.bus.cartridgeRom) {
             try {
-                await this.serializer.deserialize("GENESIS_SAVESTATE", this.m68k, this.vdp, this.bus, this.psg);
+                const state = await this.serializer.load("GENESIS_SAVESTATE");
+                if (!state) return;
+
+                // Restore M68K
+                this.m68k.d.set(state.m68k.d);
+                this.m68k.a.set(state.m68k.a);
+                this.m68k.pc = state.m68k.pc;
+                this.m68k.sr = state.m68k.sr;
+                this.m68k.usp = state.m68k.usp;
+                this.m68k.ssp = state.m68k.ssp;
+                this.m68k.irqPending = state.m68k.irqPending;
+                this.m68k.cyclesRemaining = state.m68k.cyclesRemaining;
+                this.m68k.fN = state.m68k.flags.n;
+                this.m68k.fZ = state.m68k.flags.z;
+                this.m68k.fV = state.m68k.flags.v;
+                this.m68k.fC = state.m68k.flags.c;
+                this.m68k.fX = state.m68k.flags.x;
+
+                // Restore VDP
+                this.vdp.regs.set(state.vdp.regs);
+                this.vdp.vRam.set(state.vdp.vram);
+                this.vdp.cram.set(state.vdp.cram);
+                this.vdp.vsram.set(state.vdp.vsram);
+
+                // Restore MMU
+                this.bus.workRam.set(state.mmu.workRam);
+                this.bus.externalRam.set(state.mmu.externalRam);
+                this.bus.bankRegisters.set(state.mmu.bankRegisters);
+
+                // Restore PSG
+                this.psg.tonesCountdown.set(state.psg.tonesCountdown);
+                this.psg.tonesCountdownMaster.set(state.psg.tonesCountdownMaster);
+                this.psg.tonesAttenuation.set(state.psg.tonesAttenuation);
+                this.psg.tonesOutputState.set(state.psg.tonesOutputState);
+                this.psg.noiseType = state.psg.noiseType;
+                this.psg.noiseShiftRegister = state.psg.noiseShiftRegister;
+                this.psg.noiseOut = state.psg.noiseOut;
+
                 this.rewindActiveCount = 0;
                 this.rewindHistoryPointer = 0;
-                console.log("GenesisOrchestrator::State Loaded.");
+                console.log("[GenesisOrchestrator] State Loaded.");
             } catch (err) {
-                console.error("GenesisOrchestrator::Load State failed:", err);
+                console.error("[GenesisOrchestrator] Load State failed:", err);
             }
         }
     }
@@ -392,7 +468,6 @@ class GenesisOrchestrator {
 
     /**
      * Simulates exactly one frame's worth of CPU and VDP scanlines.
-     * Re-implemented as a strict linear scanline loop to guarantee high-fidelity VDP rendering.
      */
     executeFrame(targetFps) {
         const totalScanlines = this.tvStandard === 1 ? 312 : 262;
@@ -411,7 +486,6 @@ class GenesisOrchestrator {
 
         const m68kCyclesPerScanline = Math.floor(targetCycles / totalScanlines);
 
-        // STABLE HARDWARE PIPELINE: Evaluate VDP & CPU line by line
         for (let scanline = 0; scanline < totalScanlines; scanline++) {
             this.currentScanline = scanline;
             this.vdp.currentScanlineIndex = scanline < activeHeight ? scanline : 0;
@@ -422,7 +496,6 @@ class GenesisOrchestrator {
 
                 this.stepCPUs(Math.floor(m68kCyclesPerScanline / 2));
 
-                // PERFECT VDP RENDERER CALLED HERE: Processes H-Flips and V-Flips properly!
                 this.vdp.endScanline(scanline, (user_data, line, pixels, shadowMap, w, h) => {
                     this.renderScanline(line, pixels, shadowMap, w, h);
                 }, null);
@@ -448,7 +521,6 @@ class GenesisOrchestrator {
             }
         }
         
-        // Finalize frame blitting
         const activeWidth = this.vdp.h40Enabled ? 320 : 256;
         if (this.postProcessor) {
             this.postProcessor.blit(
