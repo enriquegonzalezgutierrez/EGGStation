@@ -75,6 +75,7 @@ function toggleDeveloperSuite() {
 
 /**
  * Safely terminates the running emulator, releasing GPU/Audio resources.
+ * Only called during dynamic hot-swaps to clear listeners and prevent leaks.
  */
 function teardownActiveConsole() {
     activeController = null;
@@ -350,7 +351,18 @@ document.addEventListener("DOMContentLoaded", () => {
     if (ejectBtn) {
         ejectBtn.addEventListener('click', () => {
             console.log("[EGGStation::Swapper] Ejecting active cartridge...");
-            teardownActiveConsole();
+            
+            // PHASE 4 FIX: Safe teardown of orchestrator loop only (no DOM cloning to preserve active UI bindings!)
+            if (activeOrchestrator) {
+                activeOrchestrator.isRunning = false;
+                if (typeof activeOrchestrator.stop === 'function') {
+                    activeOrchestrator.stop();
+                }
+                if (activeOrchestrator.animationFrameId) {
+                    cancelAnimationFrame(activeOrchestrator.animationFrameId);
+                    activeOrchestrator.animationFrameId = null;
+                }
+            }
 
             const videoCanvas = document.getElementById("smsdisplay");
             const videoContext = videoCanvas?.getContext("2d");
