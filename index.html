@@ -203,10 +203,25 @@
     </div>
 
     <!-- ========================================================= -->
-    <!-- UNIVERSAL SHARED INFRASTRUCTURE (PHASE 2)                 -->
+    <!-- UNIVERSAL SHARED INFRASTRUCTURE & UTILITIES (PHASE 2)     -->
     <!-- ========================================================= -->
     <script src="js/shared/video/UniversalPostProcessor.js"></script>
     <script src="js/shared/storage/IndexedDbManager.js"></script>
+
+    <!-- ========================================================= -->
+    <!-- UNIVERSAL SHARED CPU CORES (PHASE 3)                      -->
+    <!-- ========================================================= -->
+    <script src="js/shared/cpu/z80/Z80Registers.js"></script>
+    <script src="js/shared/cpu/z80/Z80Alu.js"></script>
+    <script src="js/shared/cpu/z80/ZilogZ80.js"></script>
+    <script src="js/shared/cpu/z80/Z80Disassembler.js"></script>
+    <script src="js/shared/cpu/z80/instructions/Z80DataTransfer.js"></script>
+    <script src="js/shared/cpu/z80/instructions/Z80Arithmetic.js"></script>
+    <script src="js/shared/cpu/z80/instructions/Z80Bitwise.js"></script>
+    <script src="js/shared/cpu/z80/instructions/Z80ShiftRotate.js"></script>
+    <script src="js/shared/cpu/z80/instructions/Z80ProgramFlow.js"></script>
+    <script src="js/shared/cpu/z80/instructions/Z80BlockOps.js"></script>
+    <script src="js/shared/cpu/z80/instructions/Z80SystemIO.js"></script>
 
     <!-- ========================================================= -->
     <!-- SEGA MASTER SYSTEM CORE                                   -->
@@ -219,17 +234,6 @@
     <script src="js/sms/domain/cartridge/mappers/KoreanMapper.js"></script>
     <script src="js/sms/domain/cartridge/mappers/SegaMasterSystemMapperFactory.js"></script>
     <script src="js/sms/domain/controller/Sega315_5297.js"></script>
-    <script src="js/sms/domain/cpu/Z80Registers.js"></script>
-    <script src="js/sms/domain/cpu/Z80Alu.js"></script>
-    <script src="js/sms/domain/cpu/ZilogZ80.js"></script>
-    <script src="js/sms/domain/cpu/Z80Disassembler.js"></script>
-    <script src="js/sms/domain/cpu/instructions/Z80DataTransfer.js"></script>
-    <script src="js/sms/domain/cpu/instructions/Z80Arithmetic.js"></script>
-    <script src="js/sms/domain/cpu/instructions/Z80Bitwise.js"></script>
-    <script src="js/sms/domain/cpu/instructions/Z80ShiftRotate.js"></script>
-    <script src="js/sms/domain/cpu/instructions/Z80ProgramFlow.js"></script>
-    <script src="js/sms/domain/cpu/instructions/Z80BlockOps.js"></script>
-    <script src="js/sms/domain/cpu/instructions/Z80SystemIO.js"></script>
     <script src="js/sms/infrastructure/video/Sega315_5124_Vdp.js"></script>
     <script src="js/sms/infrastructure/video/VdpSpriteManager.js"></script>
     <script src="js/sms/infrastructure/video/VdpMode2Renderer.js"></script>
