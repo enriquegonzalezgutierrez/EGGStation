@@ -445,12 +445,17 @@ class SmsOrchestrator {
 
         // 3. Copy Memory Bus
         state.mmu.systemWorkRam.set(this.mmu.systemWorkRam);
-        state.mmu.cartridgeRam.set(this.mmu.mapper.cartridgeRam);
-        state.mmu.mapperSlot2IsCartridgeRam = this.mmu.mapper.mapperSlot2IsCartridgeRam;
+        
+        // PHASE 4 COMPATIBILITY FIX: Only copy Cartridge RAM if the active cartridge mapper supports it
+        if (this.mmu.mapper.cartridgeRam) {
+            state.mmu.cartridgeRam.set(this.mmu.mapper.cartridgeRam);
+        }
+        
+        state.mmu.mapperSlot2IsCartridgeRam = this.mmu.mapperSlot2IsCartridgeRam;
 
-        state.mmu.slot0Idx = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[0]);
-        state.mmu.slot1Idx = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[1]);
-        state.mmu.slot2Idx = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[2]);
+        if (state.mmu.slot0Idx !== -1) this.mmu.mapper.mapperSlots[0] = this.mmu.mapper.romBanks[state.mmu.slot0Idx];
+        if (state.mmu.slot1Idx !== -1) this.mmu.mapper.mapperSlots[1] = this.mmu.mapper.romBanks[state.mmu.slot1Idx];
+        if (state.mmu.slot2Idx !== -1) this.mmu.mapper.mapperSlots[2] = this.mmu.mapper.romBanks[state.mmu.slot2Idx];
 
         // 4. Copy sound state using dynamic parameter assignments
         state.psg.volregister.set(this.psg.volregister);
@@ -514,7 +519,12 @@ class SmsOrchestrator {
         this.vdp.register0a = state.vdp.register0a;
 
         this.mmu.systemWorkRam.set(state.mmu.systemWorkRam);
-        this.mmu.mapper.cartridgeRam.set(state.mmu.cartridgeRam);
+        
+        // PHASE 4 COMPATIBILITY FIX: Only restore Cartridge RAM if the active cartridge mapper supports it
+        if (state.mmu.cartridgeRam && this.mmu.mapper?.cartridgeRam) {
+            this.mmu.mapper.cartridgeRam.set(state.mmu.cartridgeRam);
+        }
+        
         this.mmu.mapper.mapperSlot2IsCartridgeRam = state.mmu.mapperSlot2IsCartridgeRam;
 
         if (state.mmu.slot0Idx !== -1) this.mmu.mapper.mapperSlots[0] = this.mmu.mapper.romBanks[state.mmu.slot0Idx];
@@ -616,7 +626,9 @@ class SmsOrchestrator {
 
         // Handle active rewinding
         if (this.isRewinding) {
-            if (this.psg) this.psg.setMuted(true);
+            if (this.psg) {
+                this.psg.setMuted(true);
+            }
             
             if (this.rewindActiveCount > 0) {
                 for (let i = 0; i < 2; i++) {
@@ -731,5 +743,48 @@ class SmsOrchestrator {
             this.vdp.update(this.cpu, cyclesElapsed);
             emulatedCycles += cyclesElapsed;
         }
+    }
+
+    // ========================================================================
+    // DEVELOPE SUITE DIAGNOSTICS HOOKS (PHASE 4)
+    // ========================================================================
+
+    /**
+     * PHASE 4: Return current Z80 CPU registers as a polymorphic dictionary.
+     */
+    getRegisters() {
+        if (!this.cpu) return {};
+        const reg = this.cpu.registers;
+        return {
+            AF: reg.af.toString(16).toUpperCase().padStart(4, '0'),
+            BC: reg.bc.toString(16).toUpperCase().padStart(4, '0'),
+            DE: reg.de.toString(16).toUpperCase().padStart(4, '0'),
+            HL: reg.hl.toString(16).toUpperCase().padStart(4, '0'),
+            IX: reg.ix.toString(16).toUpperCase().padStart(4, '0'),
+            IY: reg.iy.toString(16).toUpperCase().padStart(4, '0'),
+            SP: reg.sp.toString(16).toUpperCase().padStart(4, '0'),
+            PC: reg.pc.toString(16).toUpperCase().padStart(4, '0')
+        };
+    }
+
+    /**
+     * PHASE 4: Return the active program disassembly around PC as a string array.
+     */
+    getDisassembly() {
+        if (!this.cpu) return [];
+        const lines = [];
+        const instructions = Z80Disassembler.disassembleBlock(this.cpu, 5);
+        instructions.forEach(instr => {
+            const hexAddr = instr.address.toString(16).toUpperCase().padStart(4, '0');
+            lines.push(`${hexAddr}: ${instr.decodedString}`);
+        });
+        return lines;
+    }
+
+    /**
+     * PHASE 4: Render raw VRAM tile patterns onto the shared diagnostic canvas.
+     */
+    drawVramDiagnostics(ctx) {
+        this.rasterizeVramTiles(ctx);
     }
 }

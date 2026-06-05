@@ -447,6 +447,10 @@ class GenesisOrchestrator {
             this.audioCtx.resume().catch(() => {});
         }
 
+        // PHASE 4: Update emulator shortcut states dynamically from UniversalInput
+        this.isRewinding = window.UniversalInput ? window.UniversalInput.isPressed("REWIND") : false;
+        this.fastForward = window.UniversalInput ? window.UniversalInput.isPressed("FAST_FORWARD") : false;
+
         // Handle Active Rewinding
         if (this.isRewinding) {
             if (this.rewindActiveCount > 0) {
@@ -671,5 +675,55 @@ class GenesisOrchestrator {
             this.glbFrameBuffer[dest + 2] = b;
             this.glbFrameBuffer[dest + 3] = 255;
         }
+    }
+
+    // ========================================================================
+    // DEVELOPE SUITE DIAGNOSTICS HOOKS (PHASE 4)
+    // ========================================================================
+
+    /**
+     * PHASE 4: Return current Motorola 68000 CPU registers as a polymorphic dictionary.
+     */
+    getRegisters() {
+        if (!this.m68k) return {};
+        return {
+            D0: this.m68k.d[0].toString(16).toUpperCase().padStart(8, '0'),
+            D1: this.m68k.d[1].toString(16).toUpperCase().padStart(8, '0'),
+            D2: this.m68k.d[2].toString(16).toUpperCase().padStart(8, '0'),
+            D3: this.m68k.d[3].toString(16).toUpperCase().padStart(8, '0'),
+            D4: this.m68k.d[4].toString(16).toUpperCase().padStart(8, '0'),
+            D5: this.m68k.d[5].toString(16).toUpperCase().padStart(8, '0'),
+            D6: this.m68k.d[6].toString(16).toUpperCase().padStart(8, '0'),
+            D7: this.m68k.d[7].toString(16).toUpperCase().padStart(8, '0'),
+            A0: this.m68k.a[0].toString(16).toUpperCase().padStart(8, '0'),
+            A1: this.m68k.a[1].toString(16).toUpperCase().padStart(8, '0'),
+            A2: this.m68k.a[2].toString(16).toUpperCase().padStart(8, '0'),
+            A3: this.m68k.a[3].toString(16).toUpperCase().padStart(8, '0'),
+            A4: this.m68k.a[4].toString(16).toUpperCase().padStart(8, '0'),
+            A5: this.m68k.a[5].toString(16).toUpperCase().padStart(8, '0'),
+            A6: this.m68k.a[6].toString(16).toUpperCase().padStart(8, '0'),
+            A7: this.m68k.a[7].toString(16).toUpperCase().padStart(8, '0'),
+            PC: this.m68k.pc.toString(16).toUpperCase().padStart(8, '0'),
+            SR: this.m68k.sr.toString(16).toUpperCase().padStart(4, '0')
+        };
+    }
+
+    /**
+     * PHASE 4: Return the active program disassembly around PC as a string array.
+     */
+    getDisassembly() {
+        if (!this.m68k) return [];
+        const lines = [];
+        const pcHex = this.m68k.pc.toString(16).toUpperCase().padStart(6, '0');
+        const opHex = this.bus.readWord(this.m68k.pc, this.m68k.pc).toString(16).toUpperCase().padStart(4, '0');
+        lines.push(`${pcHex}: OPCODE 0x${opHex}`);
+        return lines;
+    }
+
+    /**
+     * PHASE 4: Render raw VRAM tile patterns onto the shared diagnostic canvas.
+     */
+    drawVramDiagnostics(ctx) {
+        this.rasterizeVramTiles(ctx);
     }
 }
