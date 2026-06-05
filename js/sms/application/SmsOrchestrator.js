@@ -610,11 +610,13 @@ class SmsOrchestrator {
             return;
         }
 
+        // PHASE 4: Update emulator shortcut states dynamically from UniversalInput
+        this.isRewinding = window.UniversalInput ? window.UniversalInput.isPressed("REWIND") : false;
+        this.fastForward = window.UniversalInput ? window.UniversalInput.isPressed("FAST_FORWARD") : false;
+
         // Handle active rewinding
         if (this.isRewinding) {
-            if (this.psg) {
-                this.psg.setMuted(true);
-            }
+            if (this.psg) this.psg.setMuted(true);
             
             if (this.rewindActiveCount > 0) {
                 for (let i = 0; i < 2; i++) {
@@ -646,7 +648,7 @@ class SmsOrchestrator {
             if (this.psg) this.psg.setMuted(true);
             for (let i = 0; i < 4; i++) {
                 this.executeFrame(targetFps);
-                this.fpsCount++; // Count fast forwarded frames too
+                this.fpsCount++; 
             }
             this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
         } else {
@@ -658,7 +660,7 @@ class SmsOrchestrator {
                 this.executeFrame(targetFps);
                 this.accumulatedTime -= targetFrameTime;
                 frameExecuted = true;
-                this.fpsCount++; // Count actual emulated frames
+                this.fpsCount++; 
             }
             
             if (frameExecuted) {
@@ -675,7 +677,7 @@ class SmsOrchestrator {
         // True 1-second interval tracker for standard non-flickering FPS diagnostics
         if (currentTime - this.fpsTimer >= 1000) {
             if (this.onFpsUpdate) {
-                this.onFpsUpdate(this.fpsCount); // Sends only the raw integer to avoid doubling "FPS"
+                this.onFpsUpdate(this.fpsCount); 
             }
             this.fpsCount = 0;
             this.fpsTimer = currentTime;
@@ -685,6 +687,17 @@ class SmsOrchestrator {
     }
 
     executeFrame(targetFps) {
+        // --- PHASE 4: SYNC HARDWARE INPUT PINS FROM UNIVERSAL INPUT SERVICE ---
+        const io = this.ioController;
+        if (io && window.UniversalInput) {
+            if (window.UniversalInput.isPressed("UP")) io.pressUp(); else io.depressUp();
+            if (window.UniversalInput.isPressed("DOWN")) io.pressDown(); else io.depressDown();
+            if (window.UniversalInput.isPressed("LEFT")) io.pressLeft(); else io.depressLeft();
+            if (window.UniversalInput.isPressed("RIGHT")) io.pressRight(); else io.depressRight();
+            if (window.UniversalInput.isPressed("B")) io.pressButton1(); else io.depressButton1();
+            if (window.UniversalInput.isPressed("A")) io.pressButton2(); else io.depressButton2();
+        }
+
         let emulatedCycles = 0;
         let targetCycles = Math.floor(this.cpu.clockRate / targetFps);
 

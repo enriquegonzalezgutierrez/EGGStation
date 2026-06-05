@@ -117,6 +117,10 @@ class SnesOrchestrator {
         this.postProcessMode = parseInt(mode);
     }
 
+    setPostProcessMode(mode) {
+        this.postProcessMode = parseInt(mode);
+    }
+
     setAudioFilterMode(mode) {
         this.audioFilterMode = parseInt(mode);
         this.audioProcessor.setFilterMode(this.audioFilterMode);
@@ -193,6 +197,22 @@ class SnesOrchestrator {
 
         while (this.accumulatedTime >= targetFrameDuration) {
             if (!this.isPaused) {
+                // --- PHASE 4: SYNC INPUTS FROM UNIVERSAL INPUT DIRECTLY TO SNES PAD ON EACH FRAME ---
+                if (window.UniversalInput) {
+                    this.sendInput(0, window.UniversalInput.isPressed("B"));      // B
+                    this.sendInput(1, window.UniversalInput.isPressed("Y"));      // Y
+                    this.sendInput(2, window.UniversalInput.isPressed("SELECT")); // Select
+                    this.sendInput(3, window.UniversalInput.isPressed("START"));  // Start
+                    this.sendInput(4, window.UniversalInput.isPressed("UP"));     // Up
+                    this.sendInput(5, window.UniversalInput.isPressed("DOWN"));   // Down
+                    this.sendInput(6, window.UniversalInput.isPressed("LEFT"));   // Left
+                    this.sendInput(7, window.UniversalInput.isPressed("RIGHT"));  // Right
+                    this.sendInput(8, window.UniversalInput.isPressed("A"));      // A
+                    this.sendInput(9, window.UniversalInput.isPressed("X"));      // X
+                    this.sendInput(10, window.UniversalInput.isPressed("L"));     // L
+                    this.sendInput(11, window.UniversalInput.isPressed("R"));     // R
+                }
+
                 this.hardware.runFrame(false);
                 this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
                 this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);

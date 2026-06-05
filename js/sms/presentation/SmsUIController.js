@@ -1,55 +1,38 @@
 /**
- * Project: EGGStation - Unified Multi-System Console Virtual Environment
+ * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * File: js/sms/presentation/SmsUIController.js
  * 
  * Role:
  * Presentation Layer: Sega Master System (SMS) UI & Input Controller.
- * Maps DOM interactions, keyboard/touch events, and physical USB/Bluetooth 
- * Gamepads directly to the SmsOrchestrator. Handles UI updates and 
- * developer diagnostic registers.
+ * Handles DOM UI interactions, file loading processes, WebGL2 shader tuners, 
+ * and maps mobile virtual gamepad actions directly to the UniversalInput Manager.
  * 
  * SOLID Principles Applied:
  * 1. Single Responsibility Principle (SRP): Exclusively responsible for bridging 
- *    the DOM/UI presentation events and mapping inputs to the virtual controller hardware.
- * 2. Dependency Inversion Principle (DIP): Injects the high-level orchestrator 
- *    abstraction (`SmsOrchestrator`) via constructor injection rather than 
- *    tightly coupling to a specific instanced creation inside the UI layer.
+ *    DOM elements and updating the global UniversalInput buffer. It contains no 
+ *    emulation cycles or low-level keyboard/gamepad polling code.
+ * 2. Dependency Inversion Principle (DIP): Instead of hardcoding keyboard events 
+ *    and gamepad indices directly inside the SMS core, it relies on the high-level 
+ *    abstraction window.UniversalInput, decoupling it completely from physical hardware.
  */
 
 class SmsUIController {
     /**
-     * Initializes the UI Controller and binds all browser, touch, and gamepad events.
      * @param {SmsOrchestrator} orchestrator - The active SMS system adapter.
      */
     constructor(orchestrator) {
         this.orchestrator = orchestrator;
-        
-        // State tracker for physical gamepads to process edge-detection (press/release only)
-        this.gamepadState = {
-            up: false, down: false, left: false, right: false,
-            btn1: false, btn2: false, pause: false,
-            rewind: false // Tracks active gamepad rewinding state
-        };
-
         this.bindEvents();
-
-        // Synchronize initial slider states with GPU memory uniforms
-        this.handleShaderTuningChange();
-
-        // Initiate the hardware gamepad polling loop
-        this.pollGamepads();
+        this.bindVirtualGamepadEvents();
 
         // Restore the registers panel DOM layout to the original Z80 structure
         this.restoreZ80Registers();
 
         // Periodically refresh SMS registers, disassembly and VRAM tile viewer
-        // twice a second (every 500ms) only when the Developer Suite is expanded on screen.
         this.devIntervalId = setInterval(() => {
             const devSuite = document.getElementById('developer-suite');
             
-            // Memory Leak Prevention: If the active controller is no longer this (unloaded/swapped),
-            // clear the interval automatically to free up browser memory.
             if (typeof activeController !== 'undefined' && activeController !== null && activeController !== this) {
                 clearInterval(this.devIntervalId);
                 return;
@@ -62,7 +45,7 @@ class SmsUIController {
     }
 
     /**
-     * Attaches event listeners to the DOM elements and the window object.
+     * Attaches event listeners to the DOM elements.
      */
     bindEvents() {
         // 1. ROM File Loader Button Proxy
@@ -108,33 +91,7 @@ class SmsUIController {
         // 5. Fullscreen Hook
         document.addEventListener('fullscreenchange', () => this.handleFullscreenChange());
 
-        // 6. Keyboard Mappings for Controller and Emulator functions
-        document.addEventListener('keydown', (e) => this.handleKeyDown(e));
-        document.addEventListener('keyup', (e) => this.handleKeyUp(e));
-
-        // 7. Mobile Virtual Gamepad Touch Mappings
-        this.bindVirtualGamepadEvents();
-
-        // 8. Physical Gamepad Connection Listener (Safe Global Binding to prevent event leaks)
-        if (!window.__eggstation_gamepad_listeners_bound__) {
-            window.__eggstation_gamepad_listeners_bound__ = true;
-
-            window.addEventListener("gamepadconnected", (e) => {
-                console.log(`SmsUIController::Gamepad connected globally: [${e.gamepad.id}]`);
-                if (typeof activeController !== 'undefined' && activeController && activeController.showGamepadNotification) {
-                    activeController.showGamepadNotification(`Controller detected: ${e.gamepad.id.substring(0, 24)}...`);
-                }
-            });
-
-            window.addEventListener("gamepaddisconnected", (e) => {
-                console.log(`SmsUIController::Gamepad disconnected globally: [${e.gamepad.id}]`);
-                if (typeof activeController !== 'undefined' && activeController && activeController.showGamepadNotification) {
-                    activeController.showGamepadNotification(`Controller disconnected: ${e.gamepad.id.substring(0, 24)}...`);
-                }
-            });
-        }
-
-        // 9. Light Phaser Mouse & Touch Event Listeners
+        // 6. Light Phaser Mouse & Touch Event Listeners
         const crtWrapper = document.getElementById('crt-wrapper');
         if (crtWrapper) {
             crtWrapper.addEventListener('mousedown', (e) => this.handlePhaserClick(e));
@@ -145,7 +102,7 @@ class SmsUIController {
             });
         }
 
-        // 10. WebGL2 CRT Shader Tuning Sliders
+        // 7. WebGL2 CRT Shader Tuning Sliders
         const bindSlider = (id) => {
             const el = document.getElementById(id);
             if (el) {
@@ -157,7 +114,7 @@ class SmsUIController {
         bindSlider('sh-phosphor');
         bindSlider('sh-bloom');
 
-        // 11. Developer Mode Debugger Suite Buttons & Inputs (Z80 CPU Stepper)
+        // 8. Developer Mode Debugger Suite Buttons & Inputs (Z80 CPU Stepper)
         const dbgPlay = document.getElementById('dbg-play');
         const dbgPause = document.getElementById('dbg-pause');
         const dbgStep = document.getElementById('dbg-step');
@@ -234,8 +191,7 @@ class SmsUIController {
     }
 
     /**
-     * Gathers, decodes and formats all Z80 CPU register values, active program disassembly instructions,
-     * and maps active VDP memory patterns onto the secondary diagnostic canvas.
+     * Gathers, decodes and formats all Z80 CPU register values.
      */
     updateDebuggerUI() {
         if (!this.orchestrator.cpu || !this.orchestrator.isRunning) return;
@@ -243,7 +199,6 @@ class SmsUIController {
         const cpu = this.orchestrator.cpu;
         const reg = cpu.registers;
 
-        // Update CPU Registers Hex text readouts (Padded to 4 uppercase hex characters)
         const updateReg = (id, val) => {
             const el = document.getElementById(id);
             if (el) el.textContent = val.toString(16).toUpperCase().padStart(4, '0');
@@ -258,12 +213,10 @@ class SmsUIController {
         updateReg('reg-sp', reg.sp);
         updateReg('reg-pc', reg.pc);
 
-        // Render Real-time Disassembly Output centered around the active Program Counter
         const disasmBox = document.getElementById('disasm-output');
         if (disasmBox) {
-            disasmBox.innerHTML = ''; // Clear previous disassembly text rows
+            disasmBox.innerHTML = ''; 
 
-            // Disassemble 5 consecutive instructions starting from current Program Counter
             const instructions = Z80Disassembler.disassembleBlock(cpu, 5);
             instructions.forEach((instr, idx) => {
                 const line = document.createElement('div');
@@ -275,7 +228,6 @@ class SmsUIController {
             });
         }
 
-        // Rasterize active VRAM Pattern Tiles onto the secondary canvas
         const vramCanvas = document.getElementById('vram-canvas');
         if (vramCanvas) {
             const ctx = vramCanvas.getContext('2d');
@@ -284,37 +236,30 @@ class SmsUIController {
     }
 
     /**
-     * Gathers current range slider states, scales them to normalized WebGL ratio ranges, 
-     * and streams them into active GPU uniform variables.
+     * Gathers current range slider states and streams them into active GPU uniform variables.
      */
     handleShaderTuningChange() {
-        // Translate slider values into exact multipliers (1.0 = standard default)
         const curvVal = parseInt(document.getElementById('sh-curvature')?.value || "90", 10) / 90;
         const scanVal = parseInt(document.getElementById('sh-scanlines')?.value || "38", 10) / 38;
         const phosVal = parseInt(document.getElementById('sh-phosphor')?.value || "25", 10) / 25;
         const blmVal  = parseInt(document.getElementById('sh-bloom')?.value || "15", 10) / 15;
 
-        // Pipe variables down to GPU memory space
         this.orchestrator.updateShaderUniforms(curvVal, scanVal, phosVal, blmVal);
     }
 
     /**
      * Intercepts pointer coordinates over the CRT wrapper and translates them into 
      * 256x240 pixel space, triggering the physical light phaser registers.
-     * @param {MouseEvent|Touch} e - The raw pointer coordinate event.
      */
     handlePhaserClick(e) {
-        // Query the standard canvas element to resolve coordinates relative to its rendered rectangle
         const display2D = document.getElementById("smsdisplay");
         if (!display2D || !this.orchestrator.isRunning) return;
 
         const rect = display2D.getBoundingClientRect();
         
-        // Translate absolute mouse pointer positions to physical VDP coordinate matrices
         const x = Math.floor(((e.clientX - rect.left) / rect.width) * 256);
         const y = Math.floor(((e.clientY - rect.top) / rect.height) * 240);
 
-        // Confirm coordinates sit within native hardware limits
         if (x >= 0 && x < 256 && y >= 0 && y < 240) {
             const vdp = this.orchestrator.vdp;
             const io = this.orchestrator.ioController;
@@ -324,16 +269,13 @@ class SmsUIController {
                 vdp.phaserX = x;
                 vdp.phaserY = y;
 
-                // 1. Pull the physical trigger (Button 1 of Player 1) LOW
-                io.pressButton1();
-
-                // 2. Latch the Lightgun Photo-Receptor Sensor (PORT_A_TR pin on Port 0xDD) LOW
+                // Pull trigger on UniversalInput directly
+                window.UniversalInput.virtualButtons["B"] = true;
                 io.writePinStateDD('PORT_A_TR', true);
 
-                // 3. Keep registers latched for exactly 80ms (roughly 5 frames) then release
                 setTimeout(() => {
                     vdp.phaserClicked = false;
-                    io.depressButton1();
+                    window.UniversalInput.virtualButtons["B"] = false;
                     io.writePinStateDD('PORT_A_TR', false);
                 }, 80);
             }
@@ -341,157 +283,33 @@ class SmsUIController {
     }
 
     /**
-     * Renders a custom floating toast notification when gamepads are added or removed.
-     * Styled to match EGGStation's signature synthwave retro neon aesthetic.
-     * @param {string} message - Text notification string.
-     */
-    showGamepadNotification(message) {
-        let toast = document.getElementById('eggstation-gamepad-toast');
-        if (!toast) {
-            toast = document.createElement('div');
-            toast.id = 'eggstation-gamepad-toast';
-            toast.style.position = 'fixed';
-            toast.style.bottom = '24px';
-            toast.style.right = '24px';
-            toast.style.backgroundColor = 'rgba(20, 10, 35, 0.95)';
-            toast.style.border = '2px solid #ff007f';
-            toast.style.color = '#fff';
-            toast.style.padding = '14px 24px';
-            toast.style.borderRadius = '8px';
-            toast.style.fontFamily = 'monospace';
-            toast.style.fontSize = '0.9rem';
-            toast.style.fontWeight = 'bold';
-            toast.style.boxShadow = '0 0 20px rgba(255, 0, 127, 0.6)';
-            toast.style.zIndex = '99999';
-            toast.style.transition = 'opacity 0.3s ease, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
-            toast.style.transform = 'translateY(100px)';
-            toast.style.opacity = '0';
-            document.body.appendChild(toast);
-        }
-        toast.innerHTML = `<span style="color: #ff007f;">[EGGStation]</span> ${message}`;
-        
-        // Execute animation sequence
-        requestAnimationFrame(() => {
-            toast.style.transform = 'translateY(0)';
-            toast.style.opacity = '1';
-        });
-
-        if (toast.timeoutId) {
-            clearTimeout(toast.timeoutId);
-        }
-        toast.timeoutId = setTimeout(() => {
-            toast.style.transform = 'translateY(100px)';
-            toast.style.opacity = '0';
-        }, 4000);
-    }
-
-    /**
-     * Continuous polling loop for the HTML5 Gamepad API.
-     * Scans and maps the first active gamepad.
-     */
-    pollGamepads() {
-        if (typeof activeController !== 'undefined' && activeController !== null && activeController !== this) {
-            return;
-        }
-
-        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-        let gp = null;
-
-        for (let i = 0; i < gamepads.length; i++) {
-            if (gamepads[i]) {
-                gp = gamepads[i];
-                break;
-            }
-        }
-
-        if (gp && this.orchestrator.ioController) {
-            const io = this.orchestrator.ioController;
-            const DEADZONE = 0.5; // Threshold for analog stick drift
-
-            const leftStickH = gp.axes[0] || 0;
-            const leftStickV = gp.axes[1] || 0;
-            const dpadAxisH  = gp.axes[4] || gp.axes[6] || gp.axes[2] || 0;
-            const dpadAxisV  = gp.axes[5] || gp.axes[7] || gp.axes[3] || 0;
-
-            const up    = gp.buttons[12]?.pressed || leftStickV < -DEADZONE || dpadAxisV < -DEADZONE;
-            const down  = gp.buttons[13]?.pressed || leftStickV > DEADZONE  || dpadAxisV > DEADZONE;
-            const left  = gp.buttons[14]?.pressed || leftStickH < -DEADZONE || dpadAxisH < -DEADZONE;
-            const right = gp.buttons[15]?.pressed || leftStickH > DEADZONE  || dpadAxisH > DEADZONE;
-
-            const btn1 = gp.buttons[0]?.pressed || gp.buttons[2]?.pressed || gp.buttons[4]?.pressed; 
-            const btn2 = gp.buttons[1]?.pressed || gp.buttons[3]?.pressed || gp.buttons[5]?.pressed; 
-
-            const pause = gp.buttons[9]?.pressed || gp.buttons[8]?.pressed;
-            const rewind = gp.buttons[6]?.pressed || gp.buttons[7]?.pressed;
-
-            const triggerInput = (key, isPressed, onPress, onRelease) => {
-                if (isPressed && !this.gamepadState[key]) {
-                    onPress.call(io);
-                    this.gamepadState[key] = true;
-                } else if (!isPressed && this.gamepadState[key]) {
-                    onRelease.call(io);
-                    this.gamepadState[key] = false;
-                }
-            };
-
-            triggerInput('up', up, io.pressUp, io.depressUp);
-            triggerInput('down', down, io.pressDown, io.depressDown);
-            triggerInput('left', left, io.pressLeft, io.depressLeft);
-            triggerInput('right', right, io.pressRight, io.depressRight);
-            triggerInput('btn1', btn1, io.pressButton1, io.depressButton1);
-            triggerInput('btn2', btn2, io.pressButton2, io.depressButton2);
-
-            if (pause && !this.gamepadState.pause) {
-                this.orchestrator.triggerPauseButton();
-                this.gamepadState.pause = true;
-            } else if (!pause) {
-                this.gamepadState.pause = false;
-            }
-
-            if (rewind && !this.gamepadState.rewind) {
-                this.orchestrator.isRewinding = true;
-                this.gamepadState.rewind = true;
-            } else if (!rewind && this.gamepadState.rewind) {
-                this.orchestrator.isRewinding = false;
-                this.gamepadState.rewind = false;
-            }
-        }
-
-        requestAnimationFrame(() => this.pollGamepads());
-    }
-
-    /**
-     * Maps the Mobile Gamepad touch zones to the physical Controller pins.
+     * Maps the Mobile Gamepad touch zones to update UniversalInput central buffer states.
      */
     bindVirtualGamepadEvents() {
-        const io = this.orchestrator.ioController;
-        if (!io) return;
-
-        const mapTouchPin = (elementId, onPress, onRelease) => {
+        const mapTouchPin = (elementId, semanticButton) => {
             const element = document.getElementById(elementId);
             if (!element) return;
 
             element.addEventListener('touchstart', (e) => {
                 e.preventDefault(); 
-                onPress.call(io);
+                window.UniversalInput.virtualButtons[semanticButton] = true;
             });
 
             const releaseHandler = (e) => {
                 e.preventDefault();
-                onRelease.call(io);
+                window.UniversalInput.virtualButtons[semanticButton] = false;
             };
 
             element.addEventListener('touchend', releaseHandler);
             element.addEventListener('touchcancel', releaseHandler);
         };
 
-        mapTouchPin('v-up', io.pressUp, io.depressUp);
-        mapTouchPin('v-down', io.pressDown, io.depressDown);
-        mapTouchPin('v-left', io.pressLeft, io.depressLeft);
-        mapTouchPin('v-right', io.pressRight, io.depressRight);
-
-        mapTouchPin('v-btn1', io.pressButton1, io.depressButton1);
-        mapTouchPin('v-btn2', io.pressButton2, io.depressButton2);
+        mapTouchPin('v-up', 'UP');
+        mapTouchPin('v-down', 'DOWN');
+        mapTouchPin('v-left', 'LEFT');
+        mapTouchPin('v-right', 'RIGHT');
+        mapTouchPin('v-btn1', 'B');
+        mapTouchPin('v-btn2', 'A');
 
         const vPause = document.getElementById('v-pause');
         if (vPause) {
@@ -504,7 +322,6 @@ class SmsUIController {
 
     /**
      * Handles changes in the post-processing filter, toggling canvas styles via inline JS.
-     * @param {number} mode - Selected filter mode index.
      */
     handlePostProcessChange(mode) {
         const display2D = document.getElementById("smsdisplay");
@@ -540,7 +357,6 @@ class SmsUIController {
 
     /**
      * Reads the selected cartridge file and passes the raw binary buffer to the Orchestrator.
-     * @param {FileList} files - The files selected by the user.
      */
     handleFileUpload(files) {
         if (!files || files.length === 0) return;
@@ -564,75 +380,6 @@ class SmsUIController {
             this.hideUIForGameplay();
         };
         reader.readAsArrayBuffer(file);
-    }
-
-    /**
-     * Handles keydown events, mapping them to the DB-9 Controller pins or Emulator actions.
-     * @param {KeyboardEvent} e - The keyboard event.
-     */
-    handleKeyDown(e) {
-        const io = this.orchestrator.ioController;
-        if (!io) return;
-
-        switch(e.key) {
-            case "z": io.pressButton1(); break;
-            case "x": io.pressButton2(); break;
-            case "ArrowUp": io.pressUp(); e.preventDefault(); break;
-            case "ArrowDown": io.pressDown(); e.preventDefault(); break;
-            case "ArrowLeft": io.pressLeft(); e.preventDefault(); break;
-            case "ArrowRight": io.pressRight(); e.preventDefault(); break;
-            
-            case "Backspace":
-                this.orchestrator.isRewinding = true;
-                e.preventDefault();
-                break;
-
-            case "\\": 
-                this.orchestrator.fastForward = true; 
-                e.preventDefault(); 
-                break;
-            case "p": 
-                this.orchestrator.togglePause(); 
-                break;
-            case "o": 
-                this.orchestrator.triggerPauseButton(); 
-                break;
-            case "F2": 
-                this.orchestrator.saveState(); 
-                setTimeout(() => this.updateSaveStatePreview(), 100); 
-                e.preventDefault(); 
-                break;
-            case "F3": 
-                this.orchestrator.loadState(); 
-                e.preventDefault(); 
-                break;
-        }
-    }
-
-    /**
-     * Handles keyup events to release DB-9 Controller pins or stop fast-forwarding/rewinding.
-     * @param {KeyboardEvent} e - The keyboard event.
-     */
-    handleKeyUp(e) {
-        const io = this.orchestrator.ioController;
-        if (!io) return;
-
-        switch(e.key) {
-            case "z": io.depressButton1(); break;
-            case "x": io.depressButton2(); break;
-            case "ArrowUp": io.depressUp(); break;
-            case "ArrowDown": io.depressDown(); break;
-            case "ArrowLeft": io.depressLeft(); break;
-            case "ArrowRight": io.depressRight(); break;
-            
-            case "Backspace":
-                this.orchestrator.isRewinding = false;
-                break;
-
-            case "\\": 
-                this.orchestrator.fastForward = false; 
-                break;
-        }
     }
 
     /**
