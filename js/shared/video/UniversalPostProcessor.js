@@ -4,7 +4,7 @@
  * File: js/shared/video/UniversalPostProcessor.js
  * 
  * Role:
- * Infrastructure Layer: Universal Video Post-Processor Service (Crash-Proof Edition).
+ * Infrastructure Layer: Universal Video Post-Processor Service (Defensive SNES Fix).
  * Consolidates WebGL2 CRT-Royale Shader execution and CPU-based fallback scaling 
  * algorithms (Scale2X, Scale4X, Scanlines, NTSC Bleed) into a single, high-performance, 
  * polymorphic rendering engine.
@@ -352,6 +352,11 @@ class UniversalPostProcessor {
             actualHeight = Number(width);      // yScreenLines (192, 224 or 240)
             actualMode = Number(height);       // postProcessMode
             actualPrev = null;
+        }
+
+        // --- PHASE 4: DEFENSIVE RESOLUTION SCALING CORRECTION FOR SNES HIGH-RES ---
+        if (actualWidth === 512) {
+            actualHeight = actualHeight * 2;   // Reconstruct full 448/480 interlaced height
         }
 
         // --- DEFENSIVE CRASH PROTECTION LAYER (Zero / NaN / Undefined fallback) ---
