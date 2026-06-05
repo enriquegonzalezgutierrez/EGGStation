@@ -8,39 +8,39 @@
 
 ## 1. Architectural Overview
 
-EGGStation is engineered with a strict division of concerns, separating console-specific hardware logic, core processor modeling, and presentation abstractions. Rather than adhering to the tight-coupling paradigms common in monolithic emulators, this system decouples core hardware modules using **Domain-Driven Design (DDD)** and **SOLID** principles. This modular design allows Sega and Nintendo hardware domains to execute independently inside the same application container.
+EGGStation is engineered with a strict division of concerns, separating console-specific hardware logic, core processor modeling, and presentation abstractions. Rather than adhering to the tight-coupling paradigms common in monolithic emulators, this system decouples core hardware modules using **Domain-Driven Design (DDD)** and **SOLID** principles. This modular design allows Sega and Nintendo hardware domains to execute independently inside the same application container while sharing a robust universal infrastructure.
 
-The codebase is organized into four distinct architectural layers:
+The codebase is organized into highly decoupled architectural layers:
 
-```
+```text
                                   +------------------------------------+
                                   |         Presentation Layer         |
-                                  |    (UIController / HTML5 / CSS3)   |
+                                  | (UniversalInput / HTML5 / CSS3)    |
                                   +-----------------+------------------+
                                                     |
                                                     v
                                   +------------------------------------+
                                   |          Application Layer         |
-                                  |      (EmulatorOrchestrator.js)     |
+                                  |    (System-Specific Orchestrators) |
                                   +-----------------+------------------+
                                                     |
                                                     v
                                   +------------------------------------+
-                                  |         Infrastructure Layer       |
-                                  |      (VDP, PSG, State Serializer)  |
+                                  |    Universal Shared Infrastructure |
+                                  | (WebGL2 CRT, IndexedDB, Web Audio) |
                                   +-----------------+------------------+
                                                     |
                                                     v
                                   +------------------------------------+
                                   |            Domain Layer            |
-                                  |   (CPU, ALU, System Bus, Cartridge)|
-                                  +-----------------+------------------+
+                                  | (Shared CPUs, System Bus, Mappers) |
+                                  +------------------------------------+
 ```
 
-*   **Domain Layer:** Models the core abstract hardware behavior, registers, execution clocks, address buses, and cartridge structures of the emulated consoles. It remains entirely isolated from browser-specific environments.
-*   **Infrastructure Layer:** Implements standard visual output rendering engines (VDP, PPU), audio synthesizers (PSG, YM2612, DSP), and state serializers utilizing standard browser APIs (Canvas, Web Audio, IndexedDB).
-*   **Application Layer:** Orchestrates the system's runtime loop, clock cycles synchronization, fast-forward states, temporal physics (rewind/stepping), and routes input and serialization triggers.
-*   **Presentation Layer:** Handles DOM rendering, UI themes, custom tooltips, mobile virtual gamepad touch bindings, viewport scaling, and interactive settings tuning.
+*   **Domain Layer:** Models the core abstract hardware behavior, registers, execution clocks, address buses, and cartridge structures. It remains entirely isolated from browser-specific environments.
+*   **Universal Shared Infrastructure:** A centralized suite of high-performance modules (`UniversalPostProcessor`, `UniversalAudioProcessor`, `IndexedDbManager`, `RomDecompressor`) that provide GPU-accelerated rendering, audio synthesis, and asynchronous ZIP decompression across all systems.
+*   **Application Layer:** Orchestrates the system's runtime loop, clock cycles synchronization, fast-forward states, temporal physics (rewind/stepping), and routes input and serialization triggers (`SmsOrchestrator`, `GenesisOrchestrator`, `SnesOrchestrator`).
+*   **Presentation Layer:** Handles DOM rendering, UI themes, mobile virtual gamepad touch bindings, immersive CRT CSS transitions, and programmatic audio-haptic feedback.
 
 ---
 
@@ -57,12 +57,12 @@ For an in-depth, low-level explanation of each console's physical hardware, cust
 ## 3. Hardware Component Interactions
 
 ### Sega Master System / Sega Mark III
-The Sega Master System relies on a central Zilog Z80 processor interacting with dedicated hardware chips over a shared 16-bit Address Bus and 8-bit Data Bus. Below is the technical structural schematic of EGGStation's system communication paths:
+The Sega Master System relies on a central Zilog Z80 processor interacting with dedicated hardware chips over a shared 16-bit Address Bus and 8-bit Data Bus.
 
 ```mermaid
 graph TB
     subgraph Core System
-        CPU[Zilog Z80 CPU Core] <-->|Memory & Port cycles| BUS[Sega Master System Bus]
+        CPU[Shared Zilog Z80 CPU Core] <-->|Memory & Port cycles| BUS[Sega Master System Bus]
     end
 
     subgraph Memory Space
@@ -73,7 +73,7 @@ graph TB
 
     subgraph I/O Peripheral Space
         BUS <-->|/IORQ: 0x40 - 0xBF| VDP[Sega 315-5124 VDP]
-        BUS --->|/IORQ: 0x40 - 0x7F| PSG[Sega 315-5124 PSG]
+        BUS --->|/IORQ: 0x40 - 0x7F| PSG[Shared Sega PSG]
         BUS <-->|/IORQ: 0xC0 - 0xFF| IO[Sega 315-5297 Controller Chip]
     end
 
@@ -91,23 +91,19 @@ The Sega Genesis coordinates execution between two distinct Central Processing U
 ```mermaid
 graph TB
     subgraph Core System
-        M68K[Motorola 68000 Master CPU] <-->|Memory & I/O cycles| MBUS[Genesis Bus M68K]
+        M68K[Shared Motorola 68000 CPU] <-->|Memory & I/O cycles| MBUS[Genesis Bus M68K]
     end
 
     subgraph Audio Subsystem
         MBUS <-->|BUSREQ / RESET / Window| ZBUS[Genesis Bus Z80]
-        ZBUS <-->|Instruction cycles| Z80[Genesis Z80 Sound CPU]
+        ZBUS <-->|Instruction cycles| Z80[Shared Zilog Z80 CPU]
         ZBUS <-->|FM Commands| YM[Yamaha YM2612 FM Synthesizer]
-        MBUS <-->|PSG Commands| PSG[Genesis PSG Sound Core]
+        MBUS <-->|PSG Commands| PSG[Shared Sega PSG]
     end
 
     subgraph Graphics Subsystem
         MBUS <-->|VDP Port Registers $C00000| VDP[Genesis VDP Video Core]
         VDP <-->|Render Line| VRAM[VRAM / CRAM / VSRAM]
-    end
-
-    subgraph Controller Subsystem
-        MBUS <-->|I/O Registers $A10000| CTRL[Controller Manager]
     end
 
     style M68K fill:#29292e,stroke:#3e3e46,stroke-width:2px,color:#fff
@@ -117,7 +113,6 @@ graph TB
     style YM fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
     style PSG fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
     style VDP fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
-    style CTRL fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
 ```
 
 ### Super Nintendo (SNES) / Super Famicom
@@ -156,13 +151,13 @@ graph TB
 
 ---
 
-## 4. Key Processor Decoupling
+## 4. Key Processor Decoupling & Shared Infrastructure
 
-Following the **Single Responsibility Principle (SRP)**, the emulation of all central processors has been completely decoupled. The processor cores do not mutate memory directly, nor do they embed flag-setting mathematical routines inside instruction cycles.
+Following the **Single Responsibility Principle (SRP)**, the emulation of all central processors has been completely decoupled and consolidated into a `shared` core library (`js/shared/`). The processors do not mutate memory directly, nor do they embed flag-setting mathematical routines inside instruction cycles.
 
-*   **Zilog Z80 CPU Core (`ZilogZ80.js`):** Coordinates 8-bit instruction fetching, registers mapping, and flag operations, remaining entirely agnostic of the memory mapper strategies and sound chip. Reused as a secondary sound co-processor inside Sega Genesis (`GenesisZ80.js`).
-*   **Motorola 68000 CPU Core (`m68000.js`):** Models the 16/32-bit linear address pipeline of the master Genesis processor, handling 12 hardware addressing modes, interrupts masking, and exception vectors.
-*   **Ricoh 5A22 65816 CPU Core (`SnesCpu.js`):** Emulates the 8/16-bit 6502-compatible CPU, completely segregating addressing modes (`SnesCpuAddressing.js`), data transfers (`SnesCpuDataOps.js`), and logical operations (`SnesCpuLogic.js`) into clean prototype-extended modules.
+*   **Zilog Z80 Shared CPU Core (`ZilogZ80.js`):** Coordinates 8-bit instruction fetching, registers mapping, and flag operations, remaining entirely agnostic of the memory mapper strategies. Inherited natively by both the Sega Master System and the Sega Genesis sound coprocessor.
+*   **Motorola 68000 Shared CPU Core (`m68k.js`):** Models the 16/32-bit linear address pipeline of the master Genesis processor, handling 12 hardware addressing modes, interrupts masking, and exception vectors. Ready to be reused by future Neo-Geo or Arcade cores.
+*   **Ricoh 5A22 65816 CPU Core (`SnesCpu.js`):** Emulates the 8/16-bit 6502-compatible CPU, completely segregating addressing modes, data transfers, and logical operations into clean prototype-extended modules for fast JIT compilation.
 *   **Sony SPC700 CPU Core (`SnesSpc.js`):** Emulates the custom 8-bit sound CPU inside the Super Nintendo, managing register state boundaries and mapping execution instructions.
 
 ---
@@ -171,30 +166,33 @@ Following the **Single Responsibility Principle (SRP)**, the emulation of all ce
 
 ### Strategy and Factory Patterns (Cartridge Auto-Mapping)
 Cartridge PCBs utilized custom bank-switching mapper chips to address memory beyond standard CPU boundaries. EGGStation handles this via a dynamic **Strategy Pattern** decided by a **Factory Pattern** at startup:
-*   **SMS Mappers:** Sega, Codemasters, and Korean mapper subclasses handle custom paging.
-*   **SnesCartridge strategy:** Auto-detects LoROM or HiROM cart mappings by scanning the title checksums and complement structures at `$7FC0` and `$FFC0` on boot, bypassing manual configuration entirely.
+*   **SMS Mappers:** Sega, Codemasters, and Korean mapper subclasses handle custom paging automatically.
+*   **SnesCartridge strategy:** Auto-detects LoROM or HiROM cart mappings by scanning the title checksums and complement structures at `$7FC0` and `$FFC0` on boot.
+*   **Universal RomDecompressor:** Asynchronously inspects `.zip` file streams, identifies valid console extensions, and extracts binary payloads entirely in-memory.
 
-### Zero-Allocation Hot Path & Inlined Bus Access
-To secure stable execution speeds under standard browser environments, high-frequency core routines have been optimized to maintain a zero-GC footprint:
-*   **Inlined Bus Cycles:** Static memory map lookups are inlined directly into `SnesSystemBus.getAccessTime()` and `SnesCpuAddressing.getAdr()`, removing millions of redundant function calls and lookups per second.
-*   **Float32 Panning Pipelines:** Buffers inside `SnesDsp.js` are pre-allocated using typed float arrays, bypassing division and memory reallocation overhead.
+### CPU-GPU Hybrid Scaling & CRT-Royale Shaders
+Transferring high-resolution pixel buffers from CPU memory to the GPU is a major bottleneck. EGGStation resolves this using a **Hybrid Scaling Pipeline** (`UniversalPostProcessor.js`):
+*   **WebGL2 Hardware Shaders:** Renders an immersive, curvature-corrected CRT-Royale display using discrete GPU fragment shaders, including aperture grille sub-pixels, analog halation (bloom), and sine-wave scanline synthesis.
+*   **Hybrid CPU Scale4X:** For older devices, the CPU executes the initial `Scale2X` algorithm (optimized using *Loop Boundary Separation*) to round vector curves at `2X`, letting the browser's CSS handle the final scale to `4X`. Reduces PCI-E bus loads by 75%.
 
-### CPU-GPU Hybrid Scaling (Scale4X Optimization)
-Transferring high-resolution pixel buffers from CPU memory to the GPU via canvas contexts (`putImageData`) is a major performance bottleneck in browsers. EGGStation resolves this using a **Hybrid Scaling Pipeline**:
-*   **CPU Pass:** The CPU executes the initial `Scale2X` algorithm (optimized using *Loop Boundary Separation* to eliminate bounds checks inside the inner loop) to round and smooth vector curves at `1024x896` resolution.
-*   **GPU Pass:** The browser's GPU hardware performs the final 2x upscale to reach `2048x1792` (Scale4X) using nearest-neighbor scaling (`image-rendering: pixelated`).
-*   This hybrid approach reduces CPU and PCI-E bus loads by **75%**, locking the performance to a stable 60 FPS.
+### Universal IndexedDB Persistence (State Temporal Physics)
+Instead of relying on heavy `JSON.stringify` dumps that cause GC pauses and `LocalStorage` quota crashes, EGGStation leverages a **Universal IndexedDB Manager**:
+*   Saves absolute console states (RAM, VRAM, CPU registers, Audio DSP phases) directly as raw binary `Uint8Array` payloads into the browser's high-speed database.
+*   Supports lightning-fast, gapless **Real-Time Rewind** gameplay by allocating a GC-Free static Ring Buffer of 100 deep-cloned historical states.
 
 ### Proportional Dynamic Rate Control (DRC)
 To solve synchronization drift caused by non-deterministic browser thread events, EGGStation implements an advanced **Closed-Loop Proportional Dynamic Rate Control (DRC)** system:
-*   The sound chips track the absolute **Clock Drift** ($e = \text{targetDrift} - \text{drift}$), measuring how many cycles the CPU is executing ahead of or behind the actual physical audio card playback.
-*   A proportional feedback loop continuously throttles or accelerates the emulated clock cycles by up to **$\pm 8\%$** of native speeds, keeping the audio buffer in equilibrium and eliminating clicks or audio stutters.
+*   The `UniversalAudioProcessor` measures absolute **Clock Drift** ($e = \text{targetDrift} - \text{drift}$), tracking how many cycles the CPU is executing ahead of or behind the actual physical audio card playback.
+*   A proportional feedback loop continuously throttles or accelerates the emulated clock cycles by up to **$\pm 8\%$** of native speeds, keeping the 32,768-sample audio ring buffer in equilibrium and eliminating clicks or stutters.
 
 ---
 
 ## 6. Input Mappings & Controls
 
-EGGStation maps inputs across keyboard, on-screen virtual pads, and physical USB/Bluetooth Gamepads simultaneously:
+EGGStation implements a highly decoupled **`UniversalInputManager`** and a **`UniversalDragDropHandler`** to provide an immersive, tactile experience out of the box:
+
+*   **Drag-and-Drop Loader:** Drag any `.sms`, `.md`, `.sfc`, or `.zip` file directly onto the CRT TV screen to auto-boot the appropriate console in real-time.
+*   **Programmatic Audio-Haptics:** Synthesizes low-latency mechanical switch click sounds via the Web Audio API on all UI interactions, and triggers 15ms micro-vibrations (`navigator.vibrate`) on mobile virtual D-Pads.
 
 ### Keyboard Layout
 *   **Arrow Keys:** D-PAD Directions
@@ -206,8 +204,10 @@ EGGStation maps inputs across keyboard, on-screen virtual pads, and physical USB
 *   **Key D:** Genesis Button Z / SNES Button L
 *   **Shift:** SNES Select Button
 *   **Enter:** Genesis Start / SNES Start Button
+*   **Backspace:** Hold to activate Real-Time Rewind
+*   **F2 / F3:** Save State / Load State
 
-### Physical Gamepads Layout (Standard SNES Mapping)
+### Physical Gamepads Layout (Standard Mapping)
 *   **D-Pad / Left Analog Stick:** D-PAD Directions
 *   **Button South (A on Xbox / B on Nintendo):** Button B
 *   **Button West (X on Xbox / Y on Nintendo):** Button Y
@@ -215,6 +215,8 @@ EGGStation maps inputs across keyboard, on-screen virtual pads, and physical USB
 *   **Button North (Y on Xbox / X on Nintendo):** Button X
 *   **Left Bumper (L1):** Left Shoulder (L)
 *   **Right Bumper (R1):** Right Shoulder (R)
+*   **Left Trigger (L2):** Real-Time Rewind
+*   **Right Trigger (R2):** Fast Forward
 *   **Button Select (Back):** Select Button
 *   **Button Start (Start):** Start Button
 
@@ -225,10 +227,11 @@ EGGStation maps inputs across keyboard, on-screen virtual pads, and physical USB
 EGGStation includes a double diagnostic suite designed for both emulator validation and homebrew development:
 
 ### Interactive Developer Diagnostics Suite (Dev Mode)
-Clicking the **"DEV MODE"** button in the header expands a retro diagnostic console at the footer:
+Clicking the **"DEV MODE"** button in the header expands a retro diagnostic console at the footer. The `UniversalDevSuiteManager` polymorphically polls the active engine:
 *   **Debugger Core:** Allows developers to break/pause the CPU execution, step-into precisely one instruction, or bind a hexadecimal breakpoint address.
-*   **Hex Registers Readout:** Renders all internal 16-bit and 32-bit CPU registers in uppercase hex, highlighting value changes.
+*   **Hex Registers Readout:** Automatically renders all internal CPU registers (Z80, M68K, or 5A22) in uppercase hex, updating synchronously.
 *   **Disassembly Console:** Disassembles and displays active assembly instructions centered around the current Program Counter (PC).
+*   **Diagnostic VRAM Viewer:** Decodes planar 4bpp pixel patterns (including complex SNES reverse-remapping) and renders the raw background tiles and sprites loaded into memory in real-time.
 
 ---
 
