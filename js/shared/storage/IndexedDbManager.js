@@ -4,7 +4,7 @@
  * File: js/shared/storage/IndexedDbManager.js
  * 
  * Role:
- * Infrastructure Layer: Universal IndexedDB Persistence Client.
+ * Infrastructure Layer: Universal IndexedDB Persistence Client (Retrocompatible Edition).
  * Manages low-level database transactions, store initialization, and 
  * high-performance read/write cycles of raw binary state buffers.
  * 
@@ -14,7 +14,7 @@
  *    of CPU registers or game configurations.
  * 2. Open/Closed Principle (OCP): New databases or target stores can be opened 
  *    without modifying the transaction handling methods.
- * 3. Liskov Substitution Principle (LSP): Implements a uniform storage contract 
+ * 3. Liskov Substitution Principle (LSP): Offers a uniform storage contract 
  *    that can be substituted or mocked easily for unit testing.
  * 4. Interface Segregation Principle (ISP): Exposes only high-level actions (`save()`, 
  *    `load()`, `delete()`), shielding client emulators from low-level transaction events.
@@ -63,6 +63,8 @@ class IndexedDbManager {
 
     /**
      * Saves a serialized payload to the database.
+     * Supports both "key" and "cartName" schemas snychronously for backward compatibility.
+     * 
      * @param {string} key - Unique key identifier (e.g., Cartridge Name).
      * @param {Object} data - State payload to serialize.
      * @returns {Promise<void>}
@@ -73,8 +75,13 @@ class IndexedDbManager {
             const transaction = db.transaction([this.storeName], "readwrite");
             const store = transaction.objectStore(this.storeName);
             
-            // Map key directly into the item payload
-            const record = { key, payload: data, timestamp: Date.now() };
+            // PHASE 4: Hybrid Record supports both old {keyPath: "cartName"} and new {keyPath: "key"} schemas
+            const record = { 
+                key: key, 
+                cartName: key, // Legacy schema fallback
+                payload: data, 
+                timestamp: Date.now() 
+            };
             const request = store.put(record);
 
             request.onsuccess = () => resolve();
