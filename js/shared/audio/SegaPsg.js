@@ -6,22 +6,17 @@
  * Role:
  * Infrastructure Layer: Sega SN76489-compatible Programmable Sound Generator (PSG).
  * Emulates three square-wave tone channels and one feedback noise channel. 
- * Supports both active Web Audio mixing (for SMS) and passive buffer-filling (for Genesis).
+ * Supports both active Web Audio mixing (for SMS) and passive buffer-filling (for Genesis)
+ * using a single, unified, mathematically perfect phase-step synthesizer.
  * 
  * SOLID Principles Applied:
  * 1. Single Responsibility Principle (SRP): Exclusively responsible for emulating 
  *    the Texas Instruments SN76489 sound chip (noise LFSR, tone generators, and attenuation).
- * 2. Liskov Substitution Principle (LSP): Fully interchangeable. It can act as a 
- *    standalone WebAudio node (SMS) or as a passive sample synthesizer (Genesis) 
- *    without violating execution contracts.
- * 3. Open/Closed Principle (OCP): Soundstage DSP filters can be configured or 
- *    bypassed without altering the baseline square-wave frequency clock decay.
+ * 2. Liskov Substitution Principle (LSP): Fully interchangeable. It acts as a 
+ *    standalone WebAudio node (SMS) or as a passive sample synthesizer (Genesis).
+ * 3. Don't Repeat Yourself (DRY): Both systems now consume the exact same oscillator 
+ *    math via `getSample()`, eliminating legacy double implementations.
  */
-
-// Attenuation volume mapping table (2dB steps - SN76489 standard)
-const SEGA_PSG_VOLUME_TABLE = new Int16Array([
-    2340, 1859, 1476, 1173, 931, 740, 587, 469, 370, 294, 234, 185, 147, 117, 93, 0
-]);
 
 const SEGA_PSG_NOISE_TYPE_PERIODIC = 0;
 const SEGA_PSG_NOISE_TYPE_WHITE    = 1;
@@ -29,29 +24,21 @@ const SEGA_PSG_NOISE_TYPE_WHITE    = 1;
 class SegaPsg {
     constructor() {
         // Hardware Registers
-        this.volregister = [0xf, 0xf, 0xf, 0xf]; 
-        this.toneregister = [0, 0, 0, 0];       
-        this.wavePos = [0, 0, 0, 0];            
+        this.volregister = new Int16Array([0xf, 0xf, 0xf, 0xf]); 
+        this.toneregister = new Int16Array([0, 0, 0, 0]);       
+        this.wavePos = new Float32Array([0, 0, 0, 0]);            
+        this.cachedStepSize = new Float32Array([0, 0, 0, 0]);
+
         this.chan2belatched = 0; 
         this.what2latch = 0;     
-        this.latch = 0;
 
-        // Genesis specific structures
-        this.tonesCountdown = new Int16Array(4);       
-        this.tonesCountdownMaster = new Int16Array(4); 
-        this.tonesAttenuation = new Uint8Array(4);     
-        this.tonesOutputState = new Uint8Array(4);     
-        
+        // Noise Channel Registers
+        this.noiseFreqMode = 0;
         this.noiseType = SEGA_PSG_NOISE_TYPE_PERIODIC;
-        this.noiseUseTone3 = false;
         this.noiseShiftRegister = 0x8000;
         this.noiseOut = 0;
-
-        this.toneDisabled = new Uint8Array(3);
-        this.noiseDisabled = 0;
-
-        // Hot Path Cache: Pre-calculated phase step sizes to eliminate divisions
-        this.cachedStepSize = new Float32Array(4);
+        this.noisePhase = 0.0;
+        this.noiseStepSize = 0.0;
 
         this.eventsQueue = [];
         this.internalClock = 0;
@@ -60,37 +47,19 @@ class SegaPsg {
         this.isMuted = false;
         this.audioInitialized = false;
 
-        // Pre-calculated pseudo-random noise buffer for SMS
         this.squareWaveLen = 8192;
-        this.randDim = 65536;
-        this.randBuffer = new Float32Array(this.randDim);
-        for (let s = 0; s < this.randDim; s++) {
-            this.randBuffer[s] = Math.random() * 1.0;
-        }
-        this.randPos = 0;
-
-        // Constant derived from SMS Master Clock (3579545.0 / 0.37)
-        this.PSG_CLOCK_CONSTANT = 9674445.945945946;
+        this.sampleRate = 44100; // Default fallback sample rate
 
         // Web Audio components (For SMS active mode)
         this.context = null;
         this.jsNode = null;
         this.gainNode = null;
-        
         this.biquadFilterNode = null; 
-        this.convolverNode = null;    
         this.delayNode = null;        
-        this.panLeft = null;          
-        this.panRight = null;         
         
-        this.wetGain = null;          
-        this.dryGain = null;          
-        this.haasGain = null;         
-
         this.audioBufSize = 2048;     
         this.multiplier = 0;
         this.audioEnabled = false;
-        this.audioFilterMode = 0; 
 
         this.initialise();
     }
@@ -104,107 +73,51 @@ class SegaPsg {
     }
 
     initialize() {
-        // Reset SMS structures
         this.volregister.fill(0xf); // Silence
         this.toneregister.fill(0);
         this.wavePos.fill(0);
+        this.cachedStepSize.fill(0);
+
         this.chan2belatched = 0;
         this.what2latch = 0;
-        this.latch = 0;
 
-        // Reset Genesis structures
-        this.tonesCountdown.fill(0);
-        this.tonesCountdownMaster.fill(1); // Set to 1 to prevent startup division-by-zero
-        this.tonesAttenuation.fill(0xf);  // Silence
-        this.tonesOutputState.fill(0);
-
+        this.noiseFreqMode = 0;
         this.noiseType = SEGA_PSG_NOISE_TYPE_PERIODIC;
-        this.noiseUseTone3 = false;
         this.noiseShiftRegister = 0x8000;
         this.noiseOut = 0;
+        this.noisePhase = 0.0;
+        this.noiseStepSize = 0.0;
 
-        this.toneDisabled.fill(0);
-        this.noiseDisabled = 0;
-
-        this.cachedStepSize.fill(0);
         this.eventsQueue = [];
         this.internalClock = 0;
         this.internalClockPos = 0;
-        this.randPos = 0;
     }
 
     /**
-     * Controls the active muting state of the audio output.
+     * Sets the active host sample rate (Used to calculate precise analog wave phases).
      */
+    setSampleRate(rate) {
+        this.sampleRate = rate || 44100;
+        for (let i = 0; i < 3; i++) this.recalculateVoiceStep(i);
+        this.recalculateNoiseStep();
+    }
+
     setMuted(shouldMute) {
         this.isMuted = shouldMute;
     }
 
-    /**
-     * Pre-calculates acoustic impulse response data to bypass network fetches.
-     */
-    synthesizeCabinetImpulseResponse() {
-        const rate = this.context.sampleRate;
-        const length = Math.floor(rate * 0.12); 
-        const buffer = this.context.createBuffer(2, length, rate);
-        const left = buffer.getChannelData(0);
-        const right = buffer.getChannelData(1);
-
-        for (let i = 0; i < length; i++) {
-            const decay = Math.exp(-i / (rate * 0.025)); 
-            const noiseL = (Math.random() * 2.0 - 1.0) * decay;
-            const noiseR = (Math.random() * 2.0 - 1.0) * decay;
-
-            left[i] = noiseL;
-            right[i] = (i > 100) ? noiseR * 0.85 : 0.0;
-        }
-
-        return buffer;
-    }
-
-    /**
-     * Changes active audio DSP paths dynamically.
-     */
     setAudioFilter(mode) {
-        this.audioFilterMode = mode;
-        if (!this.audioInitialized) return;
-
-        switch (mode) {
-            case 1:
-                this.biquadFilterNode.frequency.value = 3500; 
-                this.dryGain.gain.value = 1.0;
-                this.haasGain.gain.value = 0.0;
-                this.wetGain.gain.value = 0.0; 
-                break;
-                
-            case 2:
-                this.biquadFilterNode.frequency.value = 5500; 
-                this.dryGain.gain.value = 0.7;
-                this.delayNode.delayTime.value = 0.02; 
-                this.haasGain.gain.value = 0.7;
-                this.wetGain.gain.value = 0.0; 
-                break;
-
-            case 3:
-                this.biquadFilterNode.frequency.value = 6500; 
-                this.dryGain.gain.value = 0.65; 
-                this.delayNode.delayTime.value = 0.025; 
-                this.haasGain.gain.value = 0.65;
-                this.wetGain.gain.value = 0.80; 
-                break;
-
-            case 0:
-            default:
-                this.biquadFilterNode.frequency.value = 20000; 
-                this.dryGain.gain.value = 1.0;
-                this.haasGain.gain.value = 0.0;
-                this.wetGain.gain.value = 0.0; 
-                break;
+        if (!this.audioInitialized || !this.biquadFilterNode) return;
+        switch (parseInt(mode)) {
+            case 1: this.biquadFilterNode.frequency.value = 3500; break;
+            case 2: this.biquadFilterNode.frequency.value = 5500; break;
+            case 3: this.biquadFilterNode.frequency.value = 6500; break;
+            default: this.biquadFilterNode.frequency.value = 20000; break;
         }
     }
 
     /**
-     * Initializes the Web Audio API context and structures the parallel node graph.
+     * Bootstraps Web Audio API for Active Mode (Sega Master System).
      */
     async startMix(cpu) {
         try {
@@ -212,52 +125,24 @@ class SegaPsg {
             window.AudioContext = window.AudioContext || window.webkitAudioContext;
             this.context = new AudioContext();
             
+            this.setSampleRate(this.context.sampleRate);
             this.multiplier = Math.floor(cpu.clockRate / this.context.sampleRate);
             
             this.jsNode = this.context.createScriptProcessor(this.audioBufSize, 0, 1);
             this.jsNode.onaudioprocess = (e) => this.mixFunction(e);
 
             this.gainNode = this.context.createGain();
-            this.gainNode.gain.value = 0.5; 
+            this.gainNode.gain.value = 0.6; 
     
             this.biquadFilterNode = this.context.createBiquadFilter();
             this.biquadFilterNode.type = 'lowpass';
 
-            this.convolverNode = this.context.createConvolver();
-            this.convolverNode.buffer = this.synthesizeCabinetImpulseResponse(); 
-
-            this.delayNode = this.context.createDelay();
-            this.panLeft = this.context.createStereoPanner();
-            this.panRight = this.context.createStereoPanner();
-            this.panLeft.pan.value = -0.8;
-            this.panRight.pan.value = 0.8;
-
-            this.dryGain = this.context.createGain();
-            this.haasGain = this.context.createGain();
-            this.wetGain = this.context.createGain();
-
             this.jsNode.connect(this.biquadFilterNode);
-
-            this.biquadFilterNode.connect(this.panLeft);
-            this.panLeft.connect(this.dryGain);
-
-            this.biquadFilterNode.connect(this.delayNode);
-            this.delayNode.connect(this.panRight);
-            this.panRight.connect(this.haasGain);
-
-            this.biquadFilterNode.connect(this.convolverNode);
-            this.convolverNode.connect(this.wetGain);
-
-            this.dryGain.connect(this.gainNode);
-            this.haasGain.connect(this.gainNode);
-            this.wetGain.connect(this.gainNode);
-
+            this.biquadFilterNode.connect(this.gainNode);
             this.gainNode.connect(this.context.destination);
 
             this.audioInitialized = true;
-            if (!this.audioEnabled) {
-                this.context.suspend().catch(() => {});
-            }
+            if (!this.audioEnabled) this.context.suspend().catch(() => {});
         }
         catch(e) {
             console.error("SegaPsg::Failed to bootstrap Web Audio.", e);
@@ -265,112 +150,170 @@ class SegaPsg {
         }        
     }
 
-    /**
-     * Dynamically enables or disables Web Audio contexts and processing.
-     */
     setAudioEnabled(enabled) {
         this.audioEnabled = enabled;
         if (this.context) {
-            if (enabled) {
-                if (this.context.state === 'suspended') {
-                    this.context.resume().catch(() => {});
-                }
-            } else {
-                if (this.context.state === 'running') {
-                    this.context.suspend().catch(() => {});
-                }
-            }
+            if (enabled && this.context.state === 'suspended') this.context.resume().catch(() => {});
+            else if (!enabled && this.context.state === 'running') this.context.suspend().catch(() => {});
         }
     }
 
-    /**
-     * Steps the internal PSG sound clock index.
-     */
     step(totCpuCycles) {
         this.internalClock = totCpuCycles;
     }
 
     /**
-     * Recalculates and caches the phase step size of a voice.
+     * Calculates square wave phase increment based on the 3.58MHz master clock.
      */
     recalculateVoiceStep(voiceIndex) {
         const toneVal = this.toneregister[voiceIndex];
         if (toneVal === 0) {
             this.cachedStepSize[voiceIndex] = 0;
         } else {
-            this.cachedStepSize[voiceIndex] = this.PSG_CLOCK_CONSTANT / (32 * toneVal);
+            const freq = 3579545.0 / (32.0 * toneVal);
+            this.cachedStepSize[voiceIndex] = (freq / this.sampleRate) * this.squareWaveLen;
         }
     }
 
     /**
-     * Decodes 8-bit bus writes and enqueues events.
+     * Calculates Noise channel shift rate based on the 3.58MHz master clock.
      */
-    writeByte(eventByte) {
-        this.eventsQueue.push([eventByte, this.internalClock]);
-        
-        if (eventByte & 0x80) {
-            this.chan2belatched = (eventByte >> 5) & 0x03;
-            this.what2latch = ((eventByte & 0x10) === 0x10) ? 1 : 0;
-        }
-    }
-
-    /**
-     * Processes enqueued hardware writes up to a target clock.
-     */
-    processEvents(targetClock) {
-        while (this.eventsQueue.length > 0 && this.eventsQueue[0][1] <= targetClock) {
-            const curEvent = this.eventsQueue.shift();
-            const eventByte = curEvent[0];
-
-            if (eventByte & 0x80) {
-                this.chan2belatched = (eventByte >> 5) & 0x03;
-                this.what2latch = ((eventByte & 0x10) === 0x10) ? 1 : 0;
-                if (this.what2latch === 1) {
-                    this.volregister[this.chan2belatched] = eventByte & 0x0f;
-                } else {
-                    this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff00) | ((eventByte << 4) & 0x00FF);
-                    this.recalculateVoiceStep(this.chan2belatched);
-                }
+    recalculateNoiseStep() {
+        if (this.noiseFreqMode < 3) {
+            const divisors = [512, 1024, 2048];
+            const freq = 3579545.0 / divisors[this.noiseFreqMode];
+            this.noiseStepSize = (freq / this.sampleRate);
+        } else {
+            const toneVal = this.toneregister[2];
+            if (toneVal === 0) {
+                this.noiseStepSize = 0;
             } else {
-                if (this.what2latch === 1) {
-                    this.volregister[this.chan2belatched] = eventByte & 0xf;
-                } else {
-                    this.toneregister[this.chan2belatched] = (this.toneregister[this.chan2belatched] & 0xff) | ((eventByte << 8) & 0x3F00);
-                    this.recalculateVoiceStep(this.chan2belatched);
-                }
+                const freq = 3579545.0 / (32.0 * toneVal);
+                this.noiseStepSize = (freq / this.sampleRate);
             }
         }
     }
 
     /**
-     * Evaluates clock drift between physical audio output and emulated CPU cycles.
+     * Shared Command Latch Processor.
+     * Maps physical Z80/M68K byte writes to the internal SN76489 registers.
      */
+    applyCommand(command) {
+        command &= 0xFF;
+        if (command & 0x80) {
+            this.chan2belatched = (command >> 5) & 3;
+            this.what2latch = (command & 0x10) !== 0 ? 1 : 0;
+            const ch = this.chan2belatched;
+
+            if (this.what2latch === 1) {
+                this.volregister[ch] = command & 0xF;
+            } else {
+                if (ch === 3) {
+                    this.noiseFreqMode = command & 3;
+                    this.noiseType = (command & 4) !== 0 ? SEGA_PSG_NOISE_TYPE_WHITE : SEGA_PSG_NOISE_TYPE_PERIODIC;
+                    this.noiseShiftRegister = 0x8000;
+                    this.recalculateNoiseStep();
+                } else {
+                    this.toneregister[ch] = (this.toneregister[ch] & 0xFFF0) | (command & 0x0F);
+                    this.recalculateVoiceStep(ch);
+                    if (ch === 2) this.recalculateNoiseStep(); // Noise Mode 3 tracks Tone 2
+                }
+            }
+        } else {
+            const ch = this.chan2belatched;
+            if (this.what2latch === 1) {
+                this.volregister[ch] = command & 0xF;
+            } else if (ch !== 3) {
+                this.toneregister[ch] = (this.toneregister[ch] & 0x000F) | ((command & 0x3F) << 4);
+                this.recalculateVoiceStep(ch);
+                if (ch === 2) this.recalculateNoiseStep();
+            }
+        }
+    }
+
+    // ========================================================================
+    // SMS ACTIVE MODE: Queued execution to sync with CPU sub-cycles
+    // ========================================================================
+    writeByte(eventByte) {
+        this.eventsQueue.push([eventByte, this.internalClock]);
+    }
+
+    processEvents(targetClock) {
+        while (this.eventsQueue.length > 0 && this.eventsQueue[0][1] <= targetClock) {
+            const curEvent = this.eventsQueue.shift();
+            this.applyCommand(curEvent[0]);
+        }
+    }
+
     getClockDrift() {
         if (!this.audioInitialized) return 0;
         return this.internalClock - this.internalClockPos;
     }
 
+    // ========================================================================
+    // GENESIS PASSIVE MODE: Immediate execution without queueing
+    // ========================================================================
+    writeCommand(command) {
+        this.applyCommand(command);
+    }
+
+    // ========================================================================
+    // UNIFIED SYNTHESIS ENGINE (Polymorphic Math)
+    // ========================================================================
+    
     /**
-     * Synthesizes audio samples synchronously.
+     * Generates a single frame of audio (-1.0 to 1.0) mathematically.
+     * Used synchronously by both SMS and Genesis.
      */
-    mixFunction(e) {
-        if (!this.audioEnabled || !this.audioInitialized) {
-            const data = e.outputBuffer.getChannelData(0);
-            data.fill(0);
-            return;
+    getSample() {
+        let finalSample = 0.0;
+
+        // 1. Synthesize 3 Square Wave Tones
+        for (let i = 0; i < 3; i++) {
+            const vol = this.volregister[i];
+            if (vol !== 0xf && this.toneregister[i] !== 0) {
+                const curSamp = (this.wavePos[i] < (this.squareWaveLen >> 1)) ? 1.0 : -1.0;
+                const volScale = (15 - vol) / 15.0; 
+                finalSample += curSamp * volScale * 0.20; 
+                
+                this.wavePos[i] += this.cachedStepSize[i];
+                if (this.wavePos[i] >= this.squareWaveLen) this.wavePos[i] %= this.squareWaveLen;
+            }
         }
 
-        const data = e.outputBuffer.getChannelData(0);
-        const dataLength = data.length;
+        // 2. Synthesize 1 LFSR Noise Channel
+        const volNoise = this.volregister[3];
+        if (volNoise !== 0xf) {
+            this.noisePhase += this.noiseStepSize;
+            while (this.noisePhase >= 1.0) {
+                this.noisePhase -= 1.0;
+                this.noiseOut = this.noiseShiftRegister & 1;
+                this.noiseShiftRegister = (this.noiseShiftRegister >> 1) | (this.noiseShiftRegister << 15);
+                
+                // Sega specific XOR-feedback polynomial for White Noise
+                if (this.noiseType === SEGA_PSG_NOISE_TYPE_WHITE && (this.noiseShiftRegister & 0x40)) {
+                    this.noiseShiftRegister ^= 0x8000;
+                }
+            }
+            const curSamp = this.noiseOut ? 1.0 : -1.0;
+            const volScale = (15 - volNoise) / 15.0;
+            finalSample += curSamp * volScale * 0.20;
+        }
 
-        if (this.isMuted) {
+        return finalSample;
+    }
+
+    /**
+     * SMS Active Node Output Generator.
+     */
+    mixFunction(e) {
+        const data = e.outputBuffer.getChannelData(0);
+        if (!this.audioEnabled || !this.audioInitialized || this.isMuted) {
             data.fill(0);
             return;
         }
 
         let numClocksToCover = this.internalClock - this.internalClockPos;
-
-        // DRC Transient protection: snap timeline immediately if drift crosses buffer thresholds
         const maxAllowedDrift = this.multiplier * this.audioBufSize * 4;
         if (Math.abs(numClocksToCover) > maxAllowedDrift) {
             this.internalClockPos = this.internalClock;
@@ -382,151 +325,31 @@ class SegaPsg {
             return;
         }
         
-        const realStep = numClocksToCover / (this.multiplier * dataLength);
+        const realStep = numClocksToCover / (this.multiplier * data.length);
 
-        for (let sampleIndex = 0; sampleIndex < dataLength; sampleIndex++) {
-            const sampleClock = this.internalClockPos + (sampleIndex * realStep * this.multiplier);
-
-            // Execute register updates synced to this exact sample
+        for (let i = 0; i < data.length; i++) {
+            const sampleClock = this.internalClockPos + (i * realStep * this.multiplier);
             this.processEvents(sampleClock);
-
-            let finalSample = 0.0;
-
-            // Synthesize Tone Channels (Voices 0 to 2)
-            for (let voiceIndex = 0; voiceIndex < 3; voiceIndex++) {
-                const vol = this.volregister[voiceIndex];
-                if (vol !== 0xf && this.toneregister[voiceIndex] !== 0) {
-                    const wavePhase = this.wavePos[voiceIndex] % this.squareWaveLen;
-                    const curSamp = (wavePhase < (this.squareWaveLen >> 1)) ? 1.0 : 0.0;
-                    
-                    finalSample += curSamp * (15 - vol) * 0.066666666;
-
-                    // Apply cached, pre-calculated step size increment
-                    this.wavePos[voiceIndex] += this.cachedStepSize[voiceIndex];
-                    if (this.wavePos[voiceIndex] >= this.squareWaveLen) {
-                        this.wavePos[voiceIndex] %= this.squareWaveLen;
-                    }
-                }
-            }
-
-            // Synthesize Noise Channel (Voice 3)
-            const noiseVol = this.volregister[3];
-            if (noiseVol !== 0xf) {
-                const curSamp = this.randBuffer[this.randPos] * 2.0;
-                finalSample += curSamp * (15 - noiseVol) * 0.066666666;
-
-                this.randPos = (this.randPos + 1) % this.randDim;
-            }
-
-            data[sampleIndex] = finalSample * 0.25;
+            data[i] = this.getSample();
         }
 
         this.internalClockPos += numClocksToCover;
     }
 
     /**
-     * Fallback interface for abstract orchestrator implementations.
-     */
-    syncWorkletState() {}
-
-    // ========================================================================
-    // PASSIVE SAMPLING MIXER METHODS (For Sega Genesis integration)
-    // ========================================================================
-
-    /**
-     * Compatibility alias.
-     */
-    writeCommand(command) {
-        command = command & 0xFF;
-        const isLatch = (command & 0x80) !== 0;
-
-        if (isLatch) {
-            this.chan2belatched = (command >> 5) & 3;
-            this.what2latch = (command & 0x10) !== 0 ? 1 : 0;
-
-            const ch = this.chan2belatched;
-            if (this.what2latch === 1) {
-                this.tonesAttenuation[ch] = command & 0xF;
-            } else {
-                if (ch === 3) {
-                    const noiseFreqMode = command & 3;
-                    switch (noiseFreqMode) {
-                        case 0:
-                        case 1:
-                        case 2:
-                            this.tonesCountdownMaster[3] = 0x10 << noiseFreqMode;
-                            this.noiseUseTone3 = false;
-                            break;
-                        default:
-                            this.tonesCountdownMaster[3] = this.tonesCountdownMaster[2];
-                            this.noiseUseTone3 = true;
-                            break;
-                    }
-                    this.noiseType = (command & 4) !== 0 ? SEGA_PSG_NOISE_TYPE_WHITE : SEGA_PSG_NOISE_TYPE_PERIODIC;
-                    this.noiseShiftRegister = 0x8000;
-                } else {
-                    this.tonesCountdownMaster[ch] = (this.tonesCountdownMaster[ch] & 0x3F0) | (command & 0xF);
-                    if (ch === 2 && this.noiseUseTone3) {
-                        this.tonesCountdownMaster[3] = this.tonesCountdownMaster[2];
-                    }
-                }
-            }
-        } else {
-            const ch = this.chan2belatched;
-            if (ch !== 3 && this.what2latch === 0) {
-                this.tonesCountdownMaster[ch] = (this.tonesCountdownMaster[ch] & 0x0F) | ((command & 0x3F) << 4);
-                if (ch === 2 && this.noiseUseTone3) {
-                    this.tonesCountdownMaster[3] = this.tonesCountdownMaster[2];
-                }
-            }
-        }
-    }
-
-    /**
-     * Passive frame timing step for Sega Genesis mixer buffers.
+     * Genesis Passive Buffer Output Generator.
      */
     update(sampleBuffer, totalFrames) {
         let ptr = 0;
-
-        for (let frame = 0; frame < totalFrames; ++frame) {
-            for (let i = 0; i < 4; i++) {
-                if (this.tonesCountdown[i] > 0) {
-                    this.tonesCountdown[i] = (this.tonesCountdown[i] - 1) | 0;
-                }
-
-                if (this.tonesCountdown[i] === 0) {
-                    this.tonesCountdown[i] = this.tonesCountdownMaster[i];
-                    this.tonesOutputState[i] = this.tonesOutputState[i] === 0 ? 1 : 0;
-
-                    if (i === 3 && this.tonesOutputState[3] !== 0) {
-                        this.noiseOut = this.noiseShiftRegister & 1;
-                        this.noiseShiftRegister = (this.noiseShiftRegister >> 1) | (this.noiseShiftRegister << 15);
-                        
-                        if (this.noiseType === SEGA_PSG_NOISE_TYPE_WHITE) {
-                            if ((this.noiseShiftRegister & 0x40) !== 0) {
-                                this.noiseShiftRegister ^= 0x8000;
-                            }
-                        }
-                    }
-                }
-            }
-
-            let accum = 0;
-
-            for (let i = 0; i < 3; i++) {
-                if (this.toneDisabled[i] === 0 && this.tonesOutputState[i] !== 0) {
-                    accum += SEGA_PSG_VOLUME_TABLE[this.tonesAttenuation[i]];
-                }
-            }
-
-            if (this.noiseDisabled === 0 && this.noiseOut !== 0) {
-                accum += SEGA_PSG_VOLUME_TABLE[this.tonesAttenuation[3]];
-            }
-
-            sampleBuffer[ptr] = (sampleBuffer[ptr] + accum) | 0;
+        for (let i = 0; i < totalFrames; i++) {
+            // Genesis FM mixer expects signed 16-bit integers
+            const floatSample = this.getSample();
+            sampleBuffer[ptr] = (sampleBuffer[ptr] + (floatSample * 32767)) | 0;
             ptr++;
         }
     }
+
+    syncWorkletState() {}
 }
 
 // Bind globally as a shared module

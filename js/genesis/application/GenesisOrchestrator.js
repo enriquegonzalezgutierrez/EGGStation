@@ -157,6 +157,12 @@ class GenesisOrchestrator {
         this.audioEnabled = window.audioEnabledState !== false;
         window.AudioContext = window.AudioContext || window.webkitAudioContext;
         this.audioCtx = new AudioContext();
+        
+        // PHASE 4: Inject sample rate into the shared SegaPsg synthesizer
+        if (this.psg) {
+            this.psg.setSampleRate(this.audioCtx.sampleRate);
+        }
+
         this.gainNode = this.audioCtx.createGain();
         this.gainNode.gain.value = 0.5; 
         this.jsNode = this.audioCtx.createScriptProcessor(this.maxAudioBufferSize, 0, 2);
