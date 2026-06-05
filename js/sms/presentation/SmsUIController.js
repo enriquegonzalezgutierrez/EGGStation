@@ -1,24 +1,26 @@
 /**
- * Project: EGGStation - Sega Master System Emulator
+ * Project: EGGStation - Unified Multi-System Console Virtual Environment
  * Author: Enrique González Gutiérrez
+ * File: js/sms/presentation/SmsUIController.js
  * 
- * Presentation Layer: UI Controller (Z80 Registers Restore and Auto-Refresh)
+ * Role:
+ * Presentation Layer: Sega Master System (SMS) UI & Input Controller.
+ * Maps DOM interactions, keyboard/touch events, and physical USB/Bluetooth 
+ * Gamepads directly to the SmsOrchestrator. Handles UI updates and 
+ * developer diagnostic registers.
  * 
- * Maps DOM interactions (buttons, file inputs, selects), keyboard/touch events, 
- * and Physical USB/Bluetooth Gamepads to the Emulator Orchestrator. 
- * Swaps viewports via clean display rules to prevent flexbox offset anomalies (SRP).
- * 
- * SOLID Principles:
- * - Single Responsibility Principle (SRP): Isolates UI event bindings and keyboard 
- *   layouts from the core execution clocks and system memory buses.
- * - Dependency Inversion Principle (DIP): Injects the frontend input poller 
- *   directly into the core's input manager, keeping the domain agnostic of the DOM.
+ * SOLID Principles Applied:
+ * 1. Single Responsibility Principle (SRP): Exclusively responsible for bridging 
+ *    the DOM/UI presentation events and mapping inputs to the virtual controller hardware.
+ * 2. Dependency Inversion Principle (DIP): Injects the high-level orchestrator 
+ *    abstraction (`SmsOrchestrator`) via constructor injection rather than 
+ *    tightly coupling to a specific instanced creation inside the UI layer.
  */
 
-class UIController {
+class SmsUIController {
     /**
      * Initializes the UI Controller and binds all browser, touch, and gamepad events.
-     * @param {EmulatorOrchestrator} orchestrator - The application layer service managing the emulator.
+     * @param {SmsOrchestrator} orchestrator - The active SMS system adapter.
      */
     constructor(orchestrator) {
         this.orchestrator = orchestrator;
@@ -48,7 +50,7 @@ class UIController {
             
             // Memory Leak Prevention: If the active controller is no longer this (unloaded/swapped),
             // clear the interval automatically to free up browser memory.
-            if (typeof activeController !== 'undefined' && activeController !== this) {
+            if (typeof activeController !== 'undefined' && activeController !== null && activeController !== this) {
                 clearInterval(this.devIntervalId);
                 return;
             }
@@ -118,14 +120,14 @@ class UIController {
             window.__eggstation_gamepad_listeners_bound__ = true;
 
             window.addEventListener("gamepadconnected", (e) => {
-                console.log(`UIController::Gamepad connected globally: [${e.gamepad.id}]`);
+                console.log(`SmsUIController::Gamepad connected globally: [${e.gamepad.id}]`);
                 if (typeof activeController !== 'undefined' && activeController && activeController.showGamepadNotification) {
                     activeController.showGamepadNotification(`Controller detected: ${e.gamepad.id.substring(0, 24)}...`);
                 }
             });
 
             window.addEventListener("gamepaddisconnected", (e) => {
-                console.log(`UIController::Gamepad disconnected globally: [${e.gamepad.id}]`);
+                console.log(`SmsUIController::Gamepad disconnected globally: [${e.gamepad.id}]`);
                 if (typeof activeController !== 'undefined' && activeController && activeController.showGamepadNotification) {
                     activeController.showGamepadNotification(`Controller disconnected: ${e.gamepad.id.substring(0, 24)}...`);
                 }
@@ -189,7 +191,7 @@ class UIController {
                 const val = e.target.value.trim();
                 if (val.length === 4) {
                     this.orchestrator.breakpointAddress = parseInt(val, 16);
-                    console.log(`UIController::Breakpoint bound to address: 0x${this.orchestrator.breakpointAddress.toString(16).toUpperCase().padStart(4, '0')}`);
+                    console.log(`SmsUIController::Breakpoint bound to address: 0x${this.orchestrator.breakpointAddress.toString(16).toUpperCase().padStart(4, '0')}`);
                 } else {
                     this.orchestrator.breakpointAddress = null;
                 }
@@ -385,11 +387,9 @@ class UIController {
 
     /**
      * Continuous polling loop for the HTML5 Gamepad API.
-     * Scans the full array to map the first active gamepad, regardless of index slots.
+     * Scans and maps the first active gamepad.
      */
     pollGamepads() {
-        // Lifecycle Guard: Automatically release loop if the current active controller context changes.
-        // Modified to allow the first frame call when activeController is null during constructor execution.
         if (typeof activeController !== 'undefined' && activeController !== null && activeController !== this) {
             return;
         }
@@ -397,7 +397,6 @@ class UIController {
         const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
         let gp = null;
 
-        // Iterate dynamically to find the first non-null active gamepad lane
         for (let i = 0; i < gamepads.length; i++) {
             if (gamepads[i]) {
                 gp = gamepads[i];
@@ -409,7 +408,6 @@ class UIController {
             const io = this.orchestrator.ioController;
             const DEADZONE = 0.5; // Threshold for analog stick drift
 
-            // Advanced Fallback direction mapping for generic / ShanWan Gamepads under Linux
             const leftStickH = gp.axes[0] || 0;
             const leftStickV = gp.axes[1] || 0;
             const dpadAxisH  = gp.axes[4] || gp.axes[6] || gp.axes[2] || 0;
@@ -420,29 +418,12 @@ class UIController {
             const left  = gp.buttons[14]?.pressed || leftStickH < -DEADZONE || dpadAxisH < -DEADZONE;
             const right = gp.buttons[15]?.pressed || leftStickH > DEADZONE  || dpadAxisH > DEADZONE;
 
-            // Map standard buttons (0, 1, 2, 3) or bumpers (4, 5) to DB-9 fire triggers
             const btn1 = gp.buttons[0]?.pressed || gp.buttons[2]?.pressed || gp.buttons[4]?.pressed; 
             const btn2 = gp.buttons[1]?.pressed || gp.buttons[3]?.pressed || gp.buttons[5]?.pressed; 
 
-            // Pause: 9 (Start button) or 8 (Select button)
             const pause = gp.buttons[9]?.pressed || gp.buttons[8]?.pressed;
-
-            // Rewind: 6 (Left Trigger / L2) or 7 (Right Trigger / R2)
             const rewind = gp.buttons[6]?.pressed || gp.buttons[7]?.pressed;
 
-            // Diagnostic Logger: Emits active button and axis parameters to the host debugger console
-            // for (let b = 0; b < gp.buttons.length; b++) {
-            //     if (gp.buttons[b]?.pressed) {
-            //         console.log(`[EGGStation::SMS Diagnostics] Button ${b} is PRESSED`);
-            //     }
-            // }
-            // for (let a = 0; a < gp.axes.length; a++) {
-            //     if (Math.abs(gp.axes[a]) > DEADZONE) {
-            //         console.log(`[EGGStation::SMS Diagnostics] Axis ${a} Value is active: ${gp.axes[a].toFixed(2)}`);
-            //     }
-            // }
-
-            // Helper to trigger hardware pins only on state change (edge detection)
             const triggerInput = (key, isPressed, onPress, onRelease) => {
                 if (isPressed && !this.gamepadState[key]) {
                     onPress.call(io);
@@ -453,7 +434,6 @@ class UIController {
                 }
             };
 
-            // Execute input mapping evaluations
             triggerInput('up', up, io.pressUp, io.depressUp);
             triggerInput('down', down, io.pressDown, io.depressDown);
             triggerInput('left', left, io.pressLeft, io.depressLeft);
@@ -461,7 +441,6 @@ class UIController {
             triggerInput('btn1', btn1, io.pressButton1, io.depressButton1);
             triggerInput('btn2', btn2, io.pressButton2, io.depressButton2);
 
-            // Special handling for Pause (trigger NMI only on initial press to avoid rapid toggling)
             if (pause && !this.gamepadState.pause) {
                 this.orchestrator.triggerPauseButton();
                 this.gamepadState.pause = true;
@@ -469,7 +448,6 @@ class UIController {
                 this.gamepadState.pause = false;
             }
 
-            // Real-Time Gameplay Rewind mapping handler
             if (rewind && !this.gamepadState.rewind) {
                 this.orchestrator.isRewinding = true;
                 this.gamepadState.rewind = true;
@@ -479,7 +457,6 @@ class UIController {
             }
         }
 
-        // Loop execution synced to the browser's refresh rate
         requestAnimationFrame(() => this.pollGamepads());
     }
 
@@ -490,13 +467,12 @@ class UIController {
         const io = this.orchestrator.ioController;
         if (!io) return;
 
-        // Helper to bind touch events to prevent code duplication (DRY)
         const mapTouchPin = (elementId, onPress, onRelease) => {
             const element = document.getElementById(elementId);
             if (!element) return;
 
             element.addEventListener('touchstart', (e) => {
-                e.preventDefault(); // Lock viewport scrolling
+                e.preventDefault(); 
                 onPress.call(io);
             });
 
@@ -509,17 +485,14 @@ class UIController {
             element.addEventListener('touchcancel', releaseHandler);
         };
 
-        // Bind D-PAD Directions
         mapTouchPin('v-up', io.pressUp, io.depressUp);
         mapTouchPin('v-down', io.pressDown, io.depressDown);
         mapTouchPin('v-left', io.pressLeft, io.depressLeft);
         mapTouchPin('v-right', io.pressRight, io.depressRight);
 
-        // Bind Gamepad Action Buttons
         mapTouchPin('v-btn1', io.pressButton1, io.depressButton1);
         mapTouchPin('v-btn2', io.pressButton2, io.depressButton2);
 
-        // Bind Pause State (Simple click/touch trigger)
         const vPause = document.getElementById('v-pause');
         if (vPause) {
             vPause.addEventListener('touchstart', (e) => {
@@ -539,23 +512,18 @@ class UIController {
         if (!display2D || !displayGL) return;
 
         if (mode === 6) {
-            // Hide 2D Canvas completely
             display2D.classList.add('hidden');
             displayGL.classList.remove('hidden');
             
-            // Explicitly override the snychronous bootstrap inline styles injected by app.js
             displayGL.style.display = "block";
             displayGL.style.visibility = "visible";
             displayGL.style.position = "relative";
             
-            // Re-apply slider multiples onto the GPU program
             this.handleShaderTuningChange();
         } else {
-            // Restore standard canvas layout
             display2D.classList.remove('hidden');
             displayGL.classList.add('hidden');
             
-            // Re-hide the WebGL canvas inline, aligning back to app.js's native state
             displayGL.style.display = "none";
             displayGL.style.visibility = "hidden";
             displayGL.style.position = "absolute";
@@ -567,7 +535,6 @@ class UIController {
             }
         }
 
-        // Delegate the selected configuration to the Application orchestrator
         this.orchestrator.setPostProcessMode(mode);
     }
 
@@ -581,7 +548,6 @@ class UIController {
         const file = files[0];
         const fname = file.name.toLowerCase();
 
-        // Validate supported extensions
         if (!fname.endsWith('.sms') && !fname.endsWith('.sg')) {
             alert("EGGStation::Error: System only supports .sms and .sg ROM files.");
             return;
@@ -591,7 +557,6 @@ class UIController {
         reader.onload = (event) => {
             const arrayBuffer = event.target.result;
             
-            // Await async ROM loads, then synchronize the UI slider states to the newly created VDP
             this.orchestrator.loadRom(file.name, arrayBuffer).then(() => {
                 this.handleShaderTuningChange();
             });
@@ -610,7 +575,6 @@ class UIController {
         if (!io) return;
 
         switch(e.key) {
-            // Joypad Controls
             case "z": io.pressButton1(); break;
             case "x": io.pressButton2(); break;
             case "ArrowUp": io.pressUp(); e.preventDefault(); break;
@@ -618,13 +582,11 @@ class UIController {
             case "ArrowLeft": io.pressLeft(); e.preventDefault(); break;
             case "ArrowRight": io.pressRight(); e.preventDefault(); break;
             
-            // Real-Time Gameplay Rewind (Hold key down)
             case "Backspace":
                 this.orchestrator.isRewinding = true;
                 e.preventDefault();
                 break;
 
-            // Emulator Control Shortcuts
             case "\\": 
                 this.orchestrator.fastForward = true; 
                 e.preventDefault(); 
@@ -637,7 +599,6 @@ class UIController {
                 break;
             case "F2": 
                 this.orchestrator.saveState(); 
-                // Delay UI update slightly to allow IndexedDB async save to finish
                 setTimeout(() => this.updateSaveStatePreview(), 100); 
                 e.preventDefault(); 
                 break;
@@ -657,7 +618,6 @@ class UIController {
         if (!io) return;
 
         switch(e.key) {
-            // Joypad Controls release
             case "z": io.depressButton1(); break;
             case "x": io.depressButton2(); break;
             case "ArrowUp": io.depressUp(); break;
@@ -665,12 +625,10 @@ class UIController {
             case "ArrowLeft": io.depressLeft(); break;
             case "ArrowRight": io.depressRight(); break;
             
-            // Real-Time Gameplay Rewind release (Resume normal play)
             case "Backspace":
                 this.orchestrator.isRewinding = false;
                 break;
 
-            // Emulator Control Shortcuts release
             case "\\": 
                 this.orchestrator.fastForward = false; 
                 break;
@@ -713,8 +671,6 @@ class UIController {
 
     /**
      * Retrieves the saved screenshot from standard localStorage and renders it to the tooltip thumbnail.
-     * Note: Screenshot metadata remains in localStorage due to its small size and synchronous nature,
-     * while heavy binary state data is moved to IndexedDB.
      */
     updateSaveStatePreview() {
         const rawImgData = localStorage.getItem('savestateScreenshot');

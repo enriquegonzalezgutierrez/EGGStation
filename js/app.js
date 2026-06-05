@@ -1,19 +1,28 @@
 /**
  * Project: EGGStation - Unified Multi-System Console Virtual Environment
- * Component: System Bootstrapper and Console Swapper
- * Language: Vanilla ES6+ JavaScript
+ * Author: Enrique González Gutiérrez
+ * File: js/app.js
  * 
- * ROLE:
- * This file serves as the system Bootstrapper (Composition Root). It manages the 
- * lifecycle of the active emulation engines, coordinates clean hot-swapping between 
- * Sega Master System, Sega Genesis, and SNES, and prevents memory leaks or audio pipeline 
- * clashes by tearing down active web audio nodes and frame request loops cleanly.
+ * Role:
+ * System Bootstrapper (Composition Root). Manages the lifecycle, instantiation, 
+ * and safe hot-swapping of the emulation engines.
  * 
- * SOLID PRINCIPLES:
- * - Single Responsibility Principle (SRP): Concentrates system swapper states, 
- *   canvas context creation, and background audio suspension.
- * - Open/Closed Principle (OCP): New systems can be registered in the boot 
- *   mapping without modifying existing swapper routines.
+ * SOLID Principles Applied:
+ * 1. Single Responsibility Principle (SRP): This file exclusively manages the 
+ *    lifecycle (boot, teardown, hot-swap) of the consoles and DOM bridge. It does 
+ *    not handle emulation logic.
+ * 2. Open/Closed Principle (OCP): Designed so that adding a new system (e.g., "NES") 
+ *    only requires adding a new key to the factory mapping, without changing the 
+ *    teardown or audio context logic.
+ * 3. Liskov Substitution Principle (LSP): All orchestrators (SMS, Genesis, SNES) 
+ *    are treated interchangeably. They are all expected to implement `stop()`, 
+ *    `startAudio()`, and `setAudioEnabled()`.
+ * 4. Interface Segregation Principle (ISP): The bootstrapper only calls the essential 
+ *    lifecycle methods from the orchestrators, avoiding bloated dependencies. Input 
+ *    handling is segregated into the specific UIControllers.
+ * 5. Dependency Inversion Principle (DIP): The bootstrapper depends on the generic 
+ *    abstraction of an "Orchestrator" and a "UIController", rather than tightly 
+ *    coupling to the internal hardware buses of each console.
  */
 
 // ========================================================================
@@ -35,7 +44,7 @@ console.log("%c=== SYSTEM SPECIFICATIONS ===", infoHeaderStyle);
 console.log(
     `%c` +
     `• Project      : EGGStation Virtual Console\n` +
-    `• Target       : Sega SMS, Genesis, & Super Nintendo (SNES)\n` +
+    `• Target       : Multi-System Architecture (SMS, Genesis, SNES)\n` +
     `• Architecture : Decoupled Domain-Driven Design (DDD) & SOLID Standards\n` +
     `• Audio Engine : Dynamic Rate Control (DRC) & Hybrid Stereo DSP Graph\n` +
     `• Video Engine : WebGL2 CRT-Royale Shader & Adaptive Screen Pacing\n` +
@@ -64,26 +73,20 @@ function toggleDeveloperSuite() {
         devSuite.classList.toggle('hidden');
         appContainer.classList.toggle('dev-mode');
         
-        // Push initial registers layout to debugger if expanded
-        if (!devSuite.classList.contains('hidden') && activeController) {
+        if (!devSuite.classList.contains('hidden') && activeController && typeof activeController.updateDebuggerUI === 'function') {
             activeController.updateDebuggerUI();
         }
     }
 }
 
 /**
- * Shuts down active hardware loops, clears DOM event listeners, and boots the selected console.
- * @param {string} consoleType - "SMS", "GEN", or "SNES"
+ * Safely terminates the running emulator, releasing GPU/Audio resources.
  */
-function bootConsole(consoleType) {
-    console.log(`%c[EGGStation::Swapper] Purging hardware components for swap to ${consoleType}...`, "color: #7f00ff; font-weight: bold;");
-
-    // Nullify active controller reference first to prevent gamepad poll loops from firing
+function teardownActiveConsole() {
     activeController = null;
 
-    // 1. Safe Teardown of the active console
     if (activeOrchestrator) {
-        console.log(`[EGGStation::Swapper] Active orchestrator found. Stopping loop...`);
+        console.log(`[EGGStation::Swapper] Halting active orchestrator loop...`);
         
         activeOrchestrator.isRunning = false;
         if (typeof activeOrchestrator.stop === 'function') {
@@ -95,40 +98,41 @@ function bootConsole(consoleType) {
             activeOrchestrator.animationFrameId = null;
         }
         
-        // Close audio contexts safely
-        if (activeOrchestrator.psg && activeOrchestrator.psg.context && activeOrchestrator.psg.context.state !== 'closed') {
-            activeOrchestrator.psg.context.close().catch(() => {});
+        // Close internal audio contexts universally
+        const contextsToClose = [
+            activeOrchestrator.audioCtx,
+            activeOrchestrator.psg?.context,
+            activeOrchestrator.audioProcessor?.audioCtx
+        ];
+
+        contextsToClose.forEach(ctx => {
+            if (ctx && ctx.state !== 'closed') {
+                ctx.close().catch(() => {});
+            }
+        });
+    }
+
+    // Clone DOM elements to safely purge old event listeners from previous UIControllers
+    const elementsToClone = ['romLoaderBtn', 'cartridgeSelector', 'developer-suite'];
+    elementsToClone.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && el.parentNode) {
+            const clone = el.cloneNode(true);
+            el.parentNode.replaceChild(clone, el);
         }
-        
-        if (activeOrchestrator.audioCtx && activeOrchestrator.audioCtx.state !== 'closed') {
-            activeOrchestrator.audioCtx.close().catch(() => {});
-        }
+    });
+}
 
-        if (activeOrchestrator.audioProcessor && activeOrchestrator.audioProcessor.audioCtx && activeOrchestrator.audioProcessor.audioCtx.state !== 'closed') {
-            activeOrchestrator.audioProcessor.audioCtx.close().catch(() => {});
-        }
-    }
+/**
+ * Shuts down active hardware loops and boots the selected console.
+ * @param {string} consoleType - Target system identifier (e.g., "SMS", "GEN", "SNES")
+ */
+function bootConsole(consoleType) {
+    console.log(`%c[EGGStation::Swapper] Swapping hardware to ${consoleType}...`, "color: #7f00ff; font-weight: bold;");
 
-    // 2. Clone DOM elements to safely purge old event listeners
-    const oldLoaderBtn = document.getElementById('romLoaderBtn');
-    if (oldLoaderBtn && oldLoaderBtn.parentNode) {
-        const newLoaderBtn = oldLoaderBtn.cloneNode(true);
-        oldLoaderBtn.parentNode.replaceChild(newLoaderBtn, oldLoaderBtn);
-    }
+    teardownActiveConsole();
 
-    const oldSelector = document.getElementById('cartridgeSelector');
-    if (oldSelector && oldSelector.parentNode) {
-        const newSelector = oldSelector.cloneNode(true);
-        oldSelector.parentNode.replaceChild(newSelector, oldSelector);
-    }
-
-    const dbgSection = document.getElementById('developer-suite');
-    if (dbgSection && dbgSection.parentNode) {
-        const newDbgSection = dbgSection.cloneNode(true);
-        dbgSection.parentNode.replaceChild(newDbgSection, dbgSection);
-    }
-
-    // 3. Setup canvas viewport contexts
+    // Setup canvas viewport contexts
     const videoCanvas = document.getElementById("smsdisplay");
     const videoContext = videoCanvas ? videoCanvas.getContext("2d", { willReadFrequently: true }) : null;
     
@@ -143,9 +147,7 @@ function bootConsole(consoleType) {
     }
 
     // Clean viewport frames
-    if (videoContext && videoCanvas) {
-        videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
-    }
+    if (videoContext && videoCanvas) videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
     if (glContext && glCanvas) {
         glContext.clearColor(0.0, 0.0, 0.0, 1.0);
         glContext.clear(glContext.COLOR_BUFFER_BIT);
@@ -153,75 +155,62 @@ function bootConsole(consoleType) {
 
     // Reset default layout views
     document.getElementById("fileselector")?.classList.remove("hidden");
-
     const fpsSpan = document.getElementById("fpsSpan");
     if (fpsSpan) fpsSpan.textContent = "0.0 FPS";
 
-    // 4. Instantiate and Boot the Selected Console Engine
-    if (consoleType === "SMS") {
-        try {
-            activeOrchestrator = new EmulatorOrchestrator(videoContext, glContext, (fps) => {
-                const fpsElement = document.getElementById("fpsSpan");
-                if (fpsElement) fpsElement.textContent = `${fps} FPS`;
-            });
-            activeController = new UIController(activeOrchestrator);
-            activeController.updateSaveStatePreview();
-            
-            console.log(`%c[EGGStation::Swapper] Sega Master System / SG-1000 Engine instantiated successfully.`, "color: #04d361; font-weight: bold;");
-        } catch (err) {
-            console.error(`[EGGStation::Swapper] Fatal exception during SMS engine boot:`, err);
+    const updateFpsUI = (fps) => {
+        if (fpsSpan) fpsSpan.textContent = `${fps} FPS`;
+    };
+
+    // Instantiate and Boot the Selected Console Engine
+    try {
+        switch (consoleType) {
+            case "SMS":
+                activeOrchestrator = new SmsOrchestrator(videoContext, glContext, updateFpsUI);
+                activeController = new SmsUIController(activeOrchestrator);
+                if (typeof activeController.updateSaveStatePreview === 'function') activeController.updateSaveStatePreview();
+                break;
+                
+            case "GEN":
+                activeOrchestrator = new GenesisOrchestrator(videoContext, glContext, updateFpsUI);
+                activeController = new GenesisUIController(activeOrchestrator);
+                break;
+                
+            case "SNES":
+                activeOrchestrator = new SnesOrchestrator(videoContext, glContext, updateFpsUI);
+                activeController = new SnesUIController(activeOrchestrator);
+                break;
+                
+            default:
+                throw new Error(`Unknown console type: ${consoleType}`);
         }
-    } 
-    else if (consoleType === "GEN") {
-        try {
-            activeOrchestrator = new GenesisOrchestrator(videoContext, glContext, (fps) => {
-                const fpsElement = document.getElementById("fpsSpan");
-                if (fpsElement) fpsElement.textContent = `${fps} FPS`;
-            });
-            activeController = new GenesisUIController(activeOrchestrator);
-            
-            console.log(`%c[EGGStation::Swapper] Sega Genesis / Mega Drive Engine instantiated successfully.`, "color: #04d361; font-weight: bold;");
-        } catch (err) {
-            console.error(`[EGGStation::Swapper] Fatal exception during Genesis engine boot:`, err);
-        }
-    }
-    else if (consoleType === "SNES") {
-        try {
-            activeOrchestrator = new SnesOrchestrator(videoContext, glContext, (fps) => {
-                const fpsElement = document.getElementById("fpsSpan");
-                if (fpsElement) fpsElement.textContent = `${fps} FPS`;
-            });
-            activeController = new SnesUIController(activeOrchestrator);
-            
-            console.log(`%c[EGGStation::Swapper] Super Nintendo (SNES) Engine instantiated successfully.`, "color: #04d361; font-weight: bold;");
-        } catch (err) {
-            console.error(`[EGGStation::Swapper] Fatal exception during SNES engine boot:`, err);
-        }
+        console.log(`%c[EGGStation::Swapper] ${consoleType} Engine instantiated successfully.`, "color: #04d361; font-weight: bold;");
+    } catch (err) {
+        console.error(`[EGGStation::Swapper] Fatal exception during ${consoleType} engine boot:`, err);
+        return;
     }
 
-    // 5. Auto-sync active visual and audio filter settings across hot-swaps
+    // Auto-sync active visual and audio filter settings across hot-swaps
     const postProcessSelector = document.getElementById('postProcessSelector');
     const audioFilterSelector = document.getElementById('audioFilterSelector');
     
     const activeVideoFilter = postProcessSelector ? parseInt(postProcessSelector.value, 10) : 0;
     const activeAudioFilter = audioFilterSelector ? parseInt(audioFilterSelector.value, 10) : 0;
 
-    if (activeOrchestrator) {
-        if (typeof activeOrchestrator.setPostProcessMode === 'function') {
-            activeOrchestrator.setPostProcessMode(activeVideoFilter);
-        } else {
-            activeOrchestrator.postProcessMode = activeVideoFilter;
-        }
+    if (typeof activeOrchestrator.setPostProcessMode === 'function') {
+        activeOrchestrator.setPostProcessMode(activeVideoFilter);
+    } else {
+        activeOrchestrator.postProcessMode = activeVideoFilter;
+    }
 
-        if (typeof activeOrchestrator.setAudioFilterMode === 'function') {
-            activeOrchestrator.setAudioFilterMode(activeAudioFilter);
-        } else {
-            activeOrchestrator.audioFilterMode = activeAudioFilter;
-        }
+    if (typeof activeOrchestrator.setAudioFilterMode === 'function') {
+        activeOrchestrator.setAudioFilterMode(activeAudioFilter);
+    } else {
+        activeOrchestrator.audioFilterMode = activeAudioFilter;
+    }
 
-        if (typeof activeOrchestrator.setAudioEnabled === 'function') {
-            activeOrchestrator.setAudioEnabled(window.audioEnabledState);
-        }
+    if (typeof activeOrchestrator.setAudioEnabled === 'function') {
+        activeOrchestrator.setAudioEnabled(window.audioEnabledState);
     }
 
     // Trigger immediate viewport & canvas layout adjustments based on the active filter
@@ -234,27 +223,23 @@ function bootConsole(consoleType) {
     }
 }
 
-// Global DOM Loaded initialization
+// ========================================================================
+// GLOBAL EVENT LISTENERS
+// ========================================================================
 document.addEventListener("DOMContentLoaded", () => {
     const consoleSelector = document.getElementById('consoleSelector');
     const devToggle = document.getElementById('dev-toggle-btn');
     const ejectBtn = document.getElementById('ejectBtn');
     const audioToggleSelector = document.getElementById('audioToggleSelector');
     
-    // Boot the default console (Sega Master System)
     console.log(`[EGGStation::Bootstrapper] Initializing default system configuration...`);
     bootConsole("SMS");
 
-    // Listen to console selection changes to trigger hot-swapping
     if (consoleSelector) {
-        consoleSelector.addEventListener('change', (e) => {
-            bootConsole(e.target.value);
-        });
+        consoleSelector.addEventListener('change', (e) => bootConsole(e.target.value));
     }
 
-    // Listen to audio output toggle changes
     if (audioToggleSelector) {
-        // Synchronize initial UI selection with global state
         window.audioEnabledState = (audioToggleSelector.value === 'enabled');
         audioToggleSelector.addEventListener('change', (e) => {
             const enabled = (e.target.value === 'enabled');
@@ -265,51 +250,24 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    // Listen to developer panel toggles
     if (devToggle) {
         devToggle.addEventListener('click', toggleDeveloperSuite);
     }
 
-    // Global Eject Cartridge listener implementation
     if (ejectBtn) {
         ejectBtn.addEventListener('click', () => {
             console.log("[EGGStation::Swapper] Ejecting active cartridge...");
-            
-            if (activeOrchestrator) {
-                activeOrchestrator.isRunning = false;
-                if (activeOrchestrator.animationFrameId) {
-                    cancelAnimationFrame(activeOrchestrator.animationFrameId);
-                }
-                
-                // Close operational audio contexts only if they aren't already closed
-                if (activeOrchestrator.psg && activeOrchestrator.psg.context && activeOrchestrator.psg.context.state !== 'closed') {
-                    activeOrchestrator.psg.context.close().catch(() => {});
-                }
-                if (activeOrchestrator.audioCtx && activeOrchestrator.audioCtx.state !== 'closed') {
-                    activeOrchestrator.audioCtx.close().catch(() => {});
-                }
-                if (activeOrchestrator.audioProcessor && activeOrchestrator.audioProcessor.audioCtx && activeOrchestrator.audioProcessor.audioCtx.state !== 'closed') {
-                    activeOrchestrator.audioProcessor.audioCtx.close().catch(() => {});
-                }
-            }
+            teardownActiveConsole();
 
-            // Clean active viewports
             const videoCanvas = document.getElementById("smsdisplay");
-            const videoContext = videoCanvas.getContext("2d");
+            const videoContext = videoCanvas?.getContext("2d");
             if (videoContext) {
                 videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
             }
 
-            // Expose the ROM loader overlay
-            const fileSelectorEl = document.getElementById("fileselector");
-            if (fileSelectorEl) {
-                fileSelectorEl.classList.remove("hidden");
-            }
-
+            document.getElementById("fileselector")?.classList.remove("hidden");
             const fpsSpan = document.getElementById("fpsSpan");
-            if (fpsSpan) {
-                fpsSpan.textContent = "0.0 FPS";
-            }
+            if (fpsSpan) fpsSpan.textContent = "0.0 FPS";
         });
     }
 });

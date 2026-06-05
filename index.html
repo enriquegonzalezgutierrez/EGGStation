@@ -1,6 +1,26 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <!--
+      * Project: EGGStation - Unified Multi-System Console Virtual Environment
+      * Author: Enrique González Gutiérrez
+      * File: index.html
+      * 
+      * Role:
+      * Master View / DOM Layout. Provides the structured UI elements (Canvas, Buttons, 
+      * Overlays) required by the UIControllers.
+      * 
+      * Architectural & SOLID Principles Alignment:
+      * 1. Single Responsibility Principle (SRP): This file is strictly responsible 
+      *    for the DOM structure and resource linking. It contains absolutely zero 
+      *    inline JavaScript or business logic.
+      * 2. Open/Closed Principle (OCP): New emulators (e.g., GBA, NES) can be added 
+      *    simply by appending their <script> blocks at the bottom, without needing 
+      *    to alter the existing DOM nodes or layout structure.
+      * 3. Dependency Inversion Principle (DIP): The UI elements use generic IDs 
+      *    (like #crt-wrapper, #virtual-gamepad) that the generic UIControllers bind 
+      *    to, rather than the HTML knowing about the underlying hardware.
+    -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>EGGStation | Unified Multi-System Console Virtual Environment</title>
@@ -162,7 +182,7 @@
             
             <div class="dev-section">
                 <h4>Hardware Registers</h4>
-                <!-- Cleared and structured dynamically with Z80, M68K, or 65816 labels by UIControllers -->
+                <!-- Cleared and structured dynamically by UIControllers -->
                 <div class="registers-grid" id="reg-grid"></div>
             </div>
 
@@ -211,8 +231,8 @@
     <script src="js/sms/infrastructure/video/VdpMode4Renderer.js"></script>
     <script src="js/sms/infrastructure/audio/Sega315_5124_Psg.js"></script>
     <script src="js/sms/infrastructure/storage/WebLocalStorageSerializer.js"></script>
-    <script src="js/sms/application/EmulatorOrchestrator.js"></script>
-    <script src="js/sms/presentation/UIController.js"></script>
+    <script src="js/sms/application/SmsOrchestrator.js"></script>  <!-- RENAMED -->
+    <script src="js/sms/presentation/SmsUIController.js"></script> <!-- RENAMED -->
 
     <!-- ========================================================= -->
     <!-- SEGA GENESIS CORE                                         -->
@@ -244,39 +264,32 @@
     <!-- ========================================================= -->
     <!-- SUPER NINTENDO (SNES) CORE - Adapters & Stable Engine     -->
     <!-- ========================================================= -->
-    <!-- 1. Infrastructure Layer (Compatibility Shim & Audio/Video Adapters) -->
     <script src="js/snes/infrastructure/SnesCompatibilityLayer.js"></script>
     <script src="js/snes/infrastructure/video/SnesPostProcessor.js"></script>
     <script src="js/snes/infrastructure/audio/SnesAudioProcessor.js"></script>
     
-    <!-- 2. CPU Sub-Domain (DDD Split with Prototype Extensions) -->
     <script src="js/snes/domain/cpu/SnesCpu.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuAddressing.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuDataOps.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuArithmetic.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuLogic.js"></script>
 
-    <!-- 3. SPC700 Audio CPU Sub-Domain -->
     <script src="js/snes/domain/spc/SnesSpc.js"></script>
     <script src="js/snes/domain/spc/SnesSpcAddressing.js"></script>
     <script src="js/snes/domain/spc/SnesSpcArithmetic.js"></script>
     <script src="js/snes/domain/spc/SnesSpcLogic.js"></script>
     <script src="js/snes/domain/spc/SnesSpcDataOps.js"></script>
 
-    <!-- 4. APU & Timers Sub-Domain -->
     <script src="js/snes/domain/apu/SnesApuTimer.js"></script>
     <script src="js/snes/domain/apu/SnesApu.js"></script>
 
-    <!-- 5. DSP & Synthesis Sub-Domain -->
     <script src="js/snes/domain/dsp/SnesDsp.js"></script>
     <script src="js/snes/domain/dsp/SnesDspTables.js"></script>
     <script src="js/snes/domain/dsp/SnesDspDecoder.js"></script>
     <script src="js/snes/domain/dsp/SnesDspChannel.js"></script>
 
-    <!-- 6. Cartridge Sub-Domain -->
     <script src="js/snes/domain/cartridge/SnesCartridge.js"></script>
 
-    <!-- 7. PPU & Graphics Sub-Domain -->
     <script src="js/snes/domain/ppu/SnesPpu.js"></script>
     <script src="js/snes/domain/ppu/SnesPpuTables.js"></script>
     <script src="js/snes/domain/ppu/SnesPpuBackground.js"></script>
@@ -284,16 +297,13 @@
     <script src="js/snes/domain/ppu/SnesPpuMode7.js"></script>
     <script src="js/snes/domain/ppu/SnesPpuCompositor.js"></script>
 
-    <!-- 8. Memory Bus Sub-Domain -->
     <script src="js/snes/domain/bus/SnesMemoryMap.js"></script>
 
-    <!-- 9. System Timing & Bus Sub-Domain -->
     <script src="js/snes/domain/system/SnesSystem.js"></script>
     <script src="js/snes/domain/system/SnesSystemDma.js"></script>
     <script src="js/snes/domain/system/SnesSystemIoPorts.js"></script>
     <script src="js/snes/domain/system/SnesSystemBus.js"></script>
     
-    <!-- 10. Unified Application & Presentation Layers -->
     <script src="js/snes/application/SnesOrchestrator.js"></script>
     <script src="js/snes/presentation/SnesUIController.js"></script>
 

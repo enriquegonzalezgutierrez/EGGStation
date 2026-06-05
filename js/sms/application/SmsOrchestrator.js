@@ -1,14 +1,22 @@
-/* 
- * Project: EGGStation - Sega Master System Emulator
+/**
+ * Project: EGGStation - Unified Multi-System Console Virtual Environment
  * Author: Enrique González Gutiérrez
+ * File: js/sms/application/SmsOrchestrator.js
  * 
- * Application Layer: Emulator Orchestrator (With GC-Free State Pools)
- * 
+ * Role:
+ * Application Layer: Sega Master System (SMS) Orchestrator.
  * Coordinates system execution loops, schedules frame sync rates, and handles
  * pre-allocated state pools to achieve zero Garbage Collection allocations.
+ * 
+ * SOLID Principles Applied:
+ * 1. Single Responsibility Principle (SRP): Isolates loop orchestration, frame 
+ *    pacing, and GC-Free state serialization pooling from the DOM and input handlers.
+ * 2. Liskov Substitution Principle (LSP): Fully implements the implicit universal 
+ *    orchestrator interface expected by the `app.js` Bootstrapper (loadRom, stop, 
+ *    togglePause, setAudioEnabled, etc.), ensuring safe hot-swapping.
  */
 
-class EmulatorOrchestrator {
+class SmsOrchestrator {
     /**
      * @param {CanvasRenderingContext2D} videoContext
      * @param {WebGL2RenderingContext} glContext
@@ -183,7 +191,20 @@ class EmulatorOrchestrator {
         this.fpsCount = 0;
         this.fpsTimer = this.lastTime;
 
+        console.log("[SmsOrchestrator] Engine Booted Successfully.");
+
         this.animationFrameId = requestAnimationFrame(this.loop);
+    }
+    
+    stop() {
+        this.isRunning = false;
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+        if (this.psg && this.psg.context && this.psg.context.state !== 'closed') {
+            this.psg.context.close().catch(() => {});
+        }
     }
 
     togglePause() {
@@ -205,8 +226,9 @@ class EmulatorOrchestrator {
         if (this.isRunning && this.cartridge) {
             try {
                 await this.serializer.serialize(this.cartridge.cartridgeName, this.cpu, this.vdp, this.mmu, this.psg);
+                console.log("[SmsOrchestrator] State Saved.");
             } catch (err) {
-                console.error("EmulatorOrchestrator::Save State failed:", err);
+                console.error("[SmsOrchestrator] Save State failed:", err);
             }
         }
     }
@@ -219,9 +241,10 @@ class EmulatorOrchestrator {
                     this.psg.syncWorkletState();
                     this.rewindActiveCount = 0;
                     this.rewindHistoryPointer = 0;
+                    console.log("[SmsOrchestrator] State Loaded.");
                 }
             } catch (err) {
-                console.error("EmulatorOrchestrator::Load State failed:", err);
+                console.error("[SmsOrchestrator] Load State failed:", err);
             }
         }
     }
