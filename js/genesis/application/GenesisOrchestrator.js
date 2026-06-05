@@ -59,7 +59,9 @@ class GenesisOrchestrator {
 
         // Hardware Domain Instantiation
         this.vdp = new GenesisVdp();
-        this.psg = new GenesisPsg();
+        
+        // PHASE 4: Instantiate the shared SegaPsg uncoupled audio core snychronously
+        this.psg = new SegaPsg();
         this.fm = new GenesisYm2612();
         this.controllerManager = new GenesisControllerManager();
 
@@ -446,10 +448,6 @@ class GenesisOrchestrator {
         if (this.audioCtx && this.audioCtx.state === 'suspended') {
             this.audioCtx.resume().catch(() => {});
         }
-
-        // PHASE 4: Update emulator shortcut states dynamically from UniversalInput
-        this.isRewinding = window.UniversalInput ? window.UniversalInput.isPressed("REWIND") : false;
-        this.fastForward = window.UniversalInput ? window.UniversalInput.isPressed("FAST_FORWARD") : false;
 
         // Handle Active Rewinding
         if (this.isRewinding) {

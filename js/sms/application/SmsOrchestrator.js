@@ -1,5 +1,5 @@
 /**
- * Project: EGGStation - Unified Multi-System Console Virtual Environment
+ * Project: EGGStation - Sega Master System Emulator
  * Author: Enrique González Gutiérrez
  * File: js/sms/application/SmsOrchestrator.js
  * 
@@ -172,7 +172,9 @@ class SmsOrchestrator {
         this.cartridge.load(arrayBuffer);
         
         this.vdp = new Sega315_5124_Vdp(this.vdpMode, this.glContext);
-        this.psg = new Sega315_5124_Psg();
+        
+        // PHASE 4: Instantiate the shared SegaPsg uncoupled audio core snychronously
+        this.psg = new SegaPsg();
         
         this.mmu = new SegaMasterSystemBus(this.cartridge, this.vdp, this.psg, this.ioController);
         this.cpu = new ZilogZ80(this.mmu);
