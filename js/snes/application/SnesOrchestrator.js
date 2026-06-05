@@ -1,5 +1,5 @@
 /**
- * Project: EGGStation - Super Nintendo (SNES) Application Layer
+ * Project: EGGStation - Unified Multi-System Console Virtual Environment
  * Author: Enrique González Gutiérrez
  * File: js/snes/application/SnesOrchestrator.js
  * 
@@ -495,7 +495,7 @@ class SnesOrchestrator {
 
     /**
      * PHASE 4: Decodes SNES custom 4bpp (16-color) planar VRAM pattern tables in real-time.
-     * Renders decoded sprite and background character tiles to the diagnostics canvas.
+     * Renders decoded sprite and background character tiles snychronously with reverse-remapping.
      */
     drawVramDiagnostics(ctx) {
         if (!this.hardware || !this.hardware.ppu) return;
@@ -503,6 +503,26 @@ class SnesOrchestrator {
         const imgData = ctx.createImageData(128, 192);
         const vram = this.hardware.ppu.vram; // 32,768 words of 16-bit
         
+        // Dynamic Offset Fetch: BG1 Character Base Word Address
+        const bg1CharBase = this.hardware.ppu.tileAdr[0] || 0x2000;
+        // Sprite Character Base Word Address
+        const spriteCharBase = this.hardware.ppu.sprAdr1 || 0x4000;
+
+        const remapMode = this.hardware.ppu.vramRemap;
+
+        // PHASE 4 FIX: Reverse-engineering the PPU VRAM address remapping formula in real-time
+        const getRemappedAddress = (adr) => {
+            let a = adr & 0x7fff;
+            if (remapMode === 1) {
+                a = (a & 0xff00) | ((a & 0xe0) >> 5) | ((a & 0x1f) << 3);
+            } else if (remapMode === 2) {
+                a = (a & 0xfe00) | ((a & 0x1c0) >> 6) | ((a & 0x3f) << 3);
+            } else if (remapMode === 3) {
+                a = (a & 0xfc00) | ((a & 0x380) >> 7) | ((a & 0x7f) << 3);
+            }
+            return a;
+        };
+
         // Render 384 tiles (16 columns * 24 rows of 8x8 tiles) in standard SNES 4bpp format
         for (let tileIdx = 0; tileIdx < 384; tileIdx++) {
             const tileX = tileIdx % 16;
@@ -510,13 +530,16 @@ class SnesOrchestrator {
             const destBaseX = tileX * 8;
             const destBaseY = tileY * 8;
             
-            // Each SNES 4bpp tile block is exactly 16 words (32 bytes) long
-            const tileWordOffset = tileIdx * 16;
+            const isSpriteTile = tileIdx >= 192;
+            const baseWordOffset = isSpriteTile ? spriteCharBase : bg1CharBase;
+            const relativeTileIdx = isSpriteTile ? (tileIdx - 192) : tileIdx;
+            
+            const tileWordOffset = baseWordOffset + (relativeTileIdx * 16);
             
             for (let row = 0; row < 8; row++) {
-                // Word A (Planes 0 & 1) and Word B (Planes 2 & 3) snychronously fetched
-                const wordA = vram[(tileWordOffset + row) & 0x7fff];
-                const wordB = vram[(tileWordOffset + 8 + row) & 0x7fff];
+                // Fetch Word A & B applying the snychronous reverse-remapping translation layer
+                const wordA = vram[getRemappedAddress((tileWordOffset + row) & 0x7fff)];
+                const wordB = vram[getRemappedAddress((tileWordOffset + 8 + row) & 0x7fff)];
                 
                 for (let col = 0; col < 8; col++) {
                     const shift = 7 - col;
