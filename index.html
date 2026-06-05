@@ -182,7 +182,7 @@
             
             <div class="dev-section">
                 <h4>Hardware Registers</h4>
-                <!-- Cleared and structured dynamically by UIControllers -->
+                <!-- Cleared and structured dynamically with Z80, M68K, or 65816 labels by UIControllers -->
                 <div class="registers-grid" id="reg-grid"></div>
             </div>
 
@@ -201,6 +201,12 @@
         </footer>
 
     </div>
+
+    <!-- ========================================================= -->
+    <!-- UNIVERSAL SHARED INFRASTRUCTURE (PHASE 2)                 -->
+    <!-- ========================================================= -->
+    <script src="js/shared/video/UniversalPostProcessor.js"></script>
+    <script src="js/shared/storage/IndexedDbManager.js"></script>
 
     <!-- ========================================================= -->
     <!-- SEGA MASTER SYSTEM CORE                                   -->
@@ -225,14 +231,12 @@
     <script src="js/sms/domain/cpu/instructions/Z80BlockOps.js"></script>
     <script src="js/sms/domain/cpu/instructions/Z80SystemIO.js"></script>
     <script src="js/sms/infrastructure/video/Sega315_5124_Vdp.js"></script>
-    <script src="js/sms/infrastructure/video/VdpPostProcessor.js"></script>
     <script src="js/sms/infrastructure/video/VdpSpriteManager.js"></script>
     <script src="js/sms/infrastructure/video/VdpMode2Renderer.js"></script>
     <script src="js/sms/infrastructure/video/VdpMode4Renderer.js"></script>
     <script src="js/sms/infrastructure/audio/Sega315_5124_Psg.js"></script>
-    <script src="js/sms/infrastructure/storage/WebLocalStorageSerializer.js"></script>
-    <script src="js/sms/application/SmsOrchestrator.js"></script>  <!-- RENAMED -->
-    <script src="js/sms/presentation/SmsUIController.js"></script> <!-- RENAMED -->
+    <script src="js/sms/application/SmsOrchestrator.js"></script>
+    <script src="js/sms/presentation/SmsUIController.js"></script>
 
     <!-- ========================================================= -->
     <!-- SEGA GENESIS CORE                                         -->
@@ -250,7 +254,6 @@
     <script src="js/genesis/domain/cpu/instructions/M68kLogical.js"></script>
     <script src="js/genesis/domain/cpu/instructions/M68kProgramFlow.js"></script>
     <script src="js/genesis/domain/cpu/GenesisZ80.js"></script>
-    <script src="js/genesis/infrastructure/video/GenesisPostProcessor.js"></script>
     <script src="js/genesis/infrastructure/video/GenesisVdp.js"></script>
     <script src="js/genesis/infrastructure/audio/GenesisLowPassFilter.js"></script>
     <script src="js/genesis/infrastructure/audio/GenesisPsg.js"></script>
@@ -265,7 +268,6 @@
     <!-- SUPER NINTENDO (SNES) CORE - Adapters & Stable Engine     -->
     <!-- ========================================================= -->
     <script src="js/snes/infrastructure/SnesCompatibilityLayer.js"></script>
-    <script src="js/snes/infrastructure/video/SnesPostProcessor.js"></script>
     <script src="js/snes/infrastructure/audio/SnesAudioProcessor.js"></script>
     
     <script src="js/snes/domain/cpu/SnesCpu.js"></script>
