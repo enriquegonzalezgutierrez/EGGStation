@@ -327,6 +327,34 @@ class GenesisOrchestrator {
                     }
                 };
                 await this.serializer.save("GENESIS_SAVESTATE", statePayload);
+
+                // PHASE 4: Re-render thumbnail snapshot to localStorage (Optimized Downsample 2.5x -> 128x120)
+                if (this.glbFrameBuffer) {
+                    const src = this.glbFrameBuffer;
+                    const dstWidth = 128;
+                    const dstHeight = 120;
+                    const smallArray = new Uint8Array(dstWidth * dstHeight * 4);
+                    
+                    // Downsample 320x240 to 128x120 snychronously
+                    for (let y = 0; y < dstHeight; y++) {
+                        const srcY = Math.floor(y * 2) * 320 * 4; 
+                        const dstY = y * dstWidth * 4;
+                        for (let x = 0; x < dstWidth; x++) {
+                            const srcX = Math.floor(x * 2.5) * 4; 
+                            const srcIdx = srcY + srcX;
+                            const dstIdx = dstY + (x * 4);
+                            
+                            smallArray[dstIdx] = src[srcIdx];
+                            smallArray[dstIdx + 1] = src[srcIdx + 1];
+                            smallArray[dstIdx + 2] = src[srcIdx + 2];
+                            smallArray[dstIdx + 3] = 255;
+                        }
+                    }
+
+                    localStorage.setItem('savestateScreenshot', JSON.stringify(Array.from(smallArray)));
+                    localStorage.setItem('cartName', "GENESIS_SAVESTATE");
+                }
+
                 console.log("[GenesisOrchestrator] State Saved.");
             } catch (err) {
                 console.error("[GenesisOrchestrator] Save State failed:", err);

@@ -14,8 +14,8 @@
  * 2. Liskov Substitution Principle (LSP): Fully implements the unified orchestrator 
  *    interface expected by the app.js Bootstrapper (loadRom, stop, setAudioEnabled).
  * 3. Dependency Inversion Principle (DIP): Depends directly on the shared 
- *    UniversalPostProcessor abstraction rather than tight coupling to legacy 
- *    custom post-processors.
+ *    UniversalPostProcessor and IndexedDbManager abstractions rather than tight 
+ *    coupling to legacy custom post-processors.
  */
 
 class SnesOrchestrator {
@@ -61,6 +61,9 @@ class SnesOrchestrator {
 
         this.injectOptimizedPixelCopier();
 
+        // PHASE 4: Bind directly to the generic database manager client
+        this.serializer = new IndexedDbManager();
+
         console.log("[SnesOrchestrator] Orchestrator Layer Initialized.");
     }
 
@@ -103,7 +106,7 @@ class SnesOrchestrator {
                         arr[destOffset1 + 3] = 255;
                     }
                     if (writeRow2) {
-                        arr[destOffset2] = r;
+                        arr[destOffset2] = r; // <--- CORREGIDO
                         arr[destOffset2 + 1] = g;
                         arr[destOffset2 + 2] = b;
                         arr[destOffset2 + 3] = 255;
@@ -111,10 +114,6 @@ class SnesOrchestrator {
                 }
             }
         };
-    }
-
-    setPostProcessMode(mode) {
-        this.postProcessMode = parseInt(mode);
     }
 
     setPostProcessMode(mode) {
@@ -289,5 +288,169 @@ class SnesOrchestrator {
 
     reset(hard = false) {
         this.hardware.reset(hard);
+    }
+
+    /**
+     * PHASE 4: Serializes the complete 16-bit SNES hardware memory buffers and chip states.
+     */
+    async saveState() {
+        if (this.isRunning && this.hardware.cart) {
+            try {
+                const statePayload = {
+                    cpu: {
+                        r: Array.from(this.hardware.cpu.r),
+                        br: Array.from(this.hardware.cpu.br),
+                        flags: {
+                            n: this.hardware.cpu.n, v: this.hardware.cpu.v, m: this.hardware.cpu.m,
+                            x: this.hardware.cpu.x, d: this.hardware.cpu.d, i: this.hardware.cpu.i,
+                            z: this.hardware.cpu.z, c: this.hardware.cpu.c, e: this.hardware.cpu.e
+                        },
+                        stopped: this.hardware.cpu.stopped,
+                        waiting: this.hardware.cpu.waiting,
+                        cyclesLeft: this.hardware.cpu.cyclesLeft
+                    },
+                    ppu: {
+                        vram: Array.from(this.hardware.ppu.vram),
+                        cgram: Array.from(this.hardware.ppu.cgram),
+                        oam: Array.from(this.hardware.ppu.oam),
+                        highOam: Array.from(this.hardware.ppu.highOam),
+                        cgramAdr: this.hardware.ppu.cgramAdr,
+                        vramAdr: this.hardware.ppu.vramAdr,
+                        mode: this.hardware.ppu.mode,
+                        forcedBlank: this.hardware.ppu.forcedBlank,
+                        brightness: this.hardware.ppu.brightness,
+                        // Advanced PPU layers properties (prevents graphical glitches)
+                        tilemapWider: Array.from(this.hardware.ppu.tilemapWider),
+                        tilemapHigher: Array.from(this.hardware.ppu.tilemapHigher),
+                        tilemapAdr: Array.from(this.hardware.ppu.tilemapAdr),
+                        tileAdr: Array.from(this.hardware.ppu.tileAdr),
+                        bgHoff: Array.from(this.hardware.ppu.bgHoff),
+                        bgVoff: Array.from(this.hardware.ppu.bgVoff)
+                    },
+                    apu: {
+                        ram: Array.from(this.hardware.apu.ram),
+                        spc_r: Array.from(this.hardware.apu.spc.r),
+                        spc_br: Array.from(this.hardware.apu.spc.br),
+                        // SPC700 Register Flags (Crucial fix! Prevents APU freezes on load!)
+                        spc_flags: {
+                            n: this.hardware.apu.spc.n, v: this.hardware.apu.spc.v, p: this.hardware.apu.spc.p,
+                            b: this.hardware.apu.spc.b, h: this.hardware.apu.spc.h, i: this.hardware.apu.spc.i,
+                            z: this.hardware.apu.spc.z, c: this.hardware.apu.spc.c
+                        },
+                        dsp_ram: Array.from(this.hardware.apu.dsp.ram)
+                    },
+                    ram: Array.from(this.hardware.ram),
+                    sram: Array.from(this.hardware.cart.sram)
+                };
+
+                await this.serializer.save("SNES_SAVESTATE", statePayload);
+
+                // PHASE 4: Re-render thumbnail snapshot to localStorage (Optimized Downsample 16x -> 128x120)
+                if (this.imgData && this.imgData.data) {
+                    const src = this.imgData.data;
+                    const dstWidth = 128;
+                    const dstHeight = 120;
+                    const smallArray = new Uint8Array(dstWidth * dstHeight * 4);
+                    
+                    // Step snychronously over the buffer
+                    for (let y = 0; y < dstHeight; y++) {
+                        const srcY = (y * 4) * 512 * 4; 
+                        const dstY = y * dstWidth * 4;
+                        for (let x = 0; x < dstWidth; x++) {
+                            const srcX = (x * 4) * 4;   
+                            const srcIdx = srcY + srcX;
+                            const dstIdx = dstY + (x * 4);
+                            
+                            smallArray[dstIdx] = src[srcIdx];
+                            smallArray[dstIdx + 1] = src[srcIdx + 1];
+                            smallArray[dstIdx + 2] = src[srcIdx + 2];
+                            smallArray[dstIdx + 3] = 255;
+                        }
+                    }
+
+                    localStorage.setItem('savestateScreenshot', JSON.stringify(Array.from(smallArray)));
+                    localStorage.setItem('cartName', "SNES_SAVESTATE");
+                }
+
+                console.log("[SnesOrchestrator] State Saved.");
+            } catch (err) {
+                console.error("[SnesOrchestrator] Save State failed:", err);
+            }
+        }
+    }
+
+    /**
+     * PHASE 4: Restores and rebuilds the SNES registers and memory buffers.
+     */
+    async loadState() {
+        if (this.isRunning && this.hardware.cart) {
+            try {
+                const state = await this.serializer.load("SNES_SAVESTATE");
+                if (!state) {
+                    console.error("[SnesOrchestrator] No saved state found for SNES.");
+                    return;
+                }
+
+                // 1. Reconstitute CPU
+                this.hardware.cpu.r.set(state.cpu.r);
+                this.hardware.cpu.br.set(state.cpu.br);
+                this.hardware.cpu.n = state.cpu.flags.n;
+                this.hardware.cpu.v = state.cpu.flags.v;
+                this.hardware.cpu.m = state.cpu.flags.m;
+                this.hardware.cpu.x = state.cpu.flags.x;
+                this.hardware.cpu.d = state.cpu.flags.d;
+                this.hardware.cpu.i = state.cpu.flags.i;
+                this.hardware.cpu.z = state.cpu.flags.z;
+                this.hardware.cpu.c = state.cpu.flags.c;
+                this.hardware.cpu.e = state.cpu.flags.e;
+                this.hardware.cpu.stopped = state.cpu.stopped;
+                this.hardware.cpu.waiting = state.cpu.waiting;
+                this.hardware.cpu.cyclesLeft = state.cpu.cyclesLeft;
+
+                // 2. Reconstitute PPU
+                this.hardware.ppu.vram.set(state.ppu.vram);
+                this.hardware.ppu.cgram.set(state.ppu.cgram);
+                this.hardware.ppu.oam.set(state.ppu.oam);
+                this.hardware.ppu.highOam.set(state.ppu.highOam);
+                this.hardware.ppu.cgramAdr = state.ppu.cgramAdr;
+                this.hardware.ppu.vramAdr = state.ppu.vramAdr;
+                this.hardware.ppu.mode = state.ppu.mode;
+                this.hardware.ppu.forcedBlank = state.ppu.forcedBlank;
+                this.hardware.ppu.brightness = state.ppu.brightness;
+                
+                // Advanced PPU layers properties - PHASE 4 FIX: direct array assignment (no .set method on standard Arrays)
+                this.hardware.ppu.tilemapWider = state.ppu.tilemapWider;
+                this.hardware.ppu.tilemapHigher = state.ppu.tilemapHigher;
+                this.hardware.ppu.tilemapAdr = state.ppu.tilemapAdr;
+                this.hardware.ppu.tileAdr = state.ppu.tileAdr;
+                this.hardware.ppu.bgHoff = state.ppu.bgHoff;
+                this.hardware.ppu.bgVoff = state.ppu.bgVoff;
+
+                // 3. Reconstitute APU & SPC700
+                this.hardware.apu.ram.set(state.apu.ram);
+                this.hardware.apu.spc.r.set(state.apu.spc_r);
+                this.hardware.apu.spc.br.set(state.apu.spc_br);
+                
+                // SPC700 Register Flags
+                this.hardware.apu.spc.n = state.apu.spc_flags.n;
+                this.hardware.apu.spc.v = state.apu.spc_flags.v;
+                this.hardware.apu.spc.p = state.apu.spc_flags.p;
+                this.hardware.apu.spc.b = state.apu.spc_flags.b;
+                this.hardware.apu.spc.h = state.apu.spc_flags.h;
+                this.hardware.apu.spc.i = state.apu.spc_flags.i;
+                this.hardware.apu.spc.z = state.apu.spc_flags.z;
+                this.hardware.apu.spc.c = state.apu.spc_flags.c;
+
+                this.hardware.apu.dsp.ram.set(state.apu.dsp_ram);
+
+                // 4. Reconstitute System RAM & Cartridge SRAM
+                this.hardware.ram.set(state.ram);
+                this.hardware.cart.sram.set(state.sram);
+
+                console.log("[SnesOrchestrator] State Loaded.");
+            } catch (err) {
+                console.error("[SnesOrchestrator] Load State failed:", err);
+            }
+        }
     }
 }

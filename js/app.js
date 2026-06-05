@@ -8,21 +8,15 @@
  * and safe hot-swapping of the emulation engines.
  * 
  * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): This file exclusively manages the 
- *    lifecycle (boot, teardown, hot-swap) of the consoles and DOM bridge. It does 
- *    not handle emulation logic.
- * 2. Open/Closed Principle (OCP): Designed so that adding a new system (e.g., "NES") 
- *    only requires adding a new key to the factory mapping, without changing the 
- *    teardown or audio context logic.
- * 3. Liskov Substitution Principle (LSP): All orchestrators (SMS, Genesis, SNES) 
- *    are treated interchangeably. They are all expected to implement `stop()`, 
- *    `startAudio()`, and `setAudioEnabled()`.
- * 4. Interface Segregation Principle (ISP): The bootstrapper only calls the essential 
- *    lifecycle methods from the orchestrators, avoiding bloated dependencies. Input 
- *    handling is segregated into the specific UIControllers.
- * 5. Dependency Inversion Principle (DIP): The bootstrapper depends on the generic 
- *    abstraction of an "Orchestrator" and a "UIController", rather than tightly 
- *    coupling to the internal hardware buses of each console.
+ * 1. Single Responsibility Principle (SRP): This file is strictly responsible 
+ *    for the DOM structure initialization and dynamic hot-swaps of the active consoles.
+ * 2. Open/Closed Principle (OCP): Easily extendable; new system modules can be 
+ *    supported by adding their case in the factory loop without breaking previous systems.
+ * 3. Liskov Substitution Principle (LSP): All orchestrator engines are treated 
+ *    interchangeably. They are all expected to implement loadRom, start, stop, 
+ *    saveState, and loadState.
+ * 4. Dependency Inversion Principle (DIP): Depends on the high-level shared 
+ *    contracts of the Orchestrator, completely decoupled from specific CPU loops.
  */
 
 // ========================================================================
@@ -168,7 +162,6 @@ function bootConsole(consoleType) {
             case "SMS":
                 activeOrchestrator = new SmsOrchestrator(videoContext, glContext, updateFpsUI);
                 activeController = new SmsUIController(activeOrchestrator);
-                if (typeof activeController.updateSaveStatePreview === 'function') activeController.updateSaveStatePreview();
                 break;
                 
             case "GEN":
@@ -184,6 +177,10 @@ function bootConsole(consoleType) {
             default:
                 throw new Error(`Unknown console type: ${consoleType}`);
         }
+        
+        // PHASE 4: Dynamically draw the correct active system preview thumbnail on boot
+        updateSaveStatePreview();
+        
         console.log(`%c[EGGStation::Swapper] ${consoleType} Engine instantiated successfully.`, "color: #04d361; font-weight: bold;");
     } catch (err) {
         console.error(`[EGGStation::Swapper] Fatal exception during ${consoleType} engine boot:`, err);
@@ -224,6 +221,84 @@ function bootConsole(consoleType) {
 }
 
 // ========================================================================
+// GLOBAL PERSISTENT SAVE/LOAD HOTKEYS & BUTTON BINDINGS
+// ========================================================================
+window.addEventListener('keydown', (e) => {
+    // Diagnostic input log
+    console.log("[EGGStation::Input] Key pressed: ", e.key);
+
+    if (!activeOrchestrator) return;
+
+    // F2: Universal Save State
+    if (e.key === "F2") {
+        e.preventDefault();
+        triggerSaveAction();
+    }
+    
+    // F3: Universal Load State
+    if (e.key === "F3") {
+        e.preventDefault();
+        triggerLoadAction();
+    }
+});
+
+function triggerSaveAction() {
+    if (activeOrchestrator && typeof activeOrchestrator.saveState === 'function') {
+        activeOrchestrator.saveState().then(() => {
+            // PHASE 4: Call the global uncoupled preview updater
+            updateSaveStatePreview();
+        });
+    }
+}
+
+function triggerLoadAction() {
+    if (activeOrchestrator && typeof activeOrchestrator.loadState === 'function') {
+        activeOrchestrator.loadState();
+    }
+}
+
+/**
+ * PHASE 4: Universal uncoupled save state snapshot rendering service.
+ * Automatically resolves and scales any emulated system thumbnail dynamically.
+ */
+function updateSaveStatePreview() {
+    const rawImgData = localStorage.getItem('savestateScreenshot');
+    if (!rawImgData) return;
+
+    let imgDataArray;
+    try {
+        imgDataArray = JSON.parse(rawImgData);
+    } catch (e) {
+        return;
+    }
+    if (!imgDataArray) return;
+
+    const canvas = document.createElement('canvas');
+    
+    // Dynamically calculate dimensions to support downsampled snapshots of any console
+    const totalPixels = imgDataArray.length / 4;
+    
+    // Detects the dynamic width: 128 (SNES), 320 (Old Gen) or 256 (SMS / Standard Gen)
+    const width = totalPixels === 15360 ? 128 : (totalPixels === 76800 || totalPixels === 71680 ? 320 : 256);
+    
+    // Auto-calculates the exact height proportionally to prevent any ImageData IndexSizeError crash!
+    const height = totalPixels / width;
+
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    
+    const clampedArray = new Uint8ClampedArray(imgDataArray);
+    const imgArray = new ImageData(clampedArray, width, height);
+    ctx.putImageData(imgArray, 0, 0);
+
+    const targetImage = document.getElementById("savestateImg");
+    if (targetImage) {
+        targetImage.src = canvas.toDataURL();
+    }
+}
+
+// ========================================================================
 // GLOBAL EVENT LISTENERS
 // ========================================================================
 document.addEventListener("DOMContentLoaded", () => {
@@ -232,6 +307,24 @@ document.addEventListener("DOMContentLoaded", () => {
     const ejectBtn = document.getElementById('ejectBtn');
     const audioToggleSelector = document.getElementById('audioToggleSelector');
     
+    // Bind DOM Save/Load Buttons globally as a secure fallback
+    const saveBtn = document.getElementById('btn-save');
+    const loadBtn = document.getElementById('btn-load');
+
+    if (saveBtn) {
+        saveBtn.addEventListener('click', () => {
+            console.log("[EGGStation::UI] Save State Button Clicked.");
+            triggerSaveAction();
+        });
+    }
+
+    if (loadBtn) {
+        loadBtn.addEventListener('click', () => {
+            console.log("[EGGStation::UI] Load State Button Clicked.");
+            triggerLoadAction();
+        });
+    }
+
     console.log(`[EGGStation::Bootstrapper] Initializing default system configuration...`);
     bootConsole("SMS");
 

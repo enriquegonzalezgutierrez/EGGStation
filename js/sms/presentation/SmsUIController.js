@@ -114,7 +114,7 @@ class SmsUIController {
         bindSlider('sh-phosphor');
         bindSlider('sh-bloom');
 
-        // 8. Developer Mode Debugger Suite Buttons & Inputs (Z80 CPU Stepper)
+        // 8. Developer Mode Debug Suite Buttons (Z80 CPU Stepper)
         const dbgPlay = document.getElementById('dbg-play');
         const dbgPause = document.getElementById('dbg-pause');
         const dbgStep = document.getElementById('dbg-step');
@@ -434,6 +434,7 @@ class SmsUIController {
 
     /**
      * Retrieves the saved screenshot from standard localStorage and renders it to the tooltip thumbnail.
+     * Supports both dynamic high-res frames (256x240) and downsampled frames (128x120) perfectly.
      */
     updateSaveStatePreview() {
         const rawImgData = localStorage.getItem('savestateScreenshot');
@@ -443,12 +444,22 @@ class SmsUIController {
         if (!imgDataArray) return;
 
         const canvas = document.createElement('canvas');
-        canvas.width = 256;
-        canvas.height = 240;
+        
+        // PHASE 4: Dynamically calculate dimensions to support downsampled snapshots of any console
+        const totalPixels = imgDataArray.length / 4;
+        
+        // Detects the dynamic width: 128 (SNES), 320 (Old Gen) or 256 (SMS / Standard Gen)
+        const width = totalPixels === 15360 ? 128 : (totalPixels === 76800 || totalPixels === 71680 ? 320 : 256);
+        
+        // Auto-calculates the exact height proportionally to prevent any ImageData IndexSizeError crash!
+        const height = totalPixels / width;
+
+        canvas.width = width;
+        canvas.height = height;
         const ctx = canvas.getContext('2d');
         
         const clampedArray = new Uint8ClampedArray(imgDataArray);
-        const imgArray = new ImageData(clampedArray, 256, 240);
+        const imgArray = new ImageData(clampedArray, width, height);
         ctx.putImageData(imgArray, 0, 0);
 
         const targetImage = document.getElementById("savestateImg");
