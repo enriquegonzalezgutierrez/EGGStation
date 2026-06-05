@@ -12,9 +12,9 @@
  * 1. Single Responsibility Principle (SRP): Exclusively responsible for bridging 
  *    DOM elements and updating the global UniversalInput buffer. It contains no 
  *    emulation cycles or low-level keyboard/gamepad polling code.
- * 2. Dependency Inversion Principle (DIP): Instead of hardcoding keyboard events 
- *    and gamepad indices directly inside the SMS core, it relies on the high-level 
- *    abstraction window.UniversalInput, decoupling it completely from physical hardware.
+ * 2. Dependency Inversion Principle (DIP): Instead of hardcoding key listeners 
+ *    directly inside the SMS core, it relies on the high-level shared service 
+ *    window.UniversalInput, decoupling it completely from physical hardware.
  */
 
 class SmsUIController {
@@ -356,30 +356,46 @@ class SmsUIController {
     }
 
     /**
-     * Reads the selected cartridge file and passes the raw binary buffer to the Orchestrator.
+     * Reads the selected cartridge file. Supports native .sms, .sg and compressed .zip
+     * leveraging the universal shared RomDecompressor utility.
      */
-    handleFileUpload(files) {
+    async handleFileUpload(files) {
         if (!files || files.length === 0) return;
 
         const file = files[0];
         const fname = file.name.toLowerCase();
 
-        if (!fname.endsWith('.sms') && !fname.endsWith('.sg')) {
-            alert("EGGStation::Error: System only supports .sms and .sg ROM files.");
-            return;
-        }
+        try {
+            let romData;
+            let romName = file.name;
 
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            const arrayBuffer = event.target.result;
-            
-            this.orchestrator.loadRom(file.name, arrayBuffer).then(() => {
+            if (fname.endsWith('.zip')) {
+                // Extract the rom inside the zip using the shared RomDecompressor
+                const decompressed = await RomDecompressor.decompress(file, /\.(sms|sg)$/i);
+                romData = decompressed.data.buffer; // Needs to be ArrayBuffer
+                romName = decompressed.filename;
+            } else if (fname.endsWith('.sms') || fname.endsWith('.sg')) {
+                const reader = new FileReader();
+                romData = await new Promise((resolve, reject) => {
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.onerror = (err) => reject(err);
+                    reader.readAsArrayBuffer(file);
+                });
+            } else {
+                alert("EGGStation::Error: System only supports .sms, .sg and compressed .zip ROM files.");
+                return;
+            }
+
+            // Boot the resolved rom
+            this.orchestrator.loadRom(romName, romData).then(() => {
                 this.handleShaderTuningChange();
             });
             
             this.hideUIForGameplay();
-        };
-        reader.readAsArrayBuffer(file);
+        } catch (error) {
+            console.error("[SmsUIController] File upload or decompression failed:", error);
+            alert("ROM Decompression/Load error: " + error.message);
+        }
     }
 
     /**

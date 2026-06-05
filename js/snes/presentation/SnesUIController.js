@@ -128,21 +128,42 @@ class SnesUIController {
     }
 
     /**
-     * Handles file input uploads. Supports SNES (.sfc, .smc) and standard compressed .zip.
+     * Handles file input uploads. Supports SNES (.sfc, .smc) and standard compressed .zip
+     * leveraging the universal shared RomDecompressor utility.
      */
     async onFileSelected(event) {
         const file = event.target.files[0];
         if (!file) return;
 
+        const fname = file.name.toLowerCase();
+
         try {
-            const buffer = await file.arrayBuffer();
-            if (file.name.toLowerCase().endsWith('.zip')) {
-                this.decompressZipArchive(buffer, false);
+            let romData;
+            let romName = file.name;
+
+            if (fname.endsWith('.zip')) {
+                // Extract the rom inside the zip using the shared RomDecompressor
+                const decompressed = await RomDecompressor.decompress(file, /\.(sfc|smc)$/i);
+                romData = decompressed.data; // RomDecompressor returns Uint8Array
+                romName = decompressed.filename;
+            } else if (fname.endsWith('.sfc') || fname.endsWith('.smc')) {
+                const reader = new FileReader();
+                const arrayBuffer = await new Promise((resolve, reject) => {
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.onerror = (err) => reject(err);
+                    reader.readAsArrayBuffer(file);
+                });
+                romData = new Uint8Array(arrayBuffer);
             } else {
-                this.bootRom(new Uint8Array(buffer), false);
+                alert("EGGStation::Error: System only supports .sfc, .smc and compressed .zip ROM files.");
+                return;
             }
+
+            // Boot the resolved rom
+            this.bootRom(romData, false);
         } catch (error) {
-            console.error("[SnesUIController] File IO Exception:", error);
+            console.error("[SnesUIController] File upload or decompression failed:", error);
+            alert("ROM Decompression/Load error: " + error.message);
         }
     }
 
@@ -153,27 +174,6 @@ class SnesUIController {
         } catch (error) {
             alert("Hardware initialization exception: " + error.message);
         }
-    }
-
-    /**
-     * Uses inflate.js/deflate.js external tools to decompress ROMs.
-     */
-    decompressZipArchive(buffer, isHirom) {
-        const blob = new Blob([buffer]);
-        zip.createReader(new zip.BlobReader(blob), (reader) => {
-            reader.getEntries((entries) => {
-                const romEntry = entries.find(e => e.filename.match(/\.(sfc|smc)$/i));
-                if (romEntry) {
-                    romEntry.getData(new zip.Uint8ArrayWriter(), (data) => {
-                        this.bootRom(data, isHirom);
-                        reader.close();
-                    });
-                } else {
-                    alert("ZIP archive contains no valid SNES ROM (.sfc or .smc).");
-                    reader.close();
-                }
-            });
-        }, (err) => console.error("[SnesUIController::ZIP] Decompression failed:", err));
     }
 
     /**

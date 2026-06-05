@@ -51,7 +51,7 @@ class GenesisUIController {
     }
 
     /**
-     * Attaches event listeners to the DOM elements and the window object.
+     * Attaches event listeners to the DOM elements.
      */
     bindEvents() {
         // 1. ROM File Loader Button Proxy
@@ -221,9 +221,6 @@ class GenesisUIController {
 
     /**
      * Reads the current keyboard or gamepad states from UniversalInput.
-     * @param {number} playerId - Player index (0 = P1, 1 = P2).
-     * @param {number} buttonId - Mapped button ID constant.
-     * @returns {boolean} True if pressed.
      */
     inputRequested(playerId, buttonId) {
         if (playerId !== 0 || !window.UniversalInput) {
@@ -253,27 +250,43 @@ class GenesisUIController {
     }
 
     /**
-     * Reads the selected cartridge file.
-     * @param {FileList} files - The files selected by the user.
+     * Reads the selected cartridge file. Supports native .md, .gen, .bin, .smd and compressed .zip
+     * leveraging the universal shared RomDecompressor utility.
      */
-    handleFileUpload(files) {
+    async handleFileUpload(files) {
         if (!files || files.length === 0) return;
 
         const file = files[0];
         const fname = file.name.toLowerCase();
 
-        if (!fname.endsWith('.md') && !fname.endsWith('.gen') && !fname.endsWith('.bin') && !fname.endsWith('.smd')) {
-            alert("EGGStation::Error: Unsupported Sega Genesis ROM file format. Please use .md, .gen, or .bin");
-            return;
-        }
+        try {
+            let romData;
+            let romName = file.name;
 
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            const arrayBuffer = event.target.result;
-            this.orchestrator.loadRom(arrayBuffer);
+            if (fname.endsWith('.zip')) {
+                // Extract the rom inside the zip using the shared RomDecompressor
+                const decompressed = await RomDecompressor.decompress(file, /\.(md|gen|bin|smd)$/i);
+                romData = decompressed.data.buffer; // Needs to be ArrayBuffer
+                romName = decompressed.filename;
+            } else if (fname.endsWith('.md') || fname.endsWith('.gen') || fname.endsWith('.bin') || fname.endsWith('.smd')) {
+                const reader = new FileReader();
+                romData = await new Promise((resolve, reject) => {
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.onerror = (err) => reject(err);
+                    reader.readAsArrayBuffer(file);
+                });
+            } else {
+                alert("EGGStation::Error: System only supports .md, .gen, .bin, .smd and compressed .zip ROM files.");
+                return;
+            }
+
+            // Boot the resolved rom
+            this.orchestrator.loadRom(romName, romData);
             this.hideUIForGameplay();
-        };
-        reader.readAsArrayBuffer(file);
+        } catch (error) {
+            console.error("[GenesisUIController] File upload or decompression failed:", error);
+            alert("ROM Decompression/Load error: " + error.message);
+        }
     }
 
     /**
@@ -312,8 +325,7 @@ class GenesisUIController {
     }
 
     /**
-     * Gathers current range slider states, scales them to normalized WebGL ratio ranges, 
-     * and streams them into active GPU uniform variables.
+     * Gathers current range slider states and streams them into active GPU uniform variables.
      */
     handleShaderTuningChange() {
         const curvVal = parseInt(document.getElementById('sh-curvature')?.value || "90", 10) / 90;
