@@ -1,26 +1,32 @@
 /**
- * Project: EGGStation - Super Nintendo (SNES) Audio Processor
+ * Project: EGGStation - Unified Multi-System Console Virtual Environment
  * Author: Enrique González Gutiérrez
+ * File: js/shared/audio/UniversalAudioProcessor.js
  * 
- * Infrastructure Layer: SNES Audio DSP & Synchronization Service
+ * Role:
+ * Infrastructure Layer: Universal Web Audio DSP & Synchronization Service.
+ * Bridges the emulated console APU/DSP audio sample outputs to the browser's 
+ * Web Audio API. Implements a high-capacity 32,768-sample double Ring Buffer 
+ * to prevent sound popping, pointer-snapping, and pitch-warping artifacts.
  * 
- * ROLE:
- * Bridges the SNES APU/DSP output to the Web Audio API.
- * Implements a high-capacity 32768-sample Ring Buffer to prevent
- * pointer-snapping and frequency modulation artifacts.
- * 
- * SOLID Principles:
- * - Single Responsibility Principle (SRP): Manages audio buffering and DSP graph only.
+ * SOLID Principles Applied:
+ * 1. Single Responsibility Principle (SRP): Exclusively responsible for managing 
+ *    the Web Audio Context lifecycle, linear ring buffers, and soundstage DSP 
+ *    node filters (low-pass, delays).
+ * 2. Liskov Substitution Principle (LSP): Offers a uniform and generic audio-pushing 
+ *    contract (pushSamples, resume, stop) that can be snychronously used by 
+ *    SNES, NES, and other future emulated system audio units.
  */
 
-class SnesAudioProcessor {
+class UniversalAudioProcessor {
     constructor() {
         this.audioEnabled = true;
         this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
+        // Target sample rate pacing (Typically 44.1KHz or 48KHz divided by 60fps)
         this.samplesPerFrame = this.audioCtx.sampleRate / 60;
 
-        // Expanded Ring Buffer (32768 samples for high jitter absorption)
+        // Expanded Double Ring Buffer (32,768 samples for high jitter absorption)
         this.inputBufferL = new Float64Array(32768);
         this.inputBufferR = new Float64Array(32768);
         this.inputBufferPos = 0;
@@ -40,7 +46,7 @@ class SnesAudioProcessor {
         this.delayL = this.audioCtx.createDelay();
         this.delayR = this.audioCtx.createDelay();
         
-        this.delayL.delayTime.value = 0.005; 
+        this.delayL.delayTime.value = 0.005; // 5ms Haas delay for Stereo widening
         this.delayR.delayTime.value = 0.0;
         
         this.splitter.connect(this.delayL, 0);
@@ -55,15 +61,21 @@ class SnesAudioProcessor {
         this.masterGain.connect(this.audioCtx.destination);
 
         this.setAudioEnabled(window.audioEnabledState !== false);
-        console.log(`[EGGStation::SNES] Audio Processor Synced. Buffer: 32768 samples.`);
+        console.log(`[UniversalAudioProcessor] Web Audio DSP Node Active. Buffer: 32768 samples.`);
     }
 
+    /**
+     * Resumes the Web Audio Context after browser autoplay locks are resolved.
+     */
     resume() {
         if (this.audioEnabled && this.audioCtx.state === 'suspended') {
             this.audioCtx.resume();
         }
     }
 
+    /**
+     * Dynamically suspends or resumes Web Audio contexts.
+     */
     setAudioEnabled(enabled) {
         this.audioEnabled = enabled;
         if (this.audioCtx) {
@@ -79,6 +91,9 @@ class SnesAudioProcessor {
         }
     }
 
+    /**
+     * Stops and flushes the active audio Ring Buffers.
+     */
     stop() {
         this.inputBufferPos = 0;
         this.inputReadPos = 0;
@@ -86,6 +101,10 @@ class SnesAudioProcessor {
         this.inputBufferR.fill(0);
     }
 
+    /**
+     * Re-wires the internal AudioNode routing graph on the fly to apply DSP filters.
+     * @param {number} mode - 0: Bypass, 1: Low-pass (Analogue warmth), 2: Stereo Widener.
+     */
     setFilterMode(mode) {
         this.filterMode = parseInt(mode);
         
@@ -109,7 +128,10 @@ class SnesAudioProcessor {
     }
 
     /**
-     * Pushes samples into the Ring Buffer using high speed masking (& 0x7fff)
+     * Pushes stereo samples into the circular Ring Buffer snychronously using high speed masking (& 0x7fff)
+     * @param {Float32Array} left - Left channel samples array.
+     * @param {Float32Array} right - Right channel samples array.
+     * @param {number} count - Amount of samples to push.
      */
     pushSamples(left, right, count) {
         if (!this.audioEnabled) return;
@@ -121,7 +143,8 @@ class SnesAudioProcessor {
     }
 
     /**
-     * Consumes samples using a safety cushion algorithm to avoid pitch warping.
+     * Core ScriptProcessorCallback loop. Consumes samples using a safety cushion algorithm 
+     * to avoid pitch-warping or buffer starvation pops.
      */
     onAudioProcess(e) {
         const outputL = e.outputBuffer.getChannelData(0);
@@ -159,3 +182,6 @@ class SnesAudioProcessor {
         }
     }
 }
+
+// Bind globally as a shared module
+window.UniversalAudioProcessor = UniversalAudioProcessor;

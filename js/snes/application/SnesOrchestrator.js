@@ -1,5 +1,5 @@
 /**
- * Project: EGGStation - Unified Multi-System Console Virtual Environment
+ * Project: EGGStation - Super Nintendo (SNES) Application Layer
  * Author: Enrique González Gutiérrez
  * File: js/snes/application/SnesOrchestrator.js
  * 
@@ -14,8 +14,8 @@
  * 2. Liskov Substitution Principle (LSP): Fully implements the unified orchestrator 
  *    interface expected by the app.js Bootstrapper (loadRom, stop, setAudioEnabled).
  * 3. Dependency Inversion Principle (DIP): Depends directly on the shared 
- *    UniversalPostProcessor and IndexedDbManager abstractions rather than tight 
- *    coupling to legacy custom post-processors.
+ *    UniversalPostProcessor and UniversalAudioProcessor (Phase 4) abstractions 
+ *    rather than tight coupling to legacy custom processors.
  */
 
 class SnesOrchestrator {
@@ -38,7 +38,9 @@ class SnesOrchestrator {
 
         // PHASE 4: Instantiate the UniversalPostProcessor directly
         this.postProcessor = new UniversalPostProcessor(this.gl);
-        this.audioProcessor = new SnesAudioProcessor();
+        
+        // PHASE 4: Instantiate the shared UniversalAudioProcessor snychronously
+        this.audioProcessor = new UniversalAudioProcessor();
         this.audioProcessor.orchestrator = this;
 
         this.postProcessMode = 0; 
@@ -530,6 +532,9 @@ class SnesOrchestrator {
             const destBaseX = tileX * 8;
             const destBaseY = tileY * 8;
             
+            // PHASE 4 FIX: 
+            // - Top 12 rows (0-191) load Background character tiles (bg1CharBase offset)
+            // - Bottom 12 rows (192-383) load Active Sprite character tiles (spriteCharBase offset)
             const isSpriteTile = tileIdx >= 192;
             const baseWordOffset = isSpriteTile ? spriteCharBase : bg1CharBase;
             const relativeTileIdx = isSpriteTile ? (tileIdx - 192) : tileIdx;
