@@ -389,6 +389,9 @@ class SmsUIController {
             // Boot the resolved rom
             this.orchestrator.loadRom(romName, romData).then(() => {
                 this.handleShaderTuningChange();
+                
+                // PHASE 4: Trigger the immersive CRT "Warm-up" (Power On) visual effect
+                if (typeof triggerCrtWarmUp === 'function') triggerCrtWarmUp();
             });
             
             this.hideUIForGameplay();
@@ -447,11 +450,7 @@ class SmsUIController {
         
         // PHASE 4: Dynamically calculate dimensions to support downsampled snapshots of any console
         const totalPixels = imgDataArray.length / 4;
-        
-        // Detects the dynamic width: 128 (SNES), 320 (Old Gen) or 256 (SMS / Standard Gen)
         const width = totalPixels === 15360 ? 128 : (totalPixels === 76800 || totalPixels === 71680 ? 320 : 256);
-        
-        // Auto-calculates the exact height proportionally to prevent any ImageData IndexSizeError crash!
         const height = totalPixels / width;
 
         canvas.width = width;

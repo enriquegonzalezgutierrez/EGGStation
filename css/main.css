@@ -176,6 +176,10 @@ body {
     border-radius: 8px;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--glass-border);
     overflow: hidden;
+    
+    /* Prepares GPU memory mapping context for CRT Warm-Up/Power-Off animations */
+    transform-origin: center center;
+    will-change: transform, filter, opacity;
 }
 
 /* Dynamically compress CRT height when developer panel expands downward */
@@ -617,8 +621,7 @@ select:hover, .btn:hover {
         color: #fff;
         padding: 8px 16px;
         border-radius: 20px;
-        font-size: 0.7rem;
-        letter-spacing: 2px;
+        font-size: 0.7
     }
     .v-system-btn:active { background: var(--success); }
 
@@ -688,4 +691,58 @@ select:hover, .btn:hover {
 
     /* Hide Sidebar completely in landscape gameplay */
     #settings-panel { display: none; }
+}
+
+/* ==========================================================================
+   IMMERSIVE CRT CATHODE-RAY TELEVISION SIMULATOR ANIMATIONS (PHASE 4)
+   ========================================================================== */
+
+/* CRT TV Warm-up (Power On) */
+.crt-warm-up {
+    animation: crtWarmUp 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+/* CRT TV Power-off (Collapse Horizontal and disappear) */
+.crt-power-off {
+    animation: crtPowerOff 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+@keyframes crtWarmUp {
+    0% {
+        transform: scale3d(0, 0.001, 1);
+        filter: brightness(10) contrast(5);
+        opacity: 0;
+    }
+    40% {
+        transform: scale3d(1, 0.001, 1);
+        filter: brightness(8) contrast(3);
+        opacity: 1;
+    }
+    100% {
+        transform: scale3d(1, 1, 1);
+        filter: brightness(1) contrast(1);
+        opacity: 1;
+    }
+}
+
+@keyframes crtPowerOff {
+    0% {
+        transform: scale3d(1, 1, 1);
+        filter: brightness(1) contrast(1);
+        opacity: 1;
+    }
+    40% {
+        transform: scale3d(1, 0.002, 1);
+        filter: brightness(5) contrast(3);
+        opacity: 1;
+    }
+    99% {
+        transform: scale3d(0.001, 0.002, 1);
+        filter: brightness(10) contrast(5);
+        opacity: 0.1;
+    }
+    100% {
+        transform: scale3d(0, 0, 0);
+        opacity: 0;
+    }
 }

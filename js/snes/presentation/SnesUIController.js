@@ -170,6 +170,10 @@ class SnesUIController {
     bootRom(romData, isHirom) {
         try {
             this.orchestrator.loadCartridge(romData, isHirom);
+            
+            // PHASE 4: Trigger the immersive CRT "Warm-up" (Power On) visual effect
+            if (typeof triggerCrtWarmUp === 'function') triggerCrtWarmUp();
+
             document.getElementById('fileselector')?.classList.add('hidden');
         } catch (error) {
             alert("Hardware initialization exception: " + error.message);

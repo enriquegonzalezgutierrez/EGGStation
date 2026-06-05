@@ -148,7 +148,12 @@ function bootConsole(consoleType) {
         glContext.clear(glContext.COLOR_BUFFER_BIT);
     }
 
-    // Reset default layout views
+    // Reset default layout views and CRT animation states on dynamic swaps
+    const crtWrapper = document.getElementById("crt-wrapper");
+    if (crtWrapper) {
+        crtWrapper.classList.remove("crt-power-off", "crt-warm-up");
+    }
+
     document.getElementById("fileselector")?.classList.remove("hidden");
     const fpsSpan = document.getElementById("fpsSpan");
     if (fpsSpan) fpsSpan.textContent = "0.0 FPS";
@@ -299,6 +304,20 @@ function updateSaveStatePreview() {
     }
 }
 
+/**
+ * PHASE 4: Trigger the immersive CRT "Warm-up" (Power On) visual effect.
+ * Forces DOM reflow to restart CSS animations snychronously on successful loads.
+ */
+function triggerCrtWarmUp() {
+    const crtWrapper = document.getElementById("crt-wrapper");
+    if (crtWrapper) {
+        crtWrapper.classList.remove("crt-power-off");
+        void crtWrapper.offsetWidth; // Force snychronous reflow (repaint context)
+        crtWrapper.classList.add("crt-warm-up");
+    }
+}
+window.triggerCrtWarmUp = triggerCrtWarmUp;
+
 // ========================================================================
 // GLOBAL EVENT LISTENERS
 // ========================================================================
@@ -352,27 +371,35 @@ document.addEventListener("DOMContentLoaded", () => {
         ejectBtn.addEventListener('click', () => {
             console.log("[EGGStation::Swapper] Ejecting active cartridge...");
             
-            // PHASE 4 FIX: Safe teardown of orchestrator loop only (no DOM cloning to preserve active UI bindings!)
-            if (activeOrchestrator) {
-                activeOrchestrator.isRunning = false;
-                if (typeof activeOrchestrator.stop === 'function') {
-                    activeOrchestrator.stop();
-                }
-                if (activeOrchestrator.animationFrameId) {
-                    cancelAnimationFrame(activeOrchestrator.animationFrameId);
-                    activeOrchestrator.animationFrameId = null;
-                }
+            const crtWrapper = document.getElementById("crt-wrapper");
+            if (crtWrapper) {
+                crtWrapper.classList.remove("crt-warm-up");
+                crtWrapper.classList.add("crt-power-off");
             }
 
-            const videoCanvas = document.getElementById("smsdisplay");
-            const videoContext = videoCanvas?.getContext("2d");
-            if (videoContext) {
-                videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
-            }
+            // PHASE 4: Wait 500ms for the horizontal CRT collapse animation to finish before clearing state
+            setTimeout(() => {
+                if (activeOrchestrator) {
+                    activeOrchestrator.isRunning = false;
+                    if (typeof activeOrchestrator.stop === 'function') {
+                        activeOrchestrator.stop();
+                    }
+                    if (activeOrchestrator.animationFrameId) {
+                        cancelAnimationFrame(activeOrchestrator.animationFrameId);
+                        activeOrchestrator.animationFrameId = null;
+                    }
+                }
 
-            document.getElementById("fileselector")?.classList.remove("hidden");
-            const fpsSpan = document.getElementById("fpsSpan");
-            if (fpsSpan) fpsSpan.textContent = "0.0 FPS";
+                const videoCanvas = document.getElementById("smsdisplay");
+                const videoContext = videoCanvas?.getContext("2d");
+                if (videoContext) {
+                    videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
+                }
+
+                document.getElementById("fileselector")?.classList.remove("hidden");
+                const fpsSpan = document.getElementById("fpsSpan");
+                if (fpsSpan) fpsSpan.textContent = "0.0 FPS";
+            }, 500);
         });
     }
 });

@@ -282,6 +282,10 @@ class GenesisUIController {
 
             // Boot the resolved rom
             this.orchestrator.loadRom(romName, romData);
+            
+            // PHASE 4: Trigger the immersive CRT "Warm-up" (Power On) visual effect
+            if (typeof triggerCrtWarmUp === 'function') triggerCrtWarmUp();
+
             this.hideUIForGameplay();
         } catch (error) {
             console.error("[GenesisUIController] File upload or decompression failed:", error);
