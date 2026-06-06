@@ -60,7 +60,7 @@ class GenesisOrchestrator {
         // Hardware Domain Instantiation
         this.vdp = new GenesisVdp();
         
-        // PHASE 4: Instantiate the shared SegaPsg uncoupled audio core snychronously
+        // Instantiate the shared SegaPsg uncoupled audio core synchronously
         this.psg = new SegaPsg();
         this.fm = new GenesisYm2612();
         this.controllerManager = new GenesisControllerManager();
@@ -93,7 +93,7 @@ class GenesisOrchestrator {
         this.prevFrameBuffer = new Uint8ClampedArray(320 * 240 * 4);
         this.postProcessMode = 0; 
 
-        // PHASE 4: Use the UniversalPostProcessor directly
+        // Use the UniversalPostProcessor directly
         this.postProcessor = new UniversalPostProcessor(this.glContext);
         this.loop = this.loop.bind(this);
     }
@@ -158,7 +158,7 @@ class GenesisOrchestrator {
         window.AudioContext = window.AudioContext || window.webkitAudioContext;
         this.audioCtx = new AudioContext();
         
-        // PHASE 4: Inject sample rate into the shared SegaPsg synthesizer
+        // Inject sample rate into the shared SegaPsg synthesizer
         if (this.psg) {
             this.psg.setSampleRate(this.audioCtx.sampleRate);
         }
@@ -290,7 +290,7 @@ class GenesisOrchestrator {
     }
 
     /**
-     * PHASE 4: Self-serialize standard engine properties to be handled by the Database Client.
+     * Self-serialize standard engine properties to be handled by the Database Client.
      */
     async saveState() {
         if (this.isRunning && this.bus.cartridgeRom) {
@@ -336,14 +336,14 @@ class GenesisOrchestrator {
                 };
                 await this.serializer.save("GENESIS_SAVESTATE", statePayload);
 
-                // PHASE 4: Re-render thumbnail snapshot to localStorage (Optimized Downsample 2.5x -> 128x120)
+                // Re-render thumbnail snapshot to localStorage (Optimized Downsample 2.5x -> 128x120)
                 if (this.glbFrameBuffer) {
                     const src = this.glbFrameBuffer;
                     const dstWidth = 128;
                     const dstHeight = 120;
                     const smallArray = new Uint8Array(dstWidth * dstHeight * 4);
                     
-                    // Downsample 320x240 to 128x120 snychronously
+                    // Downsample 320x240 to 128x120 synchronously
                     for (let y = 0; y < dstHeight; y++) {
                         const srcY = Math.floor(y * 2) * 320 * 4; 
                         const dstY = y * dstWidth * 4;
@@ -371,7 +371,7 @@ class GenesisOrchestrator {
     }
 
     /**
-     * PHASE 4: Load and reconstruct serialized state values directly.
+     * Load and reconstruct serialized state values directly.
      */
     async loadState() {
         if (this.isRunning && this.bus.cartridgeRom) {
@@ -486,6 +486,12 @@ class GenesisOrchestrator {
 
         if (deltaTime > 100) deltaTime = targetFrameTime;
         this.lastDeltaTime = deltaTime;
+
+        // Sync actions from Universal Input Manager
+        if (window.UniversalInput) {
+            this.isRewinding = window.UniversalInput.isPressed("REWIND");
+            this.fastForward = window.UniversalInput.isPressed("FAST_FORWARD");
+        }
 
         if (this.fastForward) {
             for (let i = 0; i < 4; i++) {
@@ -682,11 +688,11 @@ class GenesisOrchestrator {
     }
 
     // ========================================================================
-    // DEVELOPE SUITE DIAGNOSTICS HOOKS (PHASE 4)
+    // DEVELOPER SUITE DIAGNOSTICS HOOKS
     // ========================================================================
 
     /**
-     * PHASE 4: Return current Motorola 68000 CPU registers as a polymorphic dictionary.
+     * Return current Motorola 68000 CPU registers as a polymorphic dictionary.
      */
     getRegisters() {
         if (!this.m68k) return {};
@@ -713,7 +719,7 @@ class GenesisOrchestrator {
     }
 
     /**
-     * PHASE 4: Return the active program disassembly around PC as a string array.
+     * Return the active program disassembly around PC as a string array.
      */
     getDisassembly() {
         if (!this.m68k) return [];
@@ -725,7 +731,7 @@ class GenesisOrchestrator {
     }
 
     /**
-     * PHASE 4: Render raw VRAM tile patterns onto the shared diagnostic canvas.
+     * Render raw VRAM tile patterns onto the shared diagnostic canvas.
      */
     drawVramDiagnostics(ctx) {
         this.rasterizeVramTiles(ctx);

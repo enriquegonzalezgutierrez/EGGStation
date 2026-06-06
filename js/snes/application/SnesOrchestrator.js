@@ -39,7 +39,7 @@ class SnesOrchestrator {
         // PHASE 4: Instantiate the UniversalPostProcessor directly
         this.postProcessor = new UniversalPostProcessor(this.gl);
         
-        // PHASE 4: Instantiate the shared UniversalAudioProcessor snychronously
+        // PHASE 4: Instantiate the shared UniversalAudioProcessor synchronously
         this.audioProcessor = new UniversalAudioProcessor();
         this.audioProcessor.orchestrator = this;
 
@@ -198,7 +198,7 @@ class SnesOrchestrator {
 
         while (this.accumulatedTime >= targetFrameDuration) {
             if (!this.isPaused) {
-                // --- PHASE 4: SYNC INPUTS FROM UNIVERSAL INPUT DIRECTLY TO SNES PAD ON EACH FRAME ---
+                // SYNC INPUTS FROM UNIVERSAL INPUT DIRECTLY TO SNES PAD ON EACH FRAME
                 if (window.UniversalInput) {
                     this.sendInput(0, window.UniversalInput.isPressed("B"));      // B
                     this.sendInput(1, window.UniversalInput.isPressed("Y"));      // Y
@@ -293,7 +293,7 @@ class SnesOrchestrator {
     }
 
     /**
-     * PHASE 4: Serializes the complete 16-bit SNES hardware memory buffers and chip states.
+     * Serializes the complete 16-bit SNES hardware memory buffers and chip states.
      */
     async saveState() {
         if (this.isRunning && this.hardware.cart) {
@@ -321,7 +321,7 @@ class SnesOrchestrator {
                         mode: this.hardware.ppu.mode,
                         forcedBlank: this.hardware.ppu.forcedBlank,
                         brightness: this.hardware.ppu.brightness,
-                        // Advanced PPU layers properties (prevents graphical glitches)
+                        // Advanced PPU layers properties
                         tilemapWider: Array.from(this.hardware.ppu.tilemapWider),
                         tilemapHigher: Array.from(this.hardware.ppu.tilemapHigher),
                         tilemapAdr: Array.from(this.hardware.ppu.tilemapAdr),
@@ -333,7 +333,7 @@ class SnesOrchestrator {
                         ram: Array.from(this.hardware.apu.ram),
                         spc_r: Array.from(this.hardware.apu.spc.r),
                         spc_br: Array.from(this.hardware.apu.spc.br),
-                        // SPC700 Register Flags (Crucial fix! Prevents APU freezes on load!)
+                        // SPC700 Register Flags
                         spc_flags: {
                             n: this.hardware.apu.spc.n, v: this.hardware.apu.spc.v, p: this.hardware.apu.spc.p,
                             b: this.hardware.apu.spc.b, h: this.hardware.apu.spc.h, i: this.hardware.apu.spc.i,
@@ -347,14 +347,14 @@ class SnesOrchestrator {
 
                 await this.serializer.save("SNES_SAVESTATE", statePayload);
 
-                // PHASE 4: Re-render thumbnail snapshot to localStorage (Optimized Downsample 16x -> 128x120)
+                // Re-render thumbnail snapshot to localStorage (Optimized Downsample 16x -> 128x120)
                 if (this.imgData && this.imgData.data) {
                     const src = this.imgData.data;
                     const dstWidth = 128;
                     const dstHeight = 120;
                     const smallArray = new Uint8Array(dstWidth * dstHeight * 4);
                     
-                    // Step snychronously over the buffer
+                    // Step synchronously over the buffer
                     for (let y = 0; y < dstHeight; y++) {
                         const srcY = (y * 4) * 512 * 4; 
                         const dstY = y * dstWidth * 4;
@@ -382,7 +382,7 @@ class SnesOrchestrator {
     }
 
     /**
-     * PHASE 4: Restores and rebuilds the SNES registers and memory buffers.
+     * Restores and rebuilds the SNES registers and memory buffers.
      */
     async loadState() {
         if (this.isRunning && this.hardware.cart) {
@@ -420,7 +420,7 @@ class SnesOrchestrator {
                 this.hardware.ppu.forcedBlank = state.ppu.forcedBlank;
                 this.hardware.ppu.brightness = state.ppu.brightness;
                 
-                // Advanced PPU layers properties - PHASE 4 FIX: direct array assignment (no .set method on standard Arrays)
+                // Advanced PPU layers properties
                 this.hardware.ppu.tilemapWider = state.ppu.tilemapWider;
                 this.hardware.ppu.tilemapHigher = state.ppu.tilemapHigher;
                 this.hardware.ppu.tilemapAdr = state.ppu.tilemapAdr;
@@ -457,11 +457,11 @@ class SnesOrchestrator {
     }
 
     // ========================================================================
-    // DEVELOPE SUITE DIAGNOSTICS HOOKS (PHASE 4)
+    // DEVELOPER SUITE DIAGNOSTICS HOOKS
     // ========================================================================
 
     /**
-     * PHASE 4: Return current Ricoh 5A22 CPU registers as a polymorphic dictionary.
+     * Return current Ricoh 5A22 CPU registers as a polymorphic dictionary.
      */
     getRegisters() {
         if (!this.hardware || !this.hardware.cpu) return {};
@@ -483,7 +483,7 @@ class SnesOrchestrator {
     }
 
     /**
-     * PHASE 4: Return the active program disassembly around PC as a string array.
+     * Return the active program disassembly around PC as a string array.
      */
     getDisassembly() {
         if (!this.hardware || !this.hardware.cpu) return [];
@@ -496,8 +496,8 @@ class SnesOrchestrator {
     }
 
     /**
-     * PHASE 4: Decodes SNES custom 4bpp (16-color) planar VRAM pattern tables in real-time.
-     * Renders decoded sprite and background character tiles snychronously with reverse-remapping.
+     * Decodes SNES custom 4bpp (16-color) planar VRAM pattern tables in real-time.
+     * Renders decoded sprite and background character tiles synchronously with reverse-remapping.
      */
     drawVramDiagnostics(ctx) {
         if (!this.hardware || !this.hardware.ppu) return;
@@ -512,7 +512,7 @@ class SnesOrchestrator {
 
         const remapMode = this.hardware.ppu.vramRemap;
 
-        // PHASE 4 FIX: Reverse-engineering the PPU VRAM address remapping formula in real-time
+        // Reverse-engineering the PPU VRAM address remapping formula in real-time
         const getRemappedAddress = (adr) => {
             let a = adr & 0x7fff;
             if (remapMode === 1) {
@@ -532,9 +532,6 @@ class SnesOrchestrator {
             const destBaseX = tileX * 8;
             const destBaseY = tileY * 8;
             
-            // PHASE 4 FIX: 
-            // - Top 12 rows (0-191) load Background character tiles (bg1CharBase offset)
-            // - Bottom 12 rows (192-383) load Active Sprite character tiles (spriteCharBase offset)
             const isSpriteTile = tileIdx >= 192;
             const baseWordOffset = isSpriteTile ? spriteCharBase : bg1CharBase;
             const relativeTileIdx = isSpriteTile ? (tileIdx - 192) : tileIdx;
@@ -542,7 +539,7 @@ class SnesOrchestrator {
             const tileWordOffset = baseWordOffset + (relativeTileIdx * 16);
             
             for (let row = 0; row < 8; row++) {
-                // Fetch Word A & B applying the snychronous reverse-remapping translation layer
+                // Fetch Word A & B applying the synchronous reverse-remapping translation layer
                 const wordA = vram[getRemappedAddress((tileWordOffset + row) & 0x7fff)];
                 const wordB = vram[getRemappedAddress((tileWordOffset + 8 + row) & 0x7fff)];
                 
@@ -558,7 +555,7 @@ class SnesOrchestrator {
                     // Pack bits into a final 4-bit Color Index (0 to 15)
                     const colorIdx = bit0 | (bit1 << 1) | (bit2 << 2) | (bit3 << 3);
                     
-                    // Map 4-bit palette index snychronously to greyscale (Luminance scaling)
+                    // Map 4-bit palette index synchronously to greyscale (Luminance scaling)
                     const rgb = colorIdx * 17; 
                     
                     const pixelX = destBaseX + col;

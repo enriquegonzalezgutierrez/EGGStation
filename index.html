@@ -9,20 +9,9 @@
       * Role:
       * Master View / DOM Layout. Provides the structured UI elements (Canvas, Buttons, 
       * Overlays) required by the UIControllers.
-      * 
-      * Architectural & SOLID Principles Alignment:
-      * 1. Single Responsibility Principle (SRP): This file is strictly responsible 
-      *    for the DOM structure and resource linking. It contains absolutely zero 
-      *    inline JavaScript or business logic.
-      * 2. Open/Closed Principle (OCP): New emulators (e.g., GBA, NES) can be added 
-      *    simply by appending their <script> blocks at the bottom, without needing 
-      *    to alter the existing DOM nodes or layout structure.
-      * 3. Dependency Inversion Principle (DIP): The UI elements use generic IDs 
-      *    (like #crt-wrapper, #virtual-gamepad) that the generic UIControllers bind 
-      *    to, rather than the HTML knowing about the underlying hardware.
     -->
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>EGGStation | Unified Multi-System Console Virtual Environment</title>
     
     <!-- Synthwave / Glassmorphism UI Stylesheet -->
@@ -35,6 +24,9 @@
 </head>
 <body>
 
+    <!-- Overlay oscuro para tapar el emulador cuando se abre el menú en móviles -->
+    <div id="mobile-drawer-overlay" class="hidden"></div>
+
     <!-- Main Grid App Container -->
     <div id="app-container">
 
@@ -46,14 +38,22 @@
             </div>
             
             <div class="system-stats">
-                <!-- Swapping console types triggers hardware-level hot-rebooting -->
                 <select id="consoleSelector" class="sys-selector">
                     <option value="SMS">Sega Master System</option>
                     <option value="GEN">Sega Genesis / Mega Drive</option>
                     <option value="SNES">Super Nintendo (SNES)</option>
                 </select>
                 <span id="fpsSpan">0.0 FPS</span>
-                <button id="dev-toggle-btn" class="btn outline-btn">DEV MODE</button>
+                <button id="dev-toggle-btn" class="btn outline-btn hide-on-mobile">DEV MODE</button>
+                
+                <!-- Botón de Menú para móviles (Modo Retrato) -->
+                <button id="mobile-menu-btn" class="btn outline-btn show-on-mobile" aria-label="Settings">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="3" y1="12" x2="21" y2="12"></line>
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <line x1="3" y1="18" x2="21" y2="18"></line>
+                    </svg>
+                </button>
             </div>
         </header>
 
@@ -82,28 +82,44 @@
 
             <!-- Virtual On-Screen Gamepad for Mobile Viewports -->
             <section id="virtual-gamepad">
+                <!-- Botón flotante de menú para cuando se juega en Modo Apaisado (Landscape) -->
+                <button id="landscape-menu-btn" class="floating-menu-btn hidden">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                </button>
+
                 <div class="d-pad">
                     <button class="v-dir" id="v-up"></button>
                     <button class="v-dir" id="v-left"></button>
+                    <div class="v-center"></div>
                     <button class="v-dir" id="v-right"></button>
                     <button class="v-dir" id="v-down"></button>
-                    <div class="v-center"></div>
                 </div>
+                
                 <div class="center-controls">
                     <button class="v-system-btn" id="v-select">SELECT</button>
                     <button class="v-system-btn" id="v-pause">START</button>
                 </div>
+                
                 <div class="action-buttons">
-                    <button class="v-action" id="v-btnY">Y</button>
-                    <button class="v-action" id="v-btnX">X</button>
-                    <button class="v-action" id="v-btn2">B</button>
-                    <button class="v-action" id="v-btn1">A</button>
+                    <button class="v-action btn-top" id="v-btnX">X</button>
+                    <button class="v-action btn-left" id="v-btnY">Y</button>
+                    <div class="v-action-center"></div>
+                    <button class="v-action btn-right" id="v-btn1">A</button>
+                    <button class="v-action btn-bottom" id="v-btn2">B</button>
                 </div>
             </section>
         </main>
 
         <!-- SIDEBAR: Settings & Hardware Toggles (Monomorphic UI) -->
-        <aside id="settings-panel" class="glass-panel">
+        <aside id="settings-panel" class="glass-panel drawer-closed">
+            <div class="drawer-header show-on-mobile">
+                <h2>Settings</h2>
+                <button id="close-menu-btn" class="btn outline-btn">✖</button>
+            </div>
+
             <div class="panel-section">
                 <h3>System Configuration</h3>
 
@@ -172,6 +188,7 @@
 
         <!-- DEVELOPER SUITE: Hardware Diagnostics (Grows dynamically on desktop) -->
         <footer id="developer-suite" class="glass-panel hidden">
+            <!-- (Contenido igual, no cambia para el usuario estándar) -->
             <div class="dev-section">
                 <h4>Execution Core</h4>
                 <div class="dev-btn-group">
@@ -182,14 +199,12 @@
             
             <div class="dev-section">
                 <h4>Hardware Registers</h4>
-                <!-- Cleared and structured dynamically with Z80, M68K, or 65816 labels by UIControllers -->
                 <div class="registers-grid" id="reg-grid"></div>
             </div>
 
             <div class="dev-section">
                 <h4>Diagnostic VRAM Viewer</h4>
                 <div class="vram-preview-wrapper">
-                    <!-- Standard diagnostic canvas populated with active pattern tables -->
                     <canvas id="vram-canvas" width="128" height="192"></canvas>
                 </div>
             </div>
@@ -202,9 +217,7 @@
 
     </div>
 
-    <!-- ========================================================= -->
-    <!-- UNIVERSAL SHARED INFRASTRUCTURE & UTILITIES (PHASE 2)     -->
-    <!-- ========================================================= -->
+    <!-- UTILS, CORES & BOOTSTRAPPER (Iguales, sin alterar la carga) -->
     <script src="js/shared/video/UniversalPostProcessor.js"></script>
     <script src="js/shared/storage/IndexedDbManager.js"></script>
     <script src="js/shared/storage/RomDecompressor.js"></script>
@@ -215,9 +228,6 @@
     <script src="js/shared/audio/SegaPsg.js"></script>
     <script src="js/shared/audio/UniversalAudioProcessor.js"></script>
 
-    <!-- ========================================================= -->
-    <!-- UNIVERSAL SHARED CPU CORES (PHASE 3)                      -->
-    <!-- ========================================================= -->
     <script src="js/shared/cpu/z80/Z80Registers.js"></script>
     <script src="js/shared/cpu/z80/Z80Alu.js"></script>
     <script src="js/shared/cpu/z80/ZilogZ80.js"></script>
@@ -239,9 +249,6 @@
     <script src="js/shared/cpu/m68k/instructions/M68kLogical.js"></script>
     <script src="js/shared/cpu/m68k/instructions/M68kProgramFlow.js"></script>
 
-    <!-- ========================================================= -->
-    <!-- SEGA MASTER SYSTEM CORE                                   -->
-    <!-- ========================================================= -->
     <script src="js/sms/domain/bus/SegaMasterSystemBus.js"></script>
     <script src="js/sms/domain/cartridge/SegaMasterSystemCartridge.js"></script>
     <script src="js/sms/domain/cartridge/mappers/BaseMapper.js"></script>
@@ -257,9 +264,6 @@
     <script src="js/sms/application/SmsOrchestrator.js"></script>
     <script src="js/sms/presentation/SmsUIController.js"></script>
 
-    <!-- ========================================================= -->
-    <!-- SEGA GENESIS CORE                                         -->
-    <!-- ========================================================= -->
     <script src="js/genesis/domain/bus/GenesisBusZ80.js"></script>
     <script src="js/genesis/domain/bus/GenesisBusM68k.js"></script>
     <script src="js/genesis/domain/controller/GenesisIoPort.js"></script>
@@ -274,42 +278,31 @@
     <script src="js/genesis/application/GenesisOrchestrator.js"></script>
     <script src="js/genesis/presentation/GenesisUIController.js"></script>
 
-    <!-- ========================================================= -->
-    <!-- SUPER NINTENDO (SNES) CORE - Adapters & Stable Engine     -->
-    <!-- ========================================================= -->
     <script src="js/snes/infrastructure/SnesCompatibilityLayer.js"></script>
-    
     <script src="js/snes/domain/cpu/SnesCpu.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuAddressing.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuDataOps.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuArithmetic.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuLogic.js"></script>
-
     <script src="js/snes/domain/spc/SnesSpc.js"></script>
     <script src="js/snes/domain/spc/SnesSpcAddressing.js"></script>
     <script src="js/snes/domain/spc/SnesSpcArithmetic.js"></script>
     <script src="js/snes/domain/spc/SnesSpcLogic.js"></script>
     <script src="js/snes/domain/spc/SnesSpcDataOps.js"></script>
-
     <script src="js/snes/domain/apu/SnesApuTimer.js"></script>
     <script src="js/snes/domain/apu/SnesApu.js"></script>
-
     <script src="js/snes/domain/dsp/SnesDsp.js"></script>
     <script src="js/snes/domain/dsp/SnesDspTables.js"></script>
     <script src="js/snes/domain/dsp/SnesDspDecoder.js"></script>
     <script src="js/snes/domain/dsp/SnesDspChannel.js"></script>
-
     <script src="js/snes/domain/cartridge/SnesCartridge.js"></script>
-
     <script src="js/snes/domain/ppu/SnesPpu.js"></script>
     <script src="js/snes/domain/ppu/SnesPpuTables.js"></script>
     <script src="js/snes/domain/ppu/SnesPpuBackground.js"></script>
     <script src="js/snes/domain/ppu/SnesPpuSprite.js"></script>
     <script src="js/snes/domain/ppu/SnesPpuMode7.js"></script>
     <script src="js/snes/domain/ppu/SnesPpuCompositor.js"></script>
-
     <script src="js/snes/domain/bus/SnesMemoryMap.js"></script>
-
     <script src="js/snes/domain/system/SnesSystem.js"></script>
     <script src="js/snes/domain/system/SnesSystemDma.js"></script>
     <script src="js/snes/domain/system/SnesSystemIoPorts.js"></script>
@@ -318,9 +311,6 @@
     <script src="js/snes/application/SnesOrchestrator.js"></script>
     <script src="js/snes/presentation/SnesUIController.js"></script>
 
-    <!-- ========================================================= -->
-    <!-- SYSTEM BOOTSTRAPPER (Composition Root)                    -->
-    <!-- ========================================================= -->
     <script src="js/app.js"></script>
 </body>
 </html>

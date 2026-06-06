@@ -4,7 +4,7 @@
  * File: js/snes/presentation/SnesUIController.js
  * 
  * Role:
- * Presentation Layer: SnesUIController (Refactored & Decoupled).
+ * Presentation Layer: SnesUIController.
  * Handles DOM UI interactions, file loading processes, WebGL2 shader tuners, 
  * and maps mobile virtual gamepad actions directly to the UniversalInput Manager.
  * 
@@ -171,7 +171,7 @@ class SnesUIController {
         try {
             this.orchestrator.loadCartridge(romData, isHirom);
             
-            // PHASE 4: Trigger the immersive CRT "Warm-up" (Power On) visual effect
+            // Trigger the immersive CRT "Warm-up" (Power On) visual effect
             if (typeof triggerCrtWarmUp === 'function') triggerCrtWarmUp();
 
             document.getElementById('fileselector')?.classList.add('hidden');
@@ -185,8 +185,14 @@ class SnesUIController {
      */
     mapVirtualControls() {
         const buttons = [
-            { id: 'v-up', btn: 'UP' }, { id: 'v-down', btn: 'DOWN' }, { id: 'v-left', btn: 'LEFT' }, { id: 'v-right', btn: 'RIGHT' },
-            { id: 'v-btn1', btn: 'A' }, { id: 'v-btn2', btn: 'B' }, { id: 'v-btnX', btn: 'X' }, { id: 'v-btnY', btn: 'Y' },
+            { id: 'v-up', btn: 'UP' }, 
+            { id: 'v-down', btn: 'DOWN' }, 
+            { id: 'v-left', btn: 'LEFT' }, 
+            { id: 'v-right', btn: 'RIGHT' },
+            { id: 'v-btn1', btn: 'A' }, 
+            { id: 'v-btn2', btn: 'B' }, 
+            { id: 'v-btnX', btn: 'X' }, 
+            { id: 'v-btnY', btn: 'Y' },
             { id: 'v-select', btn: 'SELECT' }
         ];
 

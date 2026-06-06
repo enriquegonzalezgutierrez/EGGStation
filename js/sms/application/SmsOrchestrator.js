@@ -173,7 +173,7 @@ class SmsOrchestrator {
         
         this.vdp = new Sega315_5124_Vdp(this.vdpMode, this.glContext);
         
-        // PHASE 4: Instantiate the shared SegaPsg uncoupled audio core snychronously
+        // Instantiate the shared SegaPsg uncoupled audio core synchronously
         this.psg = new SegaPsg();
         
         this.mmu = new SegaMasterSystemBus(this.cartridge, this.vdp, this.psg, this.ioController);
@@ -229,15 +229,17 @@ class SmsOrchestrator {
     }
 
     /**
-     * PHASE 4: Self-serialize standard engine properties to be handled by the Database Client.
+     * Self-serialize standard engine properties to be handled by the Database Client.
      */
     async saveState() {
         if (this.isRunning && this.cartridge) {
             try {
                 // Collect mapper slots indices directly from DOM mapping
                 const slotsIndices = [-1, -1, -1];
-                for (let i = 0; i < 3; i++) {
-                    slotsIndices[i] = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[i]);
+                if (this.mmu.mapper && this.mmu.mapper.romBanks) {
+                    for (let i = 0; i < 3; i++) {
+                        slotsIndices[i] = this.mmu.mapper.romBanks.indexOf(this.mmu.mapper.mapperSlots[i]);
+                    }
                 }
 
                 const statePayload = {
@@ -309,7 +311,7 @@ class SmsOrchestrator {
     }
 
     /**
-     * PHASE 4: Load and reconstruct serialized state values directly.
+     * Load and reconstruct serialized state values directly.
      */
     async loadState() {
         if (this.isRunning && this.cartridge) {
@@ -448,7 +450,7 @@ class SmsOrchestrator {
         // 3. Copy Memory Bus
         state.mmu.systemWorkRam.set(this.mmu.systemWorkRam);
         
-        // PHASE 4 COMPATIBILITY FIX: Only copy Cartridge RAM if the active cartridge mapper supports it
+        // Only copy Cartridge RAM if the active cartridge mapper supports it
         if (this.mmu.mapper.cartridgeRam) {
             state.mmu.cartridgeRam.set(this.mmu.mapper.cartridgeRam);
         }
@@ -522,7 +524,7 @@ class SmsOrchestrator {
 
         this.mmu.systemWorkRam.set(state.mmu.systemWorkRam);
         
-        // PHASE 4 COMPATIBILITY FIX: Only restore Cartridge RAM if the active cartridge mapper supports it
+        // Only restore Cartridge RAM if the active cartridge mapper supports it
         if (state.mmu.cartridgeRam && this.mmu.mapper?.cartridgeRam) {
             this.mmu.mapper.cartridgeRam.set(state.mmu.cartridgeRam);
         }
@@ -622,7 +624,7 @@ class SmsOrchestrator {
             return;
         }
 
-        // PHASE 4: Update emulator shortcut states dynamically from UniversalInput
+        // Update emulator shortcut states dynamically from UniversalInput
         this.isRewinding = window.UniversalInput ? window.UniversalInput.isPressed("REWIND") : false;
         this.fastForward = window.UniversalInput ? window.UniversalInput.isPressed("FAST_FORWARD") : false;
 
@@ -701,7 +703,7 @@ class SmsOrchestrator {
     }
 
     executeFrame(targetFps) {
-        // --- PHASE 4: SYNC HARDWARE INPUT PINS FROM UNIVERSAL INPUT SERVICE ---
+        // SYNC HARDWARE INPUT PINS FROM UNIVERSAL INPUT SERVICE
         const io = this.ioController;
         if (io && window.UniversalInput) {
             if (window.UniversalInput.isPressed("UP")) io.pressUp(); else io.depressUp();
@@ -748,11 +750,11 @@ class SmsOrchestrator {
     }
 
     // ========================================================================
-    // DEVELOPE SUITE DIAGNOSTICS HOOKS (PHASE 4)
+    // DEVELOPER SUITE DIAGNOSTICS HOOKS (PHASE 4)
     // ========================================================================
 
     /**
-     * PHASE 4: Return current Z80 CPU registers as a polymorphic dictionary.
+     * Return current Z80 CPU registers as a polymorphic dictionary.
      */
     getRegisters() {
         if (!this.cpu) return {};
@@ -770,7 +772,7 @@ class SmsOrchestrator {
     }
 
     /**
-     * PHASE 4: Return the active program disassembly around PC as a string array.
+     * Return the active program disassembly around PC as a string array.
      */
     getDisassembly() {
         if (!this.cpu) return [];
@@ -784,7 +786,7 @@ class SmsOrchestrator {
     }
 
     /**
-     * PHASE 4: Render raw VRAM tile patterns onto the shared diagnostic canvas.
+     * Render raw VRAM tile patterns onto the shared diagnostic canvas.
      */
     drawVramDiagnostics(ctx) {
         this.rasterizeVramTiles(ctx);

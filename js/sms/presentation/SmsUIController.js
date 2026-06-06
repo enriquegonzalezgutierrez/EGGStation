@@ -111,8 +111,6 @@ class SmsUIController {
         };
         bindSlider('sh-curvature');
         bindSlider('sh-scanlines');
-        bindSlider('sh-phosphor');
-        bindSlider('sh-bloom');
 
         // 8. Developer Mode Debug Suite Buttons (Z80 CPU Stepper)
         const dbgPlay = document.getElementById('dbg-play');
@@ -213,7 +211,7 @@ class SmsUIController {
         updateReg('reg-sp', reg.sp);
         updateReg('reg-pc', reg.pc);
 
-        const disasmBox = document.getElementById('disasm-output');
+        const disasmBox = document.getElementById('log');
         if (disasmBox) {
             disasmBox.innerHTML = ''; 
 
@@ -241,10 +239,8 @@ class SmsUIController {
     handleShaderTuningChange() {
         const curvVal = parseInt(document.getElementById('sh-curvature')?.value || "90", 10) / 90;
         const scanVal = parseInt(document.getElementById('sh-scanlines')?.value || "38", 10) / 38;
-        const phosVal = parseInt(document.getElementById('sh-phosphor')?.value || "25", 10) / 25;
-        const blmVal  = parseInt(document.getElementById('sh-bloom')?.value || "15", 10) / 15;
 
-        this.orchestrator.updateShaderUniforms(curvVal, scanVal, phosVal, blmVal);
+        this.orchestrator.updateShaderUniforms(curvVal, scanVal, 1.0, 1.0);
     }
 
     /**
@@ -308,8 +304,8 @@ class SmsUIController {
         mapTouchPin('v-down', 'DOWN');
         mapTouchPin('v-left', 'LEFT');
         mapTouchPin('v-right', 'RIGHT');
-        mapTouchPin('v-btn1', 'B');
-        mapTouchPin('v-btn2', 'A');
+        mapTouchPin('v-btn1', 'B'); // Fire 1
+        mapTouchPin('v-btn2', 'A'); // Fire 2
 
         const vPause = document.getElementById('v-pause');
         if (vPause) {
@@ -390,7 +386,7 @@ class SmsUIController {
             this.orchestrator.loadRom(romName, romData).then(() => {
                 this.handleShaderTuningChange();
                 
-                // PHASE 4: Trigger the immersive CRT "Warm-up" (Power On) visual effect
+                // Trigger the immersive CRT "Warm-up" (Power On) visual effect
                 if (typeof triggerCrtWarmUp === 'function') triggerCrtWarmUp();
             });
             
@@ -448,7 +444,7 @@ class SmsUIController {
 
         const canvas = document.createElement('canvas');
         
-        // PHASE 4: Dynamically calculate dimensions to support downsampled snapshots of any console
+        // Dynamically calculate dimensions to support downsampled snapshots of any console
         const totalPixels = imgDataArray.length / 4;
         const width = totalPixels === 15360 ? 128 : (totalPixels === 76800 || totalPixels === 71680 ? 320 : 256);
         const height = totalPixels / width;

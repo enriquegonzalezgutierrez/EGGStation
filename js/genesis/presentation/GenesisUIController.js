@@ -4,7 +4,7 @@
  * File: js/genesis/presentation/GenesisUIController.js
  * 
  * Role:
- * Presentation Layer: Genesis UI and Input Controller (Refactored & Decoupled).
+ * Presentation Layer: Genesis UI and Input Controller.
  * Maps UI triggers (buttons, sliders, debug options) and directs emulated controller 
  * lines to the universal shared UniversalInput Manager.
  * 
@@ -24,11 +24,12 @@ class GenesisUIController {
     constructor(orchestrator) {
         this.orchestrator = orchestrator;
         this.bindEvents();
+        this.bindVirtualGamepadEvents();
 
         // Swap the registers panel DOM layout to support the 16 M68K registers
         this.swapTo68kRegisters();
 
-        // Inject the universal shared input poller into the controller manager (DIP)
+        // Inject the universal shared input poller into the controller manager
         if (this.orchestrator && this.orchestrator.controllerManager) {
             this.orchestrator.controllerManager.bindInputPoller((playerId, buttonId) => {
                 return this.inputRequested(playerId, buttonId);
@@ -92,8 +93,6 @@ class GenesisUIController {
         };
         bindSlider('sh-curvature');
         bindSlider('sh-scanlines');
-        bindSlider('sh-phosphor');
-        bindSlider('sh-bloom');
 
         // 4. Developer Mode Debugger Suite Buttons & Inputs (68K CPU Stepper)
         const dbgPlay = document.getElementById('dbg-play');
@@ -142,7 +141,7 @@ class GenesisUIController {
     }
 
     /**
-     * Swaps the original Z80 register grid DOM layout snychronously to hold M68K registers.
+     * Swaps the original Z80 register grid DOM layout synchronously to hold M68K registers.
      */
     swapTo68kRegisters() {
         const grid = document.querySelector('.registers-grid');
@@ -199,7 +198,7 @@ class GenesisUIController {
         if (srEl) srEl.textContent = m68k.sr.toString(16).toUpperCase().padStart(4, '0');
 
         // Update Disassembly Terminal readout
-        const disasmBox = document.getElementById('disasm-output');
+        const disasmBox = document.getElementById('log');
         if (disasmBox) {
             disasmBox.innerHTML = '';
             const pcHex = m68k.pc.toString(16).toUpperCase().padStart(6, '0');
@@ -234,19 +233,59 @@ class GenesisUIController {
             case GENESIS_CONTROLLER_LEFT:   return window.UniversalInput.isPressed("LEFT");
             case GENESIS_CONTROLLER_RIGHT:  return window.UniversalInput.isPressed("RIGHT");
             
-            case GENESIS_CONTROLLER_A:      return window.UniversalInput.isPressed("B"); // Maps cross to standard Sega A
-            case GENESIS_CONTROLLER_B:      return window.UniversalInput.isPressed("A"); // Maps circle to standard Sega B
-            case GENESIS_CONTROLLER_C:      return window.UniversalInput.isPressed("X"); // Maps square to standard Sega C
+            case GENESIS_CONTROLLER_A:      return window.UniversalInput.isPressed("Y"); // Maps Y on gamepad/keyboard to Sega A
+            case GENESIS_CONTROLLER_B:      return window.UniversalInput.isPressed("B"); // Maps B on gamepad/keyboard to Sega B
+            case GENESIS_CONTROLLER_C:      return window.UniversalInput.isPressed("A"); // Maps A on gamepad/keyboard to Sega C
             
-            case GENESIS_CONTROLLER_X:      return window.UniversalInput.isPressed("Y"); // Maps triangle to Sega X
-            case GENESIS_CONTROLLER_Y:      return window.UniversalInput.isPressed("L"); // Sega Y
-            case GENESIS_CONTROLLER_Z:      return window.UniversalInput.isPressed("R"); // Sega Z
+            case GENESIS_CONTROLLER_X:      return window.UniversalInput.isPressed("X"); // Extra 6-button mappings
+            case GENESIS_CONTROLLER_Y:      return window.UniversalInput.isPressed("L"); 
+            case GENESIS_CONTROLLER_Z:      return window.UniversalInput.isPressed("R"); 
             
             case GENESIS_CONTROLLER_START:  return window.UniversalInput.isPressed("START");
             case GENESIS_CONTROLLER_MODE:   return window.UniversalInput.isPressed("SELECT");
         }
 
         return false;
+    }
+
+    /**
+     * Mobile screen virtual gamepad configuration mapping.
+     */
+    bindVirtualGamepadEvents() {
+        const mapTouchPin = (elementId, semanticButton) => {
+            const element = document.getElementById(elementId);
+            if (!element) return;
+
+            element.addEventListener('touchstart', (e) => {
+                e.preventDefault(); 
+                window.UniversalInput.virtualButtons[semanticButton] = true;
+            });
+
+            const releaseHandler = (e) => {
+                e.preventDefault();
+                window.UniversalInput.virtualButtons[semanticButton] = false;
+            };
+
+            element.addEventListener('touchend', releaseHandler);
+            element.addEventListener('touchcancel', releaseHandler);
+        };
+
+        mapTouchPin('v-up', 'UP');
+        mapTouchPin('v-down', 'DOWN');
+        mapTouchPin('v-left', 'LEFT');
+        mapTouchPin('v-right', 'RIGHT');
+        mapTouchPin('v-btn1', 'A'); // Mapped to gamepad coordinates
+        mapTouchPin('v-btn2', 'B');
+        mapTouchPin('v-btnX', 'X');
+        mapTouchPin('v-btnY', 'Y');
+
+        const vPause = document.getElementById('v-pause');
+        if (vPause) {
+            vPause.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                this.orchestrator.togglePause();
+            });
+        }
     }
 
     /**
@@ -283,7 +322,7 @@ class GenesisUIController {
             // Boot the resolved rom
             this.orchestrator.loadRom(romName, romData);
             
-            // PHASE 4: Trigger the immersive CRT "Warm-up" (Power On) visual effect
+            // Trigger the immersive CRT "Warm-up" (Power On) visual effect
             if (typeof triggerCrtWarmUp === 'function') triggerCrtWarmUp();
 
             this.hideUIForGameplay();
@@ -334,10 +373,8 @@ class GenesisUIController {
     handleShaderTuningChange() {
         const curvVal = parseInt(document.getElementById('sh-curvature')?.value || "90", 10) / 90;
         const scanVal = parseInt(document.getElementById('sh-scanlines')?.value || "38", 10) / 38;
-        const phosVal = parseInt(document.getElementById('sh-phosphor')?.value || "25", 10) / 25;
-        const blmVal  = parseInt(document.getElementById('sh-bloom')?.value || "15", 10) / 15;
 
-        this.orchestrator.updateShaderUniforms(curvVal, scanVal, phosVal, blmVal);
+        this.orchestrator.updateShaderUniforms(curvVal, scanVal, 1.0, 1.0);
     }
 
     /**

@@ -6,12 +6,8 @@
  * 
  * Defines a dark-mode Synthwave aesthetic. Features 3 responsive states:
  * 1. Desktop (Canvas center, glass sidebar, expanding developer suite)
- * 2. Mobile Portrait (Canvas top, D-PAD bottom, sidebar hidden in drawer)
- * 3. Mobile Landscape (Canvas 100%, overlaid translucent D-PAD)
- * 
- * PERFORMANCE OPTIMIZATIONS:
- * - Employs GPU Hardware Layer Hoisting (translate3d, will-change) on display 
- *   viewports to bypass UI Layout Thrashing during 60Hz canvas updates.
+ * 2. Mobile Portrait (Canvas top, fluid D-PAD bottom, sliding glass drawer for settings)
+ * 3. Mobile Landscape (Canvas 100%, overlaid translucent D-PAD, safe-area aware)
  */
 
 /* ==========================================================================
@@ -20,7 +16,7 @@
 :root {
     --bg-dark: #09090e;
     --bg-surface: #15151e;
-    --glass-bg: rgba(21, 21, 30, 0.7);
+    --glass-bg: rgba(21, 21, 30, 0.75);
     --glass-border: rgba(255, 255, 255, 0.08);
     --text-main: #f1f1f4;
     --text-muted: #8e8e9f;
@@ -29,6 +25,7 @@
     --success: #04d361;
     --snes-purple: #b3a6db;
     --snes-purple-dark: #5e5189;
+    --drawer-width: 320px;
 }
 
 /* ==========================================================================
@@ -51,6 +48,10 @@ body {
     height: 100vh;
 }
 
+/* Utils */
+.hidden { display: none !important; }
+.show-on-mobile { display: none !important; }
+
 /* ==========================================================================
    App Layout (Desktop First)
    ========================================================================== */
@@ -59,7 +60,7 @@ body {
     grid-template-areas: 
         "header header"
         "stage sidebar";
-    grid-template-columns: 1fr 340px;
+    grid-template-columns: 1fr var(--drawer-width);
     grid-template-rows: 60px 1fr;
     height: 100%;
     width: 100%;
@@ -68,13 +69,12 @@ body {
     transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Master Grid Expansion when Developer Diagnostics Panel is toggled */
 #app-container.dev-mode {
     grid-template-areas: 
         "header header"
         "stage sidebar"
         "debugger debugger";
-    grid-template-rows: 60px 1fr 340px; /* PHASE 4: Increased from 280px for standard fitting */
+    grid-template-rows: 60px 1fr 340px; 
 }
 
 /* ==========================================================================
@@ -88,7 +88,7 @@ body {
     padding: 0 24px;
     border-bottom: 1px solid var(--glass-border);
     background: var(--bg-surface);
-    z-index: 10;
+    z-index: 50;
 }
 
 .brand {
@@ -122,7 +122,6 @@ body {
     gap: 20px;
 }
 
-/* System Dropdown styling */
 .sys-selector {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--glass-border);
@@ -171,48 +170,36 @@ body {
     width: 100%;
     max-width: 960px; 
     max-height: calc(100vh - 160px); 
-    aspect-ratio: 4 / 3; /* Immersive standard retro television 4:3 ratio */
+    aspect-ratio: 4 / 3; 
     background: #000;
     border-radius: 8px;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8), 0 0 0 1px var(--glass-border);
     overflow: hidden;
-    
-    /* Prepares GPU memory mapping context for CRT Warm-Up/Power-Off animations */
     transform-origin: center center;
     will-change: transform, filter, opacity;
-
-    /* PHASE 4: Snychronize CRT vertical resize transitions with Dev Suite panel curtain */
     transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-/* Dynamically compress CRT height when developer panel expands downward */
 #app-container.dev-mode #crt-wrapper {
-    max-height: calc(100vh - 500px); /* PHASE 4: Adjusted from 440px to balance the grid */
+    max-height: calc(100vh - 500px);
 }
 
 canvas {
     width: 100%;
     height: 100%;
     display: block;
-    object-fit: contain; /* Automatically centers and scales display edge-to-edge */
+    object-fit: contain; 
 }
 
-/* Hardware standard pixel rendering & GPU hardware acceleration triggers */
 #smsdisplay, #webgldisplay {
     image-rendering: -moz-crisp-edges;
     image-rendering: -webkit-crisp-edges;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
-    
-    /* Forces the Canvas onto its own GPU Compositing Layer to bypass UI layout processing */
     transform: translate3d(0, 0, 0);
     will-change: transform, contents;
     backface-visibility: hidden;
     perspective: 1000;
-}
-
-.hidden {
-    display: none !important;
 }
 
 /* Overlay Uploader Styles */
@@ -224,10 +211,7 @@ canvas {
     z-index: 20;
 }
 
-.pulse-anim {
-    animation: pulse 2s infinite;
-}
-
+.pulse-anim { animation: pulse 2s infinite; }
 @keyframes pulse {
     0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 0, 127, 0.4); }
     70% { transform: scale(1.05); box-shadow: 0 0 0 10px rgba(255, 0, 127, 0); }
@@ -242,7 +226,7 @@ canvas {
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-left: 1px solid var(--glass-border);
-    will-change: transform; /* Protects other GPU layers from backdrop redraw drops */
+    will-change: transform; 
 }
 
 #settings-panel {
@@ -252,7 +236,22 @@ canvas {
     gap: 24px;
     padding: 24px;
     overflow-y: auto;
-    z-index: 50;
+    z-index: 100;
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.drawer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--glass-border);
+    padding-bottom: 12px;
+    margin-bottom: -10px;
+}
+
+.drawer-header h2 {
+    font-size: 1.1rem;
+    color: var(--neon-pink);
 }
 
 .panel-section h3 {
@@ -275,7 +274,6 @@ canvas {
     color: var(--text-main);
 }
 
-/* Inputs & Buttons */
 select, .btn {
     width: 100%;
     background: rgba(255, 255, 255, 0.05);
@@ -294,9 +292,7 @@ select option {
     color: var(--text-main) !important;
 }
 
-select:hover, .btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-}
+select:hover, .btn:hover { background: rgba(255, 255, 255, 0.1); }
 
 .btn {
     display: flex;
@@ -321,7 +317,6 @@ select:hover, .btn:hover {
     padding: 10px;
 }
 
-/* Redesigned Tactile Hardware Eject Button */
 .eject-btn-retro {
     background: linear-gradient(180deg, #2a2a35 0%, #181820 100%);
     border: 2px solid #3c3c4e;
@@ -330,14 +325,6 @@ select:hover, .btn:hover {
     font-family: monospace;
     font-weight: bold;
     letter-spacing: 0.5px;
-    transition: all 0.1s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    padding: 12px 14px;
-    border-radius: 6px;
-    cursor: pointer;
 }
 
 .eject-btn-retro:hover {
@@ -351,13 +338,7 @@ select:hover, .btn:hover {
     box-shadow: none;
 }
 
-.icon-eject {
-    transition: transform 0.2s ease;
-}
-
-.eject-btn-retro:hover .icon-eject {
-    transform: translateY(-2px); /* Mechanical upward slide effect on hover */
-}
+.eject-btn-retro:hover .icon-eject { transform: translateY(-2px); }
 
 /* Savestate Thumbnail */
 .savestate-preview {
@@ -369,30 +350,20 @@ select:hover, .btn:hover {
     overflow: hidden;
     margin-bottom: 12px;
 }
-
 .savestate-preview img {
     width: 100%;
     height: 100%;
     object-fit: cover;
     image-rendering: pixelated;
 }
-
 .savestate-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 10px;
 }
 
-.panel-footer {
-    margin-top: auto;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    text-align: center;
-    line-height: 1.5;
-}
-
 /* ==========================================================================
-   Developer Diagnostics Suite (Hacker-Console CSS)
+   Developer Diagnostics Suite 
    ========================================================================== */
 #developer-suite {
     grid-area: debugger;
@@ -414,69 +385,47 @@ select:hover, .btn:hover {
     margin-bottom: 10px;
 }
 
-.dev-btn-group {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 6px;
-}
+.dev-btn-group { display: grid; grid-template-columns: 1fr; gap: 6px; }
+.dev-btn { padding: 8px 12px; font-size: 0.75rem; }
 
-.dev-btn {
-    padding: 8px 12px;
-    font-size: 0.75rem;
-}
-
-/* Code Disassembly Terminal Box */
 .terminal-box {
     background: #000;
     border: 1px solid var(--glass-border);
     border-radius: 6px;
     padding: 10px 14px;
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+    font-family: "SFMono-Regular", Consolas, monospace;
     font-size: 0.82rem;
     height: calc(100% - 24px);
     overflow-y: auto;
     line-height: 1.6;
 }
 
-.disasm-line {
-    color: var(--text-muted);
-    white-space: pre-wrap;
-    border-radius: 2px;
-    padding: 2px 6px;
-}
-
+.disasm-line { color: var(--text-muted); white-space: pre-wrap; padding: 2px 6px; }
 .disasm-line.active {
     color: var(--success);
     background: rgba(4, 211, 97, 0.12);
     font-weight: bold;
 }
 
-/* Registers readout grids */
 .registers-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 4px 16px; /* PHASE 4: Compressed gap from 8px */
+    gap: 4px 16px;
     font-family: monospace;
-    font-size: 0.85rem; /* PHASE 4: Compressed font size from 0.95rem */
+    font-size: 0.85rem;
     background: rgba(0, 0, 0, 0.2);
-    padding: 8px 12px; /* PHASE 4: Compressed padding */
+    padding: 8px 12px;
     border-radius: 6px;
     border: 1px solid var(--glass-border);
 }
+.registers-grid span { color: var(--neon-pink); font-weight: bold; }
 
-.registers-grid span {
-    color: var(--neon-pink);
-    font-weight: bold;
-}
-
-/* VRAM Canvas Viewer container */
 .vram-preview-wrapper {
     display: flex;
     justify-content: center;
     align-items: center;
     height: calc(100% - 24px);
 }
-
 #vram-canvas {
     background: #000;
     border: 1px solid var(--glass-border);
@@ -485,17 +434,15 @@ select:hover, .btn:hover {
     display: block;
 }
 
-#dbg-breakpoint {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--glass-border);
-    color: var(--neon-pink);
-    font-family: monospace;
-    font-size: 0.9rem;
-    padding: 8px;
-    border-radius: 4px;
-    outline: none;
-    text-align: center;
-    font-weight: bold;
+#mobile-drawer-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 90;
+    opacity: 1;
+    transition: opacity 0.3s ease;
 }
 
 /* ==========================================================================
@@ -503,115 +450,131 @@ select:hover, .btn:hover {
    ========================================================================== */
 #virtual-gamepad {
     display: none;
-    touch-action: none; /* Prevents OS zoom/scroll when playing */
+    touch-action: none; 
 }
 
 /* ==========================================================================
    MEDIA QUERIES - MOBILE PORTRAIT (Vertical)
    ========================================================================== */
 @media (max-width: 900px) {
-    /* Suspend developer mode debugger entirely on mobile displays */
-    #developer-suite, #dev-toggle-btn {
-        display: none !important;
-    }
-    #app-container.dev-mode {
-        grid-template-rows: 50px 1fr;
-    }
+    .hide-on-mobile { display: none !important; }
+    .show-on-mobile { display: flex !important; }
+
+    /* Developer Mode blocked on mobile */
+    #developer-suite { display: none !important; }
+    #app-container.dev-mode { grid-template-rows: 55px 1fr; }
 
     #app-container {
         grid-template-areas: 
             "header"
             "stage";
         grid-template-columns: 1fr;
-        grid-template-rows: 50px 1fr;
+        grid-template-rows: 55px 1fr;
     }
 
-    .brand-logo {
-        display: none; /* Hide logo on small screens to fit the dropdown */
-    }
+    .brand-logo { display: none; }
 
     #stage {
-        padding: 10px;
+        padding: 10px 5px;
         justify-content: flex-start;
     }
 
-    /* Screen at the top */
     #crt-wrapper {
-        border-radius: 4px;
-        box-shadow: none;
+        border-radius: 6px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.8);
         max-width: 100%;
-        max-height: none;
+        max-height: 45vh; /* Limit screen height to make room for gamepad */
     }
 
-    /* Virtual Gamepad underneath */
+    /* Off-Canvas Mobile Drawer Settings */
+    #settings-panel {
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: var(--drawer-width);
+        height: 100vh;
+        border-left: 1px solid var(--glass-border);
+    }
+    .drawer-closed {
+        transform: translateX(100%);
+    }
+    .drawer-open {
+        transform: translateX(0);
+        box-shadow: -10px 0 30px rgba(0,0,0,0.8);
+    }
+
+    /* Virtual Gamepad Structure */
     #virtual-gamepad {
         display: flex;
         width: 100%;
         flex: 1;
-        justify-content: space-between;
-        align-items: center;
-        padding: 20px;
+        position: relative;
+        margin-top: 10px;
     }
 
-    /* D-PAD CSS Construction */
+    /* Fluid D-PAD CSS */
     .d-pad {
-        position: relative;
-        width: 120px;
-        height: 120px;
+        position: absolute;
+        bottom: 20px;
+        left: 20px;
+        width: 130px;
+        height: 130px;
     }
 
     .v-dir {
         position: absolute;
-        width: 40px;
-        height: 40px;
-        background: rgba(255, 255, 255, 0.15);
-        border: none;
-        border-radius: 4px;
+        width: 44px;
+        height: 44px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 2px solid rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
     }
+    .v-dir:active { background: rgba(255, 0, 127, 0.5); border-color: var(--neon-pink); }
 
-    .v-dir:active { background: var(--neon-pink); }
-    #v-up { top: 0; left: 40px; border-top-left-radius: 10px; border-top-right-radius: 10px; }
-    #v-down { bottom: 0; left: 40px; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px;}
-    #v-left { left: 0; top: 40px; border-top-left-radius: 10px; border-bottom-left-radius: 10px;}
-    #v-right { right: 0; top: 40px; border-top-right-radius: 10px; border-bottom-right-radius: 10px;}
+    #v-up { top: 0; left: 43px; border-bottom: none; border-radius: 8px 8px 0 0; }
+    #v-down { bottom: 0; left: 43px; border-top: none; border-radius: 0 0 8px 8px; }
+    #v-left { left: 0; top: 43px; border-right: none; border-radius: 8px 0 0 8px; }
+    #v-right { right: 0; top: 43px; border-left: none; border-radius: 0 8px 8px 0; }
     
     .v-center {
         position: absolute;
-        top: 40px; left: 40px;
-        width: 40px; height: 40px;
-        background: rgba(255, 255, 255, 0.15);
+        top: 43px; left: 43px;
+        width: 44px; height: 44px;
+        background: rgba(255, 255, 255, 0.12);
+        z-index: -1;
     }
 
-    /* SNES-style Action Buttons Diamond Layout */
+    /* Diamond Action Buttons (SNES / Xbox Layout) */
     .action-buttons {
-        position: relative;
-        width: 140px;
-        height: 140px;
-        transform: rotate(-15deg);
+        position: absolute;
+        bottom: 20px;
+        right: 20px;
+        width: 130px;
+        height: 130px;
     }
 
     .v-action {
         position: absolute;
-        width: 50px;
-        height: 50px;
+        width: 48px;
+        height: 48px;
         border-radius: 50%;
-        border: 2px solid rgba(255, 255, 255, 0.3);
+        border: 2px solid rgba(255, 255, 255, 0.2);
         color: #fff;
         font-size: 1.1rem;
         font-weight: bold;
+        box-shadow: inset 0 2px 5px rgba(0,0,0,0.5);
     }
+    .v-action:active { border-color: var(--neon-pink); transform: scale(0.95); }
 
-    .v-action:active { border-color: var(--neon-pink); }
+    .btn-top { top: 0; left: 41px; background: var(--snes-purple-dark); }    /* X */
+    .btn-bottom { bottom: 0; left: 41px; background: var(--snes-purple-dark); } /* B */
+    .btn-left { top: 41px; left: 0; background: var(--snes-purple); }         /* Y */
+    .btn-right { top: 41px; right: 0; background: var(--snes-purple); }       /* A */
 
-    /* specific coloring for SNES buttons */
-    #v-btnY { top: 45px; left: 0; background: var(--snes-purple); }
-    #v-btnX { top: 0; left: 45px; background: var(--snes-purple-dark); }
-    #v-btn2 { top: 90px; left: 45px; background: var(--snes-purple-dark); } /* B button */
-    #v-btn1 { top: 45px; left: 90px; background: var(--snes-purple); } /* A button */
-
+    /* Center Select & Start */
     .center-controls {
         position: absolute;
-        bottom: 30px;
+        bottom: 20px;
         left: 50%;
         transform: translateX(-50%);
         display: flex;
@@ -620,25 +583,22 @@ select:hover, .btn:hover {
 
     .v-system-btn {
         background: rgba(255, 255, 255, 0.1);
-        border: none;
+        border: 1px solid rgba(255, 255, 255, 0.2);
         color: #fff;
-        padding: 8px 16px;
+        padding: 6px 16px;
         border-radius: 20px;
-        font-size: 0.7
+        font-size: 0.7rem;
+        font-weight: bold;
+        letter-spacing: 1px;
     }
-    .v-system-btn:active { background: var(--success); }
-
-    /* Hide Sidebar, convert to Mobile Drawer */
-    #settings-panel {
-        display: none;
-    }
+    .v-system-btn:active { background: var(--success); border-color: #fff; }
 }
 
 /* ==========================================================================
    MEDIA QUERIES - MOBILE LANDSCAPE (Horizontal Immersive)
    ========================================================================== */
 @media (max-height: 500px) and (orientation: landscape) {
-    #top-bar { display: none; } /* Hide header for maximum screen space */
+    #top-bar { display: none !important; }
     
     #app-container {
         grid-template-areas: "stage";
@@ -656,96 +616,80 @@ select:hover, .btn:hover {
         aspect-ratio: auto;
     }
 
+    #mobile-drawer-overlay { z-index: 110; }
+
     /* Overlay Virtual Gamepad on top of Canvas */
     #virtual-gamepad {
         display: block;
         position: absolute;
         top: 0; left: 0; width: 100%; height: 100%;
-        pointer-events: none; /* Let touches pass through where there are no buttons */
+        pointer-events: none; 
         z-index: 20;
     }
 
-    .d-pad, .action-buttons, .center-controls {
-        pointer-events: auto; /* Re-enable touch for actual buttons */
+    .d-pad, .action-buttons, .center-controls, .floating-menu-btn {
+        pointer-events: auto; 
         position: absolute;
     }
 
-    /* Position D-Pad bottom left */
+    /* Safe Area Insets for modern phones with Notches / Dynamic Island */
     .d-pad {
         bottom: 20px;
-        left: 30px;
-        width: 130px; height: 130px;
-        opacity: 0.6;
+        left: max(30px, env(safe-area-inset-left));
+        opacity: 0.45;
+        transform: scale(0.9);
     }
 
-    /* Position Action Buttons bottom right */
     .action-buttons {
         bottom: 20px;
-        right: 30px;
-        opacity: 0.6;
+        right: max(30px, env(safe-area-inset-right));
+        opacity: 0.45;
+        transform: scale(0.9);
     }
 
     .center-controls {
-        top: 10px;
+        top: 15px;
         left: 50%;
         transform: translateX(-50%);
-        opacity: 0.5;
+        opacity: 0.4;
     }
 
-    /* Hide Sidebar completely in landscape gameplay */
-    #settings-panel { display: none; }
+    .floating-menu-btn {
+        display: flex !important;
+        top: 15px;
+        right: max(20px, env(safe-area-inset-right));
+        width: 40px; height: 40px;
+        border-radius: 50%;
+        background: var(--glass-bg);
+        border: 1px solid var(--glass-border);
+        color: #fff;
+        align-items: center;
+        justify-content: center;
+        z-index: 30;
+    }
+
+    /* Adjust drawer height and padding for landscape */
+    #settings-panel {
+        padding-top: env(safe-area-inset-top, 10px);
+        padding-bottom: env(safe-area-inset-bottom, 10px);
+    }
 }
 
 /* ==========================================================================
    IMMERSIVE CRT CATHODE-RAY TELEVISION SIMULATOR ANIMATIONS (PHASE 4)
    ========================================================================== */
-
-/* CRT TV Warm-up (Power On) */
-.crt-warm-up {
-    animation: crtWarmUp 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
-}
-
-/* CRT TV Power-off (Collapse Horizontal and disappear) */
-.crt-power-off {
-    animation: crtPowerOff 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
-}
+.crt-warm-up { animation: crtWarmUp 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards; }
+.crt-power-off { animation: crtPowerOff 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards; }
 
 @keyframes crtWarmUp {
-    0% {
-        transform: scale3d(0, 0.001, 1);
-        filter: brightness(10) contrast(5);
-        opacity: 0;
-    }
-    40% {
-        transform: scale3d(1, 0.001, 1);
-        filter: brightness(8) contrast(3);
-        opacity: 1;
-    }
-    100% {
-        transform: scale3d(1, 1, 1);
-        filter: brightness(1) contrast(1);
-        opacity: 1;
-    }
+    0% { transform: scale3d(0, 0.001, 1); filter: brightness(10) contrast(5); opacity: 0; }
+    40% { transform: scale3d(1, 0.001, 1); filter: brightness(8) contrast(3); opacity: 1; }
+    100% { transform: scale3d(1, 1, 1); filter: brightness(1) contrast(1); opacity: 1; }
 }
 
 @keyframes crtPowerOff {
-    0% {
-        transform: scale3d(1, 1, 1);
-        filter: brightness(1) contrast(1);
-        opacity: 1;
-    }
-    40% {
-        transform: scale3d(1, 0.002, 1);
-        filter: brightness(5) contrast(3);
-        opacity: 1;
-    }
-    99% {
-        transform: scale3d(0.001, 0.002, 1);
-        filter: brightness(10) contrast(5);
-        opacity: 0.1;
-    }
-    100% {
-        transform: scale3d(0, 0, 0);
-        opacity: 0;
-    }
+    0% { transform: scale3d(1, 1, 1); filter: brightness(1) contrast(1); opacity: 1; }
+    40% { transform: scale3d(1, 0.002, 1); filter: brightness(5) contrast(3); opacity: 1; }
+    99% { transform: scale3d(0.001, 0.002, 1); filter: brightness(10) contrast(5); opacity: 0.1; }
+    100% { transform: scale3d(0, 0, 0); opacity: 0; }
 }

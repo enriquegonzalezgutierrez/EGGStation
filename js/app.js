@@ -188,7 +188,7 @@ function bootConsole(consoleType) {
                 throw new Error(`Unknown console type: ${consoleType}`);
         }
         
-        // PHASE 4: Expose active orchestrator instances on the global window scope snychronously
+        // Expose active orchestrator instances on the global window scope synchronously
         window.activeOrchestrator = activeOrchestrator;
         window.activeController = activeController;
         
@@ -238,9 +238,6 @@ function bootConsole(consoleType) {
 // GLOBAL PERSISTENT SAVE/LOAD HOTKEYS & BUTTON BINDINGS
 // ========================================================================
 window.addEventListener('keydown', (e) => {
-    // Diagnostic input log
-    console.log("[EGGStation::Input] Key pressed: ", e.key);
-
     if (!activeOrchestrator) return;
 
     // F2: Universal Save State
@@ -259,7 +256,6 @@ window.addEventListener('keydown', (e) => {
 function triggerSaveAction() {
     if (activeOrchestrator && typeof activeOrchestrator.saveState === 'function') {
         activeOrchestrator.saveState().then(() => {
-            // PHASE 4: Call the global uncoupled preview updater
             updateSaveStatePreview();
         });
     }
@@ -272,7 +268,7 @@ function triggerLoadAction() {
 }
 
 /**
- * PHASE 4: Universal uncoupled save state snapshot rendering service.
+ * Universal uncoupled save state snapshot rendering service.
  * Automatically resolves and scales any emulated system thumbnail dynamically.
  */
 function updateSaveStatePreview() {
@@ -313,21 +309,21 @@ function updateSaveStatePreview() {
 }
 
 /**
- * PHASE 4: Trigger the immersive CRT "Warm-up" (Power On) visual effect.
- * Forces DOM reflow to restart CSS animations snychronously on successful loads.
+ * Trigger the immersive CRT "Warm-up" (Power On) visual effect.
+ * Forces DOM reflow to restart CSS animations synchronously on successful loads.
  */
 function triggerCrtWarmUp() {
     const crtWrapper = document.getElementById("crt-wrapper");
     if (crtWrapper) {
         crtWrapper.classList.remove("crt-power-off");
-        void crtWrapper.offsetWidth; // Force snychronous reflow (repaint context)
+        void crtWrapper.offsetWidth; // Force synchronous reflow (repaint context)
         crtWrapper.classList.add("crt-warm-up");
     }
 }
 window.triggerCrtWarmUp = triggerCrtWarmUp;
 
 // ========================================================================
-// GLOBAL EVENT LISTENERS
+// GLOBAL EVENT LISTENERS & MOBILE UI HANDLERS
 // ========================================================================
 document.addEventListener("DOMContentLoaded", () => {
     const consoleSelector = document.getElementById('consoleSelector');
@@ -339,20 +335,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const saveBtn = document.getElementById('btn-save');
     const loadBtn = document.getElementById('btn-load');
 
-    if (saveBtn) {
-        saveBtn.addEventListener('click', () => {
-            console.log("[EGGStation::UI] Save State Button Clicked.");
-            triggerSaveAction();
-        });
-    }
+    if (saveBtn) saveBtn.addEventListener('click', triggerSaveAction);
+    if (loadBtn) loadBtn.addEventListener('click', triggerLoadAction);
 
-    if (loadBtn) {
-        loadBtn.addEventListener('click', () => {
-            console.log("[EGGStation::UI] Load State Button Clicked.");
-            triggerLoadAction();
-        });
-    }
-
+    // Initial system boot
     console.log(`[EGGStation::Bootstrapper] Initializing default system configuration...`);
     bootConsole("SMS");
 
@@ -385,7 +371,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 crtWrapper.classList.add("crt-power-off");
             }
 
-            // PHASE 4: Wait 500ms for the horizontal CRT collapse animation to finish before clearing state
+            // Wait 500ms for the horizontal CRT collapse animation to finish before clearing state
             setTimeout(() => {
                 if (activeOrchestrator) {
                     activeOrchestrator.isRunning = false;
@@ -407,7 +393,46 @@ document.addEventListener("DOMContentLoaded", () => {
                 document.getElementById("fileselector")?.classList.remove("hidden");
                 const fpsSpan = document.getElementById("fpsSpan");
                 if (fpsSpan) fpsSpan.textContent = "0.0 FPS";
+                
+                // If on mobile, close the drawer after ejecting
+                if (window.innerWidth <= 900) {
+                    closeMobileDrawer();
+                }
             }, 500);
         });
     }
+
+    // ====================================================================
+    // MOBILE RESPONSIVE UI HANDLERS (Drawer Menu)
+    // ====================================================================
+    const settingsPanel = document.getElementById('settings-panel');
+    const overlay = document.getElementById('mobile-drawer-overlay');
+    const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+    const landscapeMenuBtn = document.getElementById('landscape-menu-btn');
+    const closeMenuBtn = document.getElementById('close-menu-btn');
+
+    const openMobileDrawer = () => {
+        if (settingsPanel) {
+            settingsPanel.classList.remove('drawer-closed');
+            settingsPanel.classList.add('drawer-open');
+        }
+        if (overlay) {
+            overlay.classList.remove('hidden');
+        }
+    };
+
+    const closeMobileDrawer = () => {
+        if (settingsPanel) {
+            settingsPanel.classList.remove('drawer-open');
+            settingsPanel.classList.add('drawer-closed');
+        }
+        if (overlay) {
+            overlay.classList.add('hidden');
+        }
+    };
+
+    if (mobileMenuBtn) mobileMenuBtn.addEventListener('click', openMobileDrawer);
+    if (landscapeMenuBtn) landscapeMenuBtn.addEventListener('click', openMobileDrawer);
+    if (closeMenuBtn) closeMenuBtn.addEventListener('click', closeMobileDrawer);
+    if (overlay) overlay.addEventListener('click', closeMobileDrawer);
 });
