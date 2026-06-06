@@ -4,18 +4,7 @@
  * File: js/genesis/application/GenesisOrchestrator.js
  * 
  * Role:
- * Application Layer: Sega Genesis Orchestrator.
- * Coordinates the master system synchronization, clock cycle divisions, 
- * frame pacing, and maps physical CPU buses to the VDP, PSG, and FM coprocessors.
- * 
- * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Isolates loop orchestration, frame 
- *    timing, and audio buffer dispatching from the DOM.
- * 2. Liskov Substitution Principle (LSP): Fully implements the unified orchestrator 
- *    interface expected by the app.js Bootstrapper (loadRom, stop, setAudioEnabled).
- * 3. Dependency Inversion Principle (DIP): Relies directly on the abstract 
- *    Universal IndexedDbManager client rather than tightly coupling to legacy 
- *    custom serializer scripts.
+ * Application Layer: Sega Genesis Orchestrator (Corregido: FPS Matemáticamente Reales).
  */
 
 class GenesisOrchestrator {
@@ -45,8 +34,11 @@ class GenesisOrchestrator {
         this.animationFrameId = null;
         this.lastTime = 0;
         this.accumulatedTime = 0;
+        
+        // CORREGIDO: Contadores estables de frames reales
+        this.fpsCount = 0;
+        this.fpsTimer = 0;
         this.framesRendered = 0;
-        this.lastDeltaTime = 0; 
 
         // State Serializer and GC-Free Rewind Pool
         this.serializer = new IndexedDbManager();
@@ -59,8 +51,6 @@ class GenesisOrchestrator {
 
         // Hardware Domain Instantiation
         this.vdp = new GenesisVdp();
-        
-        // Instantiate the shared SegaPsg uncoupled audio core synchronously
         this.psg = new SegaPsg();
         this.fm = new GenesisYm2612();
         this.controllerManager = new GenesisControllerManager();
@@ -98,9 +88,6 @@ class GenesisOrchestrator {
         this.loop = this.loop.bind(this);
     }
 
-    /**
-     * Pre-allocates objects for the Real-Time Rewind state pool.
-     */
     initializeStatePool() {
         this.rewindHistory = [];
         for (let i = 0; i < this.maxRewindStates; i++) {
@@ -117,7 +104,10 @@ class GenesisOrchestrator {
         this.currentCycle = 0;
         this.accumulatedTime = 0;
         this.framesRendered = 0;
-        this.lastDeltaTime = 0;
+        
+        // CORREGIDO: Reseteo de contadores en inicialización
+        this.fpsCount = 0;
+        this.fpsTimer = performance.now();
 
         this.glbFrameBuffer.fill(0);
         this.prevFrameBuffer.fill(0);
@@ -158,7 +148,6 @@ class GenesisOrchestrator {
         window.AudioContext = window.AudioContext || window.webkitAudioContext;
         this.audioCtx = new AudioContext();
         
-        // Inject sample rate into the shared SegaPsg synthesizer
         if (this.psg) {
             this.psg.setSampleRate(this.audioCtx.sampleRate);
         }
@@ -208,11 +197,6 @@ class GenesisOrchestrator {
         }
     }
 
-    /**
-     * Loads a cartridge binary, mounts it on the bus, and then triggers the CPU hardware reset.
-     * @param {string|ArrayBuffer} filenameOrBuffer - The ROM filename or raw buffer.
-     * @param {ArrayBuffer} [optionalBuffer] - The raw ROM array buffer if filename is provided.
-     */
     loadRom(filenameOrBuffer, optionalBuffer) {
         if (this.animationFrameId) {
             cancelAnimationFrame(this.animationFrameId);
@@ -242,6 +226,10 @@ class GenesisOrchestrator {
 
         this.lastTime = performance.now();
         this.accumulatedTime = 0;
+        
+        // CORREGIDO: Ajuste temporal de arranque de FPS
+        this.fpsCount = 0;
+        this.fpsTimer = this.lastTime;
 
         console.log("[GenesisOrchestrator] Sega Genesis Engine Booted Successfully.");
 
@@ -289,9 +277,6 @@ class GenesisOrchestrator {
         }
     }
 
-    /**
-     * Self-serialize standard engine properties to be handled by the Database Client.
-     */
     async saveState() {
         if (this.isRunning && this.bus.cartridgeRom) {
             try {
@@ -336,14 +321,12 @@ class GenesisOrchestrator {
                 };
                 await this.serializer.save("GENESIS_SAVESTATE", statePayload);
 
-                // Re-render thumbnail snapshot to localStorage (Optimized Downsample 2.5x -> 128x120)
                 if (this.glbFrameBuffer) {
                     const src = this.glbFrameBuffer;
                     const dstWidth = 128;
                     const dstHeight = 120;
                     const smallArray = new Uint8Array(dstWidth * dstHeight * 4);
                     
-                    // Downsample 320x240 to 128x120 synchronously
                     for (let y = 0; y < dstHeight; y++) {
                         const srcY = Math.floor(y * 2) * 320 * 4; 
                         const dstY = y * dstWidth * 4;
@@ -370,9 +353,6 @@ class GenesisOrchestrator {
         }
     }
 
-    /**
-     * Load and reconstruct serialized state values directly.
-     */
     async loadState() {
         if (this.isRunning && this.bus.cartridgeRom) {
             try {
@@ -485,9 +465,8 @@ class GenesisOrchestrator {
         this.lastTime = currentTime;
 
         if (deltaTime > 100) deltaTime = targetFrameTime;
-        this.lastDeltaTime = deltaTime;
 
-        // Sync actions from Universal Input Manager
+        // Sync inputs from Universal Input Manager
         if (window.UniversalInput) {
             this.isRewinding = window.UniversalInput.isPressed("REWIND");
             this.fastForward = window.UniversalInput.isPressed("FAST_FORWARD");
@@ -503,6 +482,15 @@ class GenesisOrchestrator {
                 this.executeFrame(targetFps);
                 this.accumulatedTime -= targetFrameTime;
             }
+        }
+
+        // CORREGIDO: Medidor de FPS en tiempo real unificado
+        if (currentTime - this.fpsTimer >= 1000) {
+            if (this.onFpsUpdate) {
+                this.onFpsUpdate(this.fastForward ? "FFWD" : this.fpsCount);
+            }
+            this.fpsCount = 0;
+            this.fpsTimer = currentTime;
         }
 
         this.animationFrameId = requestAnimationFrame(this.loop);
@@ -585,10 +573,7 @@ class GenesisOrchestrator {
         }
 
         this.framesRendered++;
-        if (this.framesRendered % 10 === 0 && this.onFpsUpdate) {
-            const currentFps = (this.lastDeltaTime > 0) ? (1000 / this.lastDeltaTime).toFixed(1) : (this.tvStandard === 1 ? "50.0" : "60.0");
-            this.onFpsUpdate(this.fastForward ? "FFWD" : currentFps);
-        }
+        this.fpsCount++; // CORREGIDO: Incrementar contador real tras ejecutar el render de frame
     }
 
     stepCPUs(m68kCycles) {
@@ -691,9 +676,6 @@ class GenesisOrchestrator {
     // DEVELOPER SUITE DIAGNOSTICS HOOKS
     // ========================================================================
 
-    /**
-     * Return current Motorola 68000 CPU registers as a polymorphic dictionary.
-     */
     getRegisters() {
         if (!this.m68k) return {};
         return {
@@ -718,9 +700,6 @@ class GenesisOrchestrator {
         };
     }
 
-    /**
-     * Return the active program disassembly around PC as a string array.
-     */
     getDisassembly() {
         if (!this.m68k) return [];
         const lines = [];
@@ -730,9 +709,6 @@ class GenesisOrchestrator {
         return lines;
     }
 
-    /**
-     * Render raw VRAM tile patterns onto the shared diagnostic canvas.
-     */
     drawVramDiagnostics(ctx) {
         this.rasterizeVramTiles(ctx);
     }

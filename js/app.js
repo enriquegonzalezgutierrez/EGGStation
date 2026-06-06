@@ -49,6 +49,71 @@ console.log(
 console.log("%c=============================", infoHeaderStyle);
 
 // ========================================================================
+// GAMES LIBRARY (GAMES CATALOG) CONFIGURATION
+// ========================================================================
+// Covers designed using pure inline SVG vector blocks to prevent CORS breaks offline
+const ROM_CATALOG = [
+    {
+        id: "alex_kidd",
+        title: "Alex Kidd in Miracle World",
+        system: "SMS",
+        filename: "Alex Kidd in Miracle World (USA, Europe) (Rev 1).sms",
+        year: "1986",
+        developer: "Sega",
+        genre: "Platform",
+        theme: "#04d361",
+        svgCover: `<svg viewBox="0 0 60 80" width="100%" height="100%"><rect width="60" height="80" fill="#0d1117"/><rect x="5" y="5" width="50" height="40" fill="#04d361" rx="3"/><text x="30" y="25" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">ALEX KIDD</text><text x="30" y="32" fill="#fff" font-family="monospace" font-size="3" text-anchor="middle">Miracle World</text><rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/><text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="3" text-anchor="middle">SEGA SYSTEM</text></svg>`
+    },
+    {
+        id: "castle_illusion",
+        title: "Castle of Illusion",
+        system: "GEN",
+        filename: "Castle of Illusion Starring Mickey Mouse (USA, Europe).md",
+        year: "1990",
+        developer: "Sega",
+        genre: "Platform",
+        theme: "#ff007f",
+        svgCover: `<svg viewBox="0 0 60 80" width="100%" height="100%"><rect width="60" height="80" fill="#0d1117"/><rect x="5" y="5" width="50" height="40" fill="#ff007f" rx="3"/><text x="30" y="23" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">CASTLE OF</text><text x="30" y="30" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">ILLUSION</text><rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/><text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="3.5" text-anchor="middle">MEGA DRIVE</text></svg>`
+    },
+    {
+        id: "ghostbusters",
+        title: "Ghostbusters",
+        system: "GEN",
+        filename: "Ghostbusters (USA, Europe) (En,Ja) (Beta).md",
+        year: "1990",
+        developer: "Sega",
+        genre: "Action",
+        theme: "#7f00ff",
+        svgCover: `<svg viewBox="0 0 60 80" width="100%" height="100%"><rect width="60" height="80" fill="#0d1117"/><rect x="5" y="5" width="50" height="40" fill="#7f00ff" rx="3"/><text x="30" y="26" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">GHOST</text><text x="30" y="33" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">BUSTERS</text><rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/><text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="3.5" text-anchor="middle">MEGA DRIVE</text></svg>`
+    },
+    {
+        id: "final_fight",
+        title: "Final Fight",
+        system: "SNES",
+        filename: "Final Fight (Europe).sfc",
+        year: "1990",
+        developer: "Capcom",
+        genre: "Beat 'em up",
+        theme: "#b3a6db",
+        svgCover: `<svg viewBox="0 0 60 80" width="100%" height="100%"><rect width="60" height="80" fill="#0d1117"/><rect x="5" y="5" width="50" height="40" fill="#5e5189" rx="3"/><text x="30" y="23" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">FINAL</text><text x="30" y="30" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">FIGHT</text><rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/><text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="4" text-anchor="middle">SUPER Nintendo</text></svg>`
+    },
+    {
+        id: "super_gn_ghosts",
+        title: "Super Ghouls 'N Ghosts",
+        system: "SNES",
+        filename: "Super Ghouls 'N Ghosts (Europe).sfc",
+        year: "1991",
+        developer: "Capcom",
+        genre: "Action",
+        theme: "#3c3c4e",
+        svgCover: `<svg viewBox="0 0 60 80" width="100%" height="100%"><rect width="60" height="80" fill="#0d1117"/><rect x="5" y="5" width="50" height="40" fill="#3c3c4e" rx="3"/><text x="30" y="21" fill="#fff" font-family="monospace" font-size="4.5" font-weight="bold" text-anchor="middle">SUPER</text><text x="30" y="27" fill="#fff" font-family="monospace" font-size="4.5" font-weight="bold" text-anchor="middle">GHOULS 'N</text><text x="30" y="33" fill="#fff" font-family="monospace" font-size="4.5" font-weight="bold" text-anchor="middle">GHOSTS</text><rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/><text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="4" text-anchor="middle">SUPER Nintendo</text></svg>`
+    }
+];
+
+// Pointer used to identify the target game being configured during the manual local selection phase
+window.pendingLibraryGame = null;
+
+// ========================================================================
 // CONSOLE HOT-SWAPPING COORDINATOR
 // ========================================================================
 let activeOrchestrator = null;
@@ -75,7 +140,6 @@ function toggleDeveloperSuite() {
 
 /**
  * Safely terminates the running emulator, releasing GPU/Audio resources.
- * Only called during dynamic hot-swaps to clear listeners and prevent leaks.
  */
 function teardownActiveConsole() {
     activeController = null;
@@ -201,6 +265,12 @@ function bootConsole(consoleType) {
         return;
     }
 
+    // Synchronize UI dropdown selector selection
+    const consoleSelector = document.getElementById('consoleSelector');
+    if (consoleSelector && consoleSelector.value !== consoleType) {
+        consoleSelector.value = consoleType;
+    }
+
     // Auto-sync active visual and audio filter settings across hot-swaps
     const postProcessSelector = document.getElementById('postProcessSelector');
     const audioFilterSelector = document.getElementById('audioFilterSelector');
@@ -269,7 +339,6 @@ function triggerLoadAction() {
 
 /**
  * Universal uncoupled save state snapshot rendering service.
- * Automatically resolves and scales any emulated system thumbnail dynamically.
  */
 function updateSaveStatePreview() {
     const rawImgData = localStorage.getItem('savestateScreenshot');
@@ -284,14 +353,8 @@ function updateSaveStatePreview() {
     if (!imgDataArray) return;
 
     const canvas = document.createElement('canvas');
-    
-    // Dynamically calculate dimensions to support downsampled snapshots of any console
     const totalPixels = imgDataArray.length / 4;
-    
-    // Detects the dynamic width: 128 (SNES), 320 (Old Gen) or 256 (SMS / Standard Gen)
     const width = totalPixels === 15360 ? 128 : (totalPixels === 76800 || totalPixels === 71680 ? 320 : 256);
-    
-    // Auto-calculates the exact height proportionally to prevent any ImageData IndexSizeError crash!
     const height = totalPixels / width;
 
     canvas.width = width;
@@ -310,17 +373,42 @@ function updateSaveStatePreview() {
 
 /**
  * Trigger the immersive CRT "Warm-up" (Power On) visual effect.
- * Forces DOM reflow to restart CSS animations synchronously on successful loads.
  */
 function triggerCrtWarmUp() {
     const crtWrapper = document.getElementById("crt-wrapper");
     if (crtWrapper) {
         crtWrapper.classList.remove("crt-power-off");
-        void crtWrapper.offsetWidth; // Force synchronous reflow (repaint context)
+        void crtWrapper.offsetWidth; 
         crtWrapper.classList.add("crt-warm-up");
     }
 }
 window.triggerCrtWarmUp = triggerCrtWarmUp;
+
+// ========================================================================
+// OFFLINE HIGH-SPEED CACHING ROM BOOTSTRAP PIPELINE (DIP)
+// ========================================================================
+/**
+ * Direct hardware injection handler to bind ROM buffers dynamically.
+ */
+function runRomFromBuffer(system, name, buffer) {
+    bootConsole(system);
+    
+    if (system === "SNES") {
+        const uint8 = new Uint8Array(buffer);
+        activeOrchestrator.loadCartridge(uint8, false);
+    } else if (system === "GEN") {
+        activeOrchestrator.loadRom(name, buffer);
+    } else if (system === "SMS") {
+        activeOrchestrator.loadRom(name, buffer).then(() => {
+            if (activeController && typeof activeController.handleShaderTuningChange === 'function') {
+                activeController.handleShaderTuningChange();
+            }
+        });
+    }
+
+    if (typeof triggerCrtWarmUp === 'function') triggerCrtWarmUp();
+    document.getElementById('fileselector')?.classList.add('hidden');
+}
 
 // ========================================================================
 // GLOBAL EVENT LISTENERS & MOBILE UI HANDLERS
@@ -330,8 +418,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const devToggle = document.getElementById('dev-toggle-btn');
     const ejectBtn = document.getElementById('ejectBtn');
     const audioToggleSelector = document.getElementById('audioToggleSelector');
+    const fileSelectorInput = document.getElementById('cartridgeSelector');
     
-    // Bind DOM Save/Load Buttons globally as a secure fallback
     const saveBtn = document.getElementById('btn-save');
     const loadBtn = document.getElementById('btn-load');
 
@@ -371,7 +459,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 crtWrapper.classList.add("crt-power-off");
             }
 
-            // Wait 500ms for the horizontal CRT collapse animation to finish before clearing state
             setTimeout(() => {
                 if (activeOrchestrator) {
                     activeOrchestrator.isRunning = false;
@@ -394,45 +481,199 @@ document.addEventListener("DOMContentLoaded", () => {
                 const fpsSpan = document.getElementById("fpsSpan");
                 if (fpsSpan) fpsSpan.textContent = "0.0 FPS";
                 
-                // If on mobile, close the drawer after ejecting
                 if (window.innerWidth <= 900) {
-                    closeMobileDrawer();
+                    closeSettingsDrawer();
                 }
             }, 500);
         });
     }
 
+    // Intercept manual file uploads to cache ROMs if they belong to library selections
+    if (fileSelectorInput) {
+        fileSelectorInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file || !window.pendingLibraryGame) return;
+
+            const targetGame = window.pendingLibraryGame;
+            window.pendingLibraryGame = null; // Clean up immediately
+
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                const arrayBuffer = event.target.result;
+                try {
+                    // FIXED: Reusing "savestates" store to avoid IndexedDB schema upgrades
+                    console.log(`[EGGStation::Vault] Archiving "${file.name}" to IndexedDB ROM storage...`);
+                    const dbManager = new IndexedDbManager("EGGStationDB", "savestates");
+                    await dbManager.save("ROM_" + targetGame.id, { 
+                        name: file.name, 
+                        buffer: arrayBuffer 
+                    });
+                    
+                    // Boot ROM directly from memory and update UI state
+                    runRomFromBuffer(targetGame.system, file.name, arrayBuffer);
+                    
+                    // Re-render library list to reflect the cached status immediately
+                    renderLibrary();
+                } catch (err) {
+                    console.error("[EGGStation::Vault] Write transaction failed: ", err);
+                    runRomFromBuffer(targetGame.system, file.name, arrayBuffer); // Run without caching
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
     // ====================================================================
-    // MOBILE RESPONSIVE UI HANDLERS (Drawer Menu)
+    // MOBILE RESPONSIVE UI HANDLERS & JUEGOTECA ACTIONS
     // ====================================================================
     const settingsPanel = document.getElementById('settings-panel');
+    const libraryPanel = document.getElementById('library-panel');
     const overlay = document.getElementById('mobile-drawer-overlay');
+    
+    const libraryToggleBtn = document.getElementById('library-toggle-btn');
+    const mobileLibraryBtn = document.getElementById('mobile-library-btn');
     const mobileMenuBtn = document.getElementById('mobile-menu-btn');
     const landscapeMenuBtn = document.getElementById('landscape-menu-btn');
+    
     const closeMenuBtn = document.getElementById('close-menu-btn');
+    const closeLibraryBtn = document.getElementById('close-library-btn');
 
-    const openMobileDrawer = () => {
+    const openSettingsDrawer = () => {
+        closeLibraryDrawer(); 
         if (settingsPanel) {
             settingsPanel.classList.remove('drawer-closed');
             settingsPanel.classList.add('drawer-open');
         }
-        if (overlay) {
-            overlay.classList.remove('hidden');
-        }
+        if (overlay) overlay.classList.remove('hidden');
     };
 
-    const closeMobileDrawer = () => {
+    const closeSettingsDrawer = () => {
         if (settingsPanel) {
             settingsPanel.classList.remove('drawer-open');
             settingsPanel.classList.add('drawer-closed');
         }
-        if (overlay) {
+        if (overlay && libraryPanel && libraryPanel.classList.contains('library-closed')) {
             overlay.classList.add('hidden');
         }
     };
 
-    if (mobileMenuBtn) mobileMenuBtn.addEventListener('click', openMobileDrawer);
-    if (landscapeMenuBtn) landscapeMenuBtn.addEventListener('click', openMobileDrawer);
-    if (closeMenuBtn) closeMenuBtn.addEventListener('click', closeMobileDrawer);
-    if (overlay) overlay.addEventListener('click', closeMobileDrawer);
+    const openLibraryDrawer = () => {
+        closeSettingsDrawer(); 
+        if (libraryPanel) {
+            libraryPanel.classList.remove('library-closed');
+            libraryPanel.classList.add('library-open');
+        }
+        if (overlay) overlay.classList.remove('hidden');
+    };
+
+    const closeLibraryDrawer = () => {
+        if (libraryPanel) {
+            libraryPanel.classList.remove('library-open');
+            libraryPanel.classList.add('library-closed');
+        }
+        if (overlay && settingsPanel && settingsPanel.classList.contains('drawer-closed')) {
+            overlay.classList.add('hidden');
+        }
+    };
+
+    if (mobileMenuBtn) mobileMenuBtn.addEventListener('click', openSettingsDrawer);
+    if (landscapeMenuBtn) landscapeMenuBtn.addEventListener('click', openSettingsDrawer);
+    if (closeMenuBtn) closeMenuBtn.addEventListener('click', closeSettingsDrawer);
+    
+    if (libraryToggleBtn) libraryToggleBtn.addEventListener('click', openLibraryDrawer);
+    if (mobileLibraryBtn) mobileLibraryBtn.addEventListener('click', openLibraryDrawer);
+    if (closeLibraryBtn) closeLibraryBtn.addEventListener('click', closeLibraryDrawer);
+    
+    if (overlay) {
+        overlay.addEventListener('click', () => {
+            closeSettingsDrawer();
+            closeLibraryDrawer();
+        });
+    }
+
+    // ====================================================================
+    // RENDER JUEGOTECA (FIXED: Direct Synchronous click dispatch)
+    // ====================================================================
+    const renderLibrary = async () => {
+        const grid = document.getElementById('library-grid');
+        if (!grid) return;
+
+        grid.innerHTML = ""; 
+
+        // Instantiating DB client on pre-approved "savestates" store synchronously
+        const dbManager = new IndexedDbManager("EGGStationDB", "savestates");
+
+        // Loop and build cards
+        for (const game of ROM_CATALOG) {
+            const card = document.createElement('div');
+            card.className = "game-card";
+            
+            // Check in background if this ROM is already cached synchronously
+            let isCached = false;
+            let cachedRomName = "";
+            try {
+                const cachedRom = await dbManager.load("ROM_" + game.id);
+                if (cachedRom) {
+                    isCached = true;
+                    cachedRomName = cachedRom.name;
+                }
+            } catch(e) {
+                // If IDB fails, default to uncached gracefully
+                isCached = false;
+            }
+
+            // Set badge text based on cached status
+            const badgeText = isCached ? "PLAY" : "GET";
+            const badgeClass = isCached ? "badge-sms" : `badge-${game.system.toLowerCase()}`;
+
+            card.innerHTML = `
+                <div class="game-cover">${game.svgCover}</div>
+                <div class="game-details">
+                    <span class="game-title">${game.title}</span>
+                    <span class="game-meta">${game.developer} (${game.year})</span>
+                    <span id="badge-${game.id}" class="game-badge ${badgeClass}">${badgeText}</span>
+                </div>
+            `;
+
+            if (isCached) {
+                card.classList.add('is-cached');
+            }
+
+            // FIXED: Synchronous click dispatch bypassing browser popup blocks
+            card.addEventListener('click', async () => {
+                const badgeElement = document.getElementById(`badge-${game.id}`);
+                
+                if (card.classList.contains('is-cached')) {
+                    // Game is cached locally: load asynchronously from IndexedDB.
+                    // Since it does not require opening file selectors, the browser allows this async flow.
+                    try {
+                        if (badgeElement) badgeElement.textContent = "BOOTING...";
+                        const cachedData = await dbManager.load("ROM_" + game.id);
+                        if (cachedData) {
+                            runRomFromBuffer(game.system, cachedData.name, cachedData.buffer);
+                            closeLibraryDrawer();
+                        }
+                    } catch(err) {
+                        console.error("[EGGStation::Vault] Memory load crash: ", err);
+                    } finally {
+                        if (badgeElement) badgeElement.textContent = "PLAY";
+                    }
+                } else {
+                    // Game is not cached: open file selector synchronously.
+                    // Since it is directly inside the user's click stack, the browser allows file selector popups.
+                    window.pendingLibraryGame = game;
+                    
+                    alert(`Offline Setup Required:\n\nLocate and select the ROM on your disk.\n\nFile expected: "${game.filename}"\n\n(EGGStation will copy it locally so you never have to locate it again!)`);
+                    
+                    if (fileSelectorInput) {
+                        fileSelectorInput.click(); // Spawns file selector instantly
+                    }
+                }
+            });
+
+            grid.appendChild(card);
+        }
+    };
+
+    renderLibrary();
 });

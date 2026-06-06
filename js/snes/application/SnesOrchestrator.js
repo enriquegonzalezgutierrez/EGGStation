@@ -4,26 +4,10 @@
  * File: js/snes/application/SnesOrchestrator.js
  * 
  * Role:
- * Application Layer: SnesOrchestrator (Application Ticker and Viewport Link).
- * Manages execution loops, synchronization ticks, input delivery, and transfers
- * video/audio output buffers to infrastructure processor nodes.
- * 
- * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Exclusively coordinates execution loops, 
- *    frame timing synchronization, and audio/video stream buffering.
- * 2. Liskov Substitution Principle (LSP): Fully implements the unified orchestrator 
- *    interface expected by the app.js Bootstrapper (loadRom, stop, setAudioEnabled).
- * 3. Dependency Inversion Principle (DIP): Depends directly on the shared 
- *    UniversalPostProcessor and UniversalAudioProcessor (Phase 4) abstractions 
- *    rather than tight coupling to legacy custom processors.
+ * Application Layer: SnesOrchestrator (Corregido: Eliminación de doble conteo de FPS).
  */
 
 class SnesOrchestrator {
-    /**
-     * @param {CanvasRenderingContext2D} videoContext - Primary 2D Canvas Target.
-     * @param {WebGL2RenderingContext} glContext - WebGL2 Context for Shaders.
-     * @param {Function} fpsUpdateCallback - Diagnostics hook to display FPS.
-     */
     constructor(videoContext, glContext, fpsUpdateCallback) {
         this.hardware = new Snes();
         
@@ -218,7 +202,7 @@ class SnesOrchestrator {
                 this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
                 this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
                 
-                this.fpsCount++; 
+                this.fpsCount++; // Incremento real de frame de CPU emulado
                 framesRun++;
             }
             this.accumulatedTime -= targetFrameDuration;
@@ -272,7 +256,7 @@ class SnesOrchestrator {
     }
 
     updatePerformanceMetrics(timestamp) {
-        this.fpsCount++;
+        // CORREGIDO: Se elimina el duplicado "this.fpsCount++" que inflaba las lecturas de FPS
         if (timestamp - this.fpsTimer >= 1000) {
             if (this.onFpsUpdate) this.onFpsUpdate(this.fpsCount);
             this.fpsCount = 0;
@@ -292,9 +276,6 @@ class SnesOrchestrator {
         this.hardware.reset(hard);
     }
 
-    /**
-     * Serializes the complete 16-bit SNES hardware memory buffers and chip states.
-     */
     async saveState() {
         if (this.isRunning && this.hardware.cart) {
             try {
@@ -347,14 +328,12 @@ class SnesOrchestrator {
 
                 await this.serializer.save("SNES_SAVESTATE", statePayload);
 
-                // Re-render thumbnail snapshot to localStorage (Optimized Downsample 16x -> 128x120)
                 if (this.imgData && this.imgData.data) {
                     const src = this.imgData.data;
                     const dstWidth = 128;
                     const dstHeight = 120;
                     const smallArray = new Uint8Array(dstWidth * dstHeight * 4);
                     
-                    // Step synchronously over the buffer
                     for (let y = 0; y < dstHeight; y++) {
                         const srcY = (y * 4) * 512 * 4; 
                         const dstY = y * dstWidth * 4;
@@ -381,9 +360,6 @@ class SnesOrchestrator {
         }
     }
 
-    /**
-     * Restores and rebuilds the SNES registers and memory buffers.
-     */
     async loadState() {
         if (this.isRunning && this.hardware.cart) {
             try {
@@ -460,9 +436,6 @@ class SnesOrchestrator {
     // DEVELOPER SUITE DIAGNOSTICS HOOKS
     // ========================================================================
 
-    /**
-     * Return current Ricoh 5A22 CPU registers as a polymorphic dictionary.
-     */
     getRegisters() {
         if (!this.hardware || !this.hardware.cpu) return {};
         const cpu = this.hardware.cpu;
@@ -482,9 +455,6 @@ class SnesOrchestrator {
         };
     }
 
-    /**
-     * Return the active program disassembly around PC as a string array.
-     */
     getDisassembly() {
         if (!this.hardware || !this.hardware.cpu) return [];
         const lines = [];
@@ -495,37 +465,27 @@ class SnesOrchestrator {
         return lines;
     }
 
-    /**
-     * Decodes SNES custom 4bpp (16-color) planar VRAM pattern tables in real-time.
-     * Renders decoded sprite and background character tiles synchronously with reverse-remapping.
-     */
     drawVramDiagnostics(ctx) {
         if (!this.hardware || !this.hardware.ppu) return;
         
         const imgData = ctx.createImageData(128, 192);
-        const vram = this.hardware.ppu.vram; // 32,768 words of 16-bit
-        
-        // Dynamic Offset Fetch: BG1 Character Base Word Address
+        const vram = this.hardware.ppu.vram; 
         const bg1CharBase = this.hardware.ppu.tileAdr[0] || 0x2000;
-        // Sprite Character Base Word Address
         const spriteCharBase = this.hardware.ppu.sprAdr1 || 0x4000;
-
         const remapMode = this.hardware.ppu.vramRemap;
 
-        // Reverse-engineering the PPU VRAM address remapping formula in real-time
         const getRemappedAddress = (adr) => {
             let a = adr & 0x7fff;
             if (remapMode === 1) {
-                a = (a & 0xff00) | ((a & 0xe0) >> 5) | ((a & 0x1f) << 3);
+                a = (a & 0xff00) | ((adr & 0xe0) >> 5) | ((adr & 0x1f) << 3);
             } else if (remapMode === 2) {
-                a = (a & 0xfe00) | ((a & 0x1c0) >> 6) | ((a & 0x3f) << 3);
+                a = (a & 0xfe00) | ((adr & 0x1c0) >> 6) | ((adr & 0x3f) << 3);
             } else if (remapMode === 3) {
-                a = (a & 0xfc00) | ((a & 0x380) >> 7) | ((a & 0x7f) << 3);
+                a = (a & 0xfc00) | ((adr & 0x380) >> 7) | ((adr & 0x7f) << 3);
             }
             return a;
         };
 
-        // Render 384 tiles (16 columns * 24 rows of 8x8 tiles) in standard SNES 4bpp format
         for (let tileIdx = 0; tileIdx < 384; tileIdx++) {
             const tileX = tileIdx % 16;
             const tileY = Math.floor(tileIdx / 16);
@@ -539,23 +499,18 @@ class SnesOrchestrator {
             const tileWordOffset = baseWordOffset + (relativeTileIdx * 16);
             
             for (let row = 0; row < 8; row++) {
-                // Fetch Word A & B applying the synchronous reverse-remapping translation layer
                 const wordA = vram[getRemappedAddress((tileWordOffset + row) & 0x7fff)];
                 const wordB = vram[getRemappedAddress((tileWordOffset + 8 + row) & 0x7fff)];
                 
                 for (let col = 0; col < 8; col++) {
                     const shift = 7 - col;
                     
-                    // Decodes 4 planes using precise bit shifting mask algorithms
                     const bit0 = (wordA >> shift) & 1;
                     const bit1 = (wordA >> (8 + shift)) & 1;
                     const bit2 = (wordB >> shift) & 1;
                     const bit3 = (wordB >> (8 + shift)) & 1;
                     
-                    // Pack bits into a final 4-bit Color Index (0 to 15)
                     const colorIdx = bit0 | (bit1 << 1) | (bit2 << 2) | (bit3 << 3);
-                    
-                    // Map 4-bit palette index synchronously to greyscale (Luminance scaling)
                     const rgb = colorIdx * 17; 
                     
                     const pixelX = destBaseX + col;
