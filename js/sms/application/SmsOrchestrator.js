@@ -3,19 +3,18 @@
  * Author: Enrique González Gutiérrez
  * File: js/sms/application/SmsOrchestrator.js
  * 
- * Role:
+ * ROLE:
  * Application Layer: Sega Master System (SMS) Orchestrator.
  * Coordinates system execution loops, schedules frame sync rates, and handles
  * pre-allocated state pools to achieve zero Garbage Collection allocations.
  * 
- * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Isolates loop orchestration, frame 
- *    pacing, and state serialization mapping from the DOM and input controllers.
- * 2. Liskov Substitution Principle (LSP): Fully implements the unified orchestrator 
- *    interface expected by the app.js Bootstrapper (loadRom, stop, setAudioEnabled).
- * 3. Dependency Inversion Principle (DIP): Relies directly on the abstract 
- *    Universal IndexedDbManager client rather than tightly coupling to legacy 
- *    custom serializer scripts.
+ * APPLIED OPTIMIZATIONS:
+ * 1. 32-Bit VDP Graphics Pipeline: Overrides legacy drawLineTile and drawSpriteSlice 
+ *    with packed 32-bit word writes (Uint32Array), speeding up video rendering.
+ * 2. Death Spiral Protection: Caps the Delta-Time accumulator to prevent the 
+ *    browser from crashing on older CPUs attempting to catch up with heavy lag.
+ * 3. Fast-Forward Support: Accurately disables audio and pushes execution 
+ *    cycles while correctly displaying "FFWD" on the UI counter.
  */
 
 class SmsOrchestrator {
@@ -44,7 +43,7 @@ class SmsOrchestrator {
         
         this.animationFrameId = null;
         this.lastTime = 0;
-        this.accumulatedTime = 0;
+        this.accumulatedTime = 0.0;
 
         // Structured FPS counters aligned to 1-second real-world intervals
         this.fpsCount = 0;
@@ -69,7 +68,7 @@ class SmsOrchestrator {
         
         this.ioController = new Sega315_5297();
         
-        // PHASE 4: Bind directly to the clean generic database client
+        // Bind directly to the clean generic database client
         this.serializer = new IndexedDbManager(); 
 
         this.loop = this.loop.bind(this);
@@ -173,6 +172,9 @@ class SmsOrchestrator {
         
         this.vdp = new Sega315_5124_Vdp(this.vdpMode, this.glContext);
         
+        // Inject 32-bit graphics acceleration patch into VDP
+        this.injectOptimizedSmsVdp(this.vdp);
+
         // Instantiate the shared SegaPsg uncoupled audio core synchronously
         this.psg = new SegaPsg();
         
@@ -193,13 +195,141 @@ class SmsOrchestrator {
         this.rewindFrameCount = 0;
 
         this.lastTime = performance.now();
-        this.accumulatedTime = 0;
+        this.accumulatedTime = 0.0;
         this.fpsCount = 0;
         this.fpsTimer = this.lastTime;
 
         console.log("[SmsOrchestrator] Engine Booted Successfully.");
 
         this.animationFrameId = requestAnimationFrame(this.loop);
+    }
+
+    /**
+     * Monkey-patches the standard Sega VDP class instances to support 
+     * packed 32-bit color writes (Uint32Array) on scanline render passes.
+     */
+    injectOptimizedSmsVdp(vdpInstance) {
+        vdpInstance.glbFrameBuffer32 = new Uint32Array(vdpInstance.glbFrameBuffer.buffer);
+
+        // 1. Optimize Background Tile Line Renderer
+        vdpInstance.drawLineTile = function(addr, x, y, pal, fliph, flipv, finescrolly, priFlag) {
+            const offset = flipv ? (7 - ((y + finescrolly) % 8)) : ((y + finescrolly) % 8);
+            const tileRowAddr = addr + (offset * 4);
+
+            const byte0 = this.vRam[tileRowAddr];
+            const byte1 = this.vRam[tileRowAddr + 1];
+            const byte2 = this.vRam[tileRowAddr + 2];
+            const byte3 = this.vRam[tileRowAddr + 3];
+
+            const palOffset = pal * 16;
+            let bufferIndex32 = x + (y * this.glbResolutionX);
+
+            for (let xt = 0; xt < 8; xt++) {
+                const shift = fliph ? xt : (7 - xt);
+                const cramIdx = (((byte0 >> shift) & 1) | 
+                                 (((byte1 >> shift) & 1) << 1) | 
+                                 (((byte2 >> shift) & 1) << 2) | 
+                                 (((byte3 >> shift) & 1) << 3)) & 0x0f;
+
+                const colorValue = this.colorRam[cramIdx + palOffset];
+                const xtile = x + xt;
+
+                if (xtile >= 0 && xtile < 256 && y >= 0 && y < this.yScreenLines) {
+                    const r = this.analogColorScale[colorValue & 0x03];
+                    const g = this.analogColorScale[(colorValue & 0x0c) >> 2];
+                    const b = this.analogColorScale[(colorValue & 0x30) >> 4];
+
+                    // Write whole pixel in one single 32-bit packed word operation (ABGR format)
+                    this.glbFrameBuffer32[bufferIndex32] = r | (g << 8) | (b << 16) | 0xff000000;
+                    this.priBuffer[xtile + (y * this.glbResolutionX)] = (cramIdx !== 0) ? priFlag : 0;
+                }
+                
+                bufferIndex32++; 
+            }
+        };
+
+        // 2. Optimize Sprite Slice Renderer
+        vdpInstance.drawSpriteSlice = function(addr, spriteX, scanlineNum, slicey) {
+            const tileRowAddr = this.spritePatternGeneratorBaseAddress + addr + (slicey * 4);
+
+            const byte0 = this.vRam[tileRowAddr];
+            const byte1 = this.vRam[tileRowAddr + 1];
+            const byte2 = this.vRam[tileRowAddr + 2];
+            const byte3 = this.vRam[tileRowAddr + 3];
+
+            for (let xt = 0; xt < 8; xt++) {
+                const shift = 7 - xt;
+                const cramIdx = (((byte0 >> shift) & 1) | 
+                                 (((byte1 >> shift) & 1) << 1) | 
+                                 (((byte2 >> shift) & 1) << 2) | 
+                                 (((byte3 >> shift) & 1) << 3)) & 0x0f;
+
+                if (cramIdx !== 0) {
+                    const colorValue = this.colorRam[cramIdx + 16];
+                    const cx = spriteX + xt;
+
+                    if (cx >= 0 && cx < this.glbResolutionX && scanlineNum >= 0 && scanlineNum < this.yScreenLines) {
+                        const linearIndex = cx + (scanlineNum * this.glbResolutionX);
+                        
+                        if (this.spriteBuffer[linearIndex] === 0) {
+                            this.spriteBuffer[linearIndex] = 1;
+                        } else {
+                            this.statusFlags |= 0x20; 
+                        }
+
+                        if (this.priBuffer[linearIndex] === 0) {
+                            const r = this.analogColorScale[colorValue & 0x03];
+                            const g = this.analogColorScale[(colorValue & 0x0c) >> 2];
+                            const b = this.analogColorScale[(colorValue & 0x30) >> 4];
+                            
+                            // Write Sprite pixel using 32-bit packed operations
+                            this.glbFrameBuffer32[linearIndex] = r | (g << 8) | (b << 16) | 0xff000000;
+                        }
+                    }
+                }
+            }
+        };
+
+        // 3. Optimize Scanline Overscan Masking and Blanks
+        vdpInstance.drawScanline = function(scanlineNum) {
+            if (scanlineNum < 0 || scanlineNum >= this.yScreenLines) return;
+
+            const fbY32 = scanlineNum * this.glbResolutionX;
+
+            if (!(this.register01 & 0x40)) { // Screen blanked (Register 1, Bit 6)
+                this.glbFrameBuffer32.fill(0, fbY32, fbY32 + 256);
+                return;
+            }
+
+            // Draw Background Layer
+            if ((this.register00 & 0x04) !== 0) {
+                VdpMode4Renderer.renderScanline(this, scanlineNum);
+            } else if ((this.register00 & 0x02) !== 0) {
+                VdpMode2Renderer.renderScanline(this, scanlineNum);
+            }
+
+            // Draw Sprite Layer
+            if ((this.register00 & 0x04) !== 0) {
+                VdpSpriteManager.drawMode4(this, scanlineNum);
+            } else if ((this.register00 & 0x02) !== 0) {
+                VdpSpriteManager.drawMode2(this, scanlineNum);
+            }
+
+            // Overscan Border Masking (Register 0, Bit 5)
+            if (this.register00 & 0x20) {
+                const oscol = this.colorRam[(this.register07 & 0x0f) + 16];
+                const r = this.analogColorScale[oscol & 0x03];
+                const g = this.analogColorScale[(oscol & 0x0c) >> 2];
+                const b = this.analogColorScale[(oscol & 0x30) >> 4];
+                const border32 = r | (g << 8) | (b << 16) | 0xff000000;
+
+                let borderOffset32 = scanlineNum * this.glbResolutionX;
+                for (let x = 0; x < 8; x++) {
+                    this.glbFrameBuffer32[borderOffset32] = border32;
+                    borderOffset32++;
+                }
+            }
+        };
     }
     
     stop() {
@@ -653,35 +783,50 @@ class SmsOrchestrator {
         const targetFps = (this.vdpMode === 1) ? this.SMS_PAL_FPS : this.SMS_NTSC_FPS;
         const targetFrameTime = 1000 / targetFps;
 
-        let deltaTime = currentTime - this.lastTime;
-        this.lastTime = currentTime;
-
-        if (deltaTime > 100) {
-            deltaTime = targetFrameTime;
+        let elapsed = currentTime - this.lastTime;
+        
+        // Prevent massive time jumps when switching browser tabs
+        if (elapsed > 100) {
+            elapsed = 100;
         }
 
+        this.lastTime = currentTime;
+        this.accumulatedTime += elapsed;
+
+        // CRITICAL OPTIMIZATION (Spiral of Death Protection):
+        // If the CPU is too slow to maintain full speed, cap the accumulator 
+        // to prevent the loop from trying to process too many frames at once and crashing the tab.
+        if (this.accumulatedTime > targetFrameTime * 2) {
+            this.accumulatedTime = targetFrameTime * 2;
+        }
+
+        let framesRun = 0;
+
         if (this.fastForward) {
+            // Fast-Forward Logic: Accelerate execution and disable audio processing
             if (this.psg) this.psg.setMuted(true);
-            for (let i = 0; i < 4; i++) {
+            for (let i = 0; i < 3; i++) {
                 this.executeFrame(targetFps);
-                this.fpsCount++; 
+                this.fpsCount++;
+                framesRun++;
             }
-            this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
+            this.accumulatedTime = 0; // Clear accumulator to prevent stuttering when releasing the button
         } else {
+            // Normal Execution
             if (this.psg) this.psg.setMuted(false);
-            this.accumulatedTime += deltaTime;
-            
-            let frameExecuted = false;
             while (this.accumulatedTime >= targetFrameTime) {
                 this.executeFrame(targetFps);
                 this.accumulatedTime -= targetFrameTime;
-                frameExecuted = true;
-                this.fpsCount++; 
+                this.fpsCount++;
+                framesRun++;
             }
+        }
+
+        // Only draw the frame if execution actually stepped forward
+        if (framesRun > 0 && !this.isPaused) {
+            this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
             
-            if (frameExecuted) {
-                this.vdp.hyperBlit(this.videoContext, this.postProcessMode);
-                
+            if (!this.fastForward) {
                 this.rewindFrameCount++;
                 if (this.rewindFrameCount >= 6) {
                     this.captureRewindState();
@@ -693,7 +838,7 @@ class SmsOrchestrator {
         // True 1-second interval tracker for standard non-flickering FPS diagnostics
         if (currentTime - this.fpsTimer >= 1000) {
             if (this.onFpsUpdate) {
-                this.onFpsUpdate(this.fpsCount); 
+                this.onFpsUpdate(this.fastForward ? "FFWD" : this.fpsCount); 
             }
             this.fpsCount = 0;
             this.fpsTimer = currentTime;

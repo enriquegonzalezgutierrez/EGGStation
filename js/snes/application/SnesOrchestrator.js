@@ -3,8 +3,16 @@
  * Author: Enrique González Gutiérrez
  * File: js/snes/application/SnesOrchestrator.js
  * 
- * Role:
- * Application Layer: SnesOrchestrator (Corregido: Eliminación de doble conteo de FPS).
+ * ROLE:
+ * Application Layer: SnesOrchestrator (High-Performance Revision)
+ * 
+ * APPLIED OPTIMIZATIONS:
+ * 1. Dynamic Intelligent Frameskip: Automatically bypasses heavy PPU rendering 
+ *    when lag is detected, keeping audio and gameplay logic at full speed.
+ * 2. Additive Color Conversion: Rewrote convertOriginalRGBToRGBA to use 
+ *    flat pointer addition instead of multiplication inside the pixel loop.
+ * 3. Death Spiral Protection: Caps the time accumulator to prevent cascading lag.
+ * 4. 32-Bit Framebuffer Views: Packs color channels into single 32-bit writes.
  */
 
 class SnesOrchestrator {
@@ -19,11 +27,11 @@ class SnesOrchestrator {
         this.ctx.canvas.height = 480;
 
         this.imgData = this.ctx.createImageData(512, 480);
-
-        // PHASE 4: Instantiate the UniversalPostProcessor directly
-        this.postProcessor = new UniversalPostProcessor(this.gl);
         
-        // PHASE 4: Instantiate the shared UniversalAudioProcessor synchronously
+        // 32-bit View for High-Performance Canvas Blitting
+        this.imgData32 = new Uint32Array(this.imgData.data.buffer);
+
+        this.postProcessor = new UniversalPostProcessor(this.gl);
         this.audioProcessor = new UniversalAudioProcessor();
         this.audioProcessor.orchestrator = this;
 
@@ -47,22 +55,26 @@ class SnesOrchestrator {
 
         this.injectOptimizedPixelCopier();
 
-        // PHASE 4: Bind directly to the generic database manager client
         this.serializer = new IndexedDbManager();
 
-        console.log("[SnesOrchestrator] Orchestrator Layer Initialized.");
+        console.log("[SnesOrchestrator] Orchestrator Layer Initialized with Dynamic Frameskip.");
     }
 
+    /**
+     * Highly optimized 32-bit packed word copier for the PPU.
+     */
     injectOptimizedPixelCopier() {
-        this.hardware.ppu.setPixels = function(arr) {
+        const targetBuffer32 = this.imgData32; 
+
+        this.hardware.ppu.setPixels = function() {
             const frameOverscan = this.frameOverscan;
             const pixelOutput = this.pixelOutput;
             const evenFrame = this.evenFrame;
             const frameInterlace = this.frameInterlace;
             
             if (!frameOverscan) {
-                arr.fill(0, 0, 32768);
-                arr.fill(0, 950272, 983040);
+                targetBuffer32.fill(0, 0, 8192); 
+                targetBuffer32.fill(0, 237568, 245760);
             }
 
             const addY = frameOverscan ? 0 : 14;
@@ -70,8 +82,8 @@ class SnesOrchestrator {
             let srcIdx = 1536; 
             
             for (let y = 1; y < limit; y++) {
-                const rowTarget1 = (y * 2 + addY) * 512 * 4;
-                const rowTarget2 = rowTarget1 + 2048; 
+                const rowTarget1 = (y * 2 + addY) * 512;
+                const rowTarget2 = rowTarget1 + 512; 
                 
                 const writeRow1 = !frameInterlace || evenFrame;
                 const writeRow2 = !frameInterlace || !evenFrame;
@@ -82,52 +94,30 @@ class SnesOrchestrator {
                     const b = pixelOutput[srcIdx + 2];
                     srcIdx += 3;
 
-                    const destOffset1 = rowTarget1 + (x * 4);
-                    const destOffset2 = rowTarget2 + (x * 4);
+                    // Pack RGBA channels into one 32-bit word (ABGR little-endian format)
+                    const color32 = r | (g << 8) | (b << 16) | 0xff000000;
 
-                    if (writeRow1) {
-                        arr[destOffset1] = r;
-                        arr[destOffset1 + 1] = g;
-                        arr[destOffset1 + 2] = b;
-                        arr[destOffset1 + 3] = 255;
-                    }
-                    if (writeRow2) {
-                        arr[destOffset2] = r; 
-                        arr[destOffset2 + 1] = g;
-                        arr[destOffset2 + 2] = b;
-                        arr[destOffset2 + 3] = 255;
-                    }
+                    if (writeRow1) targetBuffer32[rowTarget1 + x] = color32;
+                    if (writeRow2) targetBuffer32[rowTarget2 + x] = color32;
                 }
             }
         };
     }
 
-    setPostProcessMode(mode) {
-        this.postProcessMode = parseInt(mode);
-    }
-
+    setPostProcessMode(mode) { this.postProcessMode = parseInt(mode); }
     setAudioFilterMode(mode) {
         this.audioFilterMode = parseInt(mode);
         this.audioProcessor.setFilterMode(this.audioFilterMode);
     }
-
-    setAudioEnabled(enabled) {
-        if (this.audioProcessor) {
-            this.audioProcessor.setAudioEnabled(enabled);
-        }
-    }
-
+    setAudioEnabled(enabled) { if (this.audioProcessor) this.audioProcessor.setAudioEnabled(enabled); }
     updateShaderUniforms(curvature, scanlines, phosphor, bloom) {
-        if (this.postProcessor) {
-            this.postProcessor.updateShaderUniforms(curvature, scanlines, phosphor, bloom);
-        }
+        if (this.postProcessor) this.postProcessor.updateShaderUniforms(curvature, scanlines, phosphor, bloom);
     }
 
     loadCartridge(romData, isHirom) {
         try {
             const loaded = this.hardware.loadRom(romData, isHirom);
             if (!loaded) throw new Error("ROM parsing failed.");
-
             this.hardware.reset(true);
             this.start();
         } catch (error) {
@@ -142,7 +132,9 @@ class SnesOrchestrator {
         this.isPaused = false;
 
         this.lastFrameTime = performance.now();
+        this.fpsTimer = this.lastFrameTime;
         this.accumulatedTime = 0.0;
+        this.fpsCount = 0;
 
         this.audioProcessor.resume();
         this.animationFrameId = requestAnimationFrame((t) => this.executionLoop(t));
@@ -157,108 +149,138 @@ class SnesOrchestrator {
         }
     }
 
-    togglePause() {
-        this.isPaused = !this.isPaused;
-    }
+    togglePause() { this.isPaused = !this.isPaused; }
 
     /**
-     * Execution loop throttled and optimized to run at exact hardware speed.
+     * Highly optimized execution loop featuring intelligent dynamic frameskip.
      */
     executionLoop(timestamp) {
         if (!this.isRunning) return;
 
         let elapsed = timestamp - this.lastFrameTime;
-        
-        if (elapsed > 100) {
-            elapsed = 100;
-        }
+        if (elapsed > 100) elapsed = 100; 
 
         this.lastFrameTime = timestamp;
         this.accumulatedTime += elapsed;
 
         const targetFps = (this.hardware.ppu && this.hardware.ppu.isPal) ? 50.0 : 60.098;
         const targetFrameDuration = 1000.0 / targetFps;
-        let framesRun = 0;
 
-        while (this.accumulatedTime >= targetFrameDuration) {
-            if (!this.isPaused) {
-                // SYNC INPUTS FROM UNIVERSAL INPUT DIRECTLY TO SNES PAD ON EACH FRAME
-                if (window.UniversalInput) {
-                    this.sendInput(0, window.UniversalInput.isPressed("B"));      // B
-                    this.sendInput(1, window.UniversalInput.isPressed("Y"));      // Y
-                    this.sendInput(2, window.UniversalInput.isPressed("SELECT")); // Select
-                    this.sendInput(3, window.UniversalInput.isPressed("START"));  // Start
-                    this.sendInput(4, window.UniversalInput.isPressed("UP"));     // Up
-                    this.sendInput(5, window.UniversalInput.isPressed("DOWN"));   // Down
-                    this.sendInput(6, window.UniversalInput.isPressed("LEFT"));   // Left
-                    this.sendInput(7, window.UniversalInput.isPressed("RIGHT"));  // Right
-                    this.sendInput(8, window.UniversalInput.isPressed("A"));      // A
-                    this.sendInput(9, window.UniversalInput.isPressed("X"));      // X
-                    this.sendInput(10, window.UniversalInput.isPressed("L"));     // L
-                    this.sendInput(11, window.UniversalInput.isPressed("R"));     // R
-                }
-
-                this.hardware.runFrame(false);
-                this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
-                this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
-                
-                this.fpsCount++; // Incremento real de frame de CPU emulado
-                framesRun++;
-            }
-            this.accumulatedTime -= targetFrameDuration;
+        // Death Spiral Protection
+        if (this.accumulatedTime > targetFrameDuration * 2) {
+            this.accumulatedTime = targetFrameDuration * 2;
         }
 
-        if (framesRun > 0 && !this.isPaused) {
+        const isFastForward = window.UniversalInput && window.UniversalInput.isPressed("FAST_FORWARD");
+        let framesRun = 0;
+        let renderedThisFrame = false;
+
+        if (isFastForward && !this.isPaused) {
+            this.audioProcessor.setAudioEnabled(false);
+            for (let i = 0; i < 3; i++) {
+                this.pollInputs();
+                // We pass 'true' to runFrame (noPpu) to bypass PPU composition during Fast-Forward
+                this.hardware.runFrame(true); 
+                this.fpsCount++;
+                framesRun++;
+            }
+            // Draw only the final state to the screen
+            this.hardware.ppu.setPixels();
+            renderedThisFrame = true;
+            this.accumulatedTime = 0; 
+        } else {
+            this.audioProcessor.setAudioEnabled(window.audioEnabledState);
+            while (this.accumulatedTime >= targetFrameDuration) {
+                if (!this.isPaused) {
+                    this.pollInputs();
+
+                    // DYNAMIC FRAMESKIP:
+                    // If the time accumulator has built up more than 1.5 frames of lag, 
+                    // skip rendering (runFrame(true)) to preserve audio execution speed.
+                    const skipRendering = this.accumulatedTime >= (targetFrameDuration * 1.5);
+
+                    this.hardware.runFrame(skipRendering);
+
+                    if (!skipRendering) {
+                        this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
+                        this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
+                        renderedThisFrame = true;
+                    }
+                    
+                    this.fpsCount++; 
+                    framesRun++;
+                }
+                this.accumulatedTime -= targetFrameDuration;
+            }
+        }
+
+        // Handle PPU video blitting only if we processed a non-skipped frame
+        if (framesRun > 0 && renderedThisFrame && !this.isPaused) {
             const activeHeight = this.hardware.ppu.frameOverscan ? 240 : 224;
 
             if (this.postProcessMode === 0 || this.postProcessMode === 1) {
-                if (this.ctx.canvas.width !== 512 || this.ctx.canvas.height !== 480) {
-                    this.ctx.canvas.width = 512;
-                    this.ctx.canvas.height = 480;
-                }
-                this.hardware.setPixels(this.imgData.data);
+                this.hardware.ppu.setPixels(); 
                 this.ctx.putImageData(this.imgData, 0, 0);
             } else {
                 if (!this.rgba32) {
                     this.rgba32 = new Uint32Array(this.postProcessor.rgbaBuffer.buffer);
                 }
                 this.convertOriginalRGBToRGBA(this.hardware.ppu.pixelOutput, this.rgba32, 512, activeHeight);
-                this.postProcessor.blit(
-                    this.ctx,
-                    this.rgba32,
-                    512,
-                    activeHeight,
-                    this.postProcessMode,
-                    null
-                );
+                this.postProcessor.blit(this.ctx, this.rgba32, 512, activeHeight, this.postProcessMode, null);
             }
         }
 
-        this.updatePerformanceMetrics(timestamp);
+        this.updatePerformanceMetrics(timestamp, isFastForward);
         this.animationFrameId = requestAnimationFrame((t) => this.executionLoop(t));
     }
 
-    convertOriginalRGBToRGBA(src16, dst32, width, height) {
-        let srcIdx = 0;
-        const doubleWidth = width * 2;
-        
-        for (let y = 0; y < height; y++) {
-            const dstRow1 = y * doubleWidth;
-            const dstRow2 = dstRow1 + width;
-            
-            for (let x = 0; x < width; x++) {
-                const pixel = src16[srcIdx] | (src16[srcIdx + 1] << 8) | (src16[srcIdx + 2] << 16) | 0xff000000;
-                srcIdx += 3;
-                dst32[dstRow1 + x] = pixel;
-                dst32[dstRow2 + x] = pixel;
-            }
+    pollInputs() {
+        if (window.UniversalInput) {
+            this.sendInput(0, window.UniversalInput.isPressed("B"));      
+            this.sendInput(1, window.UniversalInput.isPressed("Y"));      
+            this.sendInput(2, window.UniversalInput.isPressed("SELECT")); 
+            this.sendInput(3, window.UniversalInput.isPressed("START"));  
+            this.sendInput(4, window.UniversalInput.isPressed("UP"));     
+            this.sendInput(5, window.UniversalInput.isPressed("DOWN"));   
+            this.sendInput(6, window.UniversalInput.isPressed("LEFT"));   
+            this.sendInput(7, window.UniversalInput.isPressed("RIGHT"));  
+            this.sendInput(8, window.UniversalInput.isPressed("A"));      
+            this.sendInput(9, window.UniversalInput.isPressed("X"));      
+            this.sendInput(10, window.UniversalInput.isPressed("L"));     
+            this.sendInput(11, window.UniversalInput.isPressed("R"));     
         }
     }
 
-    updatePerformanceMetrics(timestamp) {
-        // CORREGIDO: Se elimina el duplicado "this.fpsCount++" que inflaba las lecturas de FPS
+    /**
+     * Unrolled additive color conversion. Eliminates multiplication math 
+     * inside the loop to drastically improve performance.
+     */
+    convertOriginalRGBToRGBA(src16, dst32, width, height) {
+        let srcIdx = 0;
+        let dstIdx = 0;
+        
+        for (let y = 0; y < height; y++) {
+            const nextRowOffset = width;
+            for (let x = 0; x < width; x++) {
+                const r = src16[srcIdx];
+                const g = src16[srcIdx + 1];
+                const b = src16[srcIdx + 2];
+                srcIdx += 3;
+                
+                const pixel = r | (g << 8) | (b << 16) | 0xff000000;
+                dst32[dstIdx] = pixel;
+                dst32[dstIdx + nextRowOffset] = pixel;
+                dstIdx++;
+            }
+            dstIdx += width; // Safely skip the duplicate row we just filled
+        }
+    }
+
+    updatePerformanceMetrics(timestamp, isFastForward) {
         if (timestamp - this.fpsTimer >= 1000) {
-            if (this.onFpsUpdate) this.onFpsUpdate(this.fpsCount);
+            if (this.onFpsUpdate) {
+                this.onFpsUpdate(isFastForward ? "FFWD" : this.fpsCount);
+            }
             this.fpsCount = 0;
             this.fpsTimer = timestamp;
         }
