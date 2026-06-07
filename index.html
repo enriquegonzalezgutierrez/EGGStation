@@ -7,8 +7,9 @@
       * File: index.html
       * 
       * Role:
-      * Master View / DOM Layout. Provides the structured UI elements (Canvas, Buttons, 
-      * Overlays) required by the UIControllers.
+      * Master View / DOM Layout (Presentation Layer). Defines the structured UI 
+      * layout elements (Unified Interactive Canvas, Control Sliders, Drawer Overlays) 
+      * required by the presentation layer UIControllers.
     -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -24,7 +25,7 @@
 </head>
 <body>
 
-    <!-- Overlay oscuro para tapar el emulador cuando se abre el menú en móviles -->
+    <!-- Translucent overlay to dim the emulator stage when mobile drawer is expanded -->
     <div id="mobile-drawer-overlay" class="hidden"></div>
 
     <!-- Main Grid App Container -->
@@ -38,7 +39,7 @@
             </div>
             
             <div class="system-stats">
-                <!-- Botón de Juegoteca para Ordenador (Desktop) -->
+                <!-- Desktop Games Library Toggle Button -->
                 <button id="library-toggle-btn" class="btn outline-btn hide-on-mobile">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px;">
                         <path d="M12 20h9"></path>
@@ -55,16 +56,16 @@
                 <span id="fpsSpan">0.0 FPS</span>
                 <button id="dev-toggle-btn" class="btn outline-btn hide-on-mobile">DEV MODE</button>
                 
-                <!-- Botones de Acción para móviles (Modo Retrato) -->
+                <!-- Mobile Action Button Group (Portrait Mode) -->
                 <div class="mobile-action-group show-on-mobile">
-                    <!-- Botón de Juegoteca Móvil -->
+                    <!-- Mobile Games Library Toggle Button -->
                     <button id="mobile-library-btn" class="btn outline-btn" aria-label="Library" style="margin-right: 8px;">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
                             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
                         </svg>
                     </button>
-                    <!-- Botón de Ajustes Móvil -->
+                    <!-- Mobile Settings Toggle Button -->
                     <button id="mobile-menu-btn" class="btn outline-btn" aria-label="Settings">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <line x1="3" y1="12" x2="21" y2="12"></line>
@@ -101,7 +102,7 @@
 
             <!-- Virtual On-Screen Gamepad for Mobile Viewports -->
             <section id="virtual-gamepad">
-                <!-- Botón de ajustes flotante en modo apaisado -->
+                <!-- Floating Settings Toggle Button (Landscape Mode Only) -->
                 <button id="landscape-menu-btn" class="floating-menu-btn hidden">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -132,16 +133,16 @@
             </section>
         </main>
 
-        <!-- JUEGOTECA / GAMES LIBRARY: Desplazamiento desde la IZQUIERDA -->
+        <!-- GAMES LIBRARY DRAWER: Slides from the Left -->
         <aside id="library-panel" class="glass-panel library-closed">
             <div class="drawer-header">
                 <h2>Games Library</h2>
                 <button id="close-library-btn" class="btn outline-btn">✖</button>
             </div>
             
-            <!-- Lista dinámica inyectada por app.js -->
+            <!-- Dynamic list populated at runtime by app.js -->
             <div id="library-grid" class="library-scroll-area">
-                <!-- Se poblará dinámicamente -->
+                <!-- Injected dynamically -->
             </div>
         </aside>
 
@@ -248,7 +249,7 @@
 
     </div>
 
-    <!-- UTILS, CORES & BOOTSTRAPPER (Iguales, sin alterar la carga) -->
+    <!-- SHARED UTILITIES, HARDWARE CORES & COMPOSITION BOOTSTRAPPER -->
     <script src="js/shared/video/UniversalPostProcessor.js"></script>
     <script src="js/shared/storage/IndexedDbManager.js"></script>
     <script src="js/shared/storage/RomDecompressor.js"></script>
@@ -256,7 +257,11 @@
     <script src="js/shared/presentation/UniversalDragDropHandler.js"></script>
     <script src="js/shared/presentation/UniversalFeedbackManager.js"></script>
     <script src="js/shared/presentation/UniversalDevSuiteManager.js"></script>
+    
+    <!-- Loaded Compiled WebAssembly Modules & Javascript Glue Layer -->
+    <script src="build/SegaPsg.js"></script>
     <script src="js/shared/audio/SegaPsg.js"></script>
+    
     <script src="js/shared/audio/UniversalAudioProcessor.js"></script>
 
     <script src="js/shared/cpu/z80/Z80Registers.js"></script>

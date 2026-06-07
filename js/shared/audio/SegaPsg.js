@@ -1,105 +1,112 @@
 /**
- * Project: EGGStation - Unified Multi-System Console Virtual Environment
+ * Project: EGGStation - Sega & SNES Multi-System Emulator
  * Author: Enrique González Gutiérrez
  * File: js/shared/audio/SegaPsg.js
  * 
- * Role:
- * Infrastructure Layer: Sega SN76489-compatible Programmable Sound Generator (PSG).
- * Emulates three square-wave tone channels and one feedback noise channel. 
- * Supports both active Web Audio mixing (for SMS) and passive buffer-filling (for Genesis)
- * using a single, unified, mathematically perfect phase-step synthesizer.
+ * Infrastructure Layer: SegaPsg WebAssembly Bridge Adapter (SOLID LSP Compliant)
  * 
- * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Exclusively responsible for emulating 
- *    the Texas Instruments SN76489 sound chip (noise LFSR, tone generators, and attenuation).
- * 2. Liskov Substitution Principle (LSP): Fully interchangeable. It acts as a 
- *    standalone WebAudio node (SMS) or as a passive sample synthesizer (Genesis).
- * 3. Don't Repeat Yourself (DRY): Both systems now consume the exact same oscillator 
- *    math via `getSample()`, eliminating legacy double implementations.
+ * Role:
+ * Implements the Adapter Pattern to wrap the compiled C++ WebAssembly module.
+ * Exposes the exact same public interface as the legacy JavaScript SegaPsg class, 
+ * allowing seamless drop-in integration with zero changes to any Orchestrator loops.
+ * 
+ * Design features:
+ * - Zero-Copy Memory reads: Maps a Float32Array directly over the WebAssembly Linear 
+ *   Memory Heap (HEAPF32) utilizing the shared buffer pointer.
+ * - Bidirectional State Sync: Exposes proxy registers that sync seamlessly with Wasm 
+ *   clocks to fully support real-time rewinding (Temporal Physics).
  */
-
-const SEGA_PSG_NOISE_TYPE_PERIODIC = 0;
-const SEGA_PSG_NOISE_TYPE_WHITE    = 1;
 
 class SegaPsg {
     constructor() {
-        // Hardware Registers
-        this.volregister = new Int16Array([0xf, 0xf, 0xf, 0xf]); 
-        this.toneregister = new Int16Array([0, 0, 0, 0]);       
-        this.wavePos = new Float32Array([0, 0, 0, 0]);            
-        this.cachedStepSize = new Float32Array([0, 0, 0, 0]);
+        this.wasmInstance = null;
+        this.sharedBufferPtr = 0;
+        
+        // This view will map directly over WebAssembly Linear Memory Heap
+        this.sharedBufferView = null;
+        this.audioInitialized = false;
+        this.isMuted = false;
 
-        this.chan2belatched = 0; 
-        this.what2latch = 0;     
+        // Mock state properties to satisfy serialization read requests (Rewind support)
+        this.volregister = new Int16Array(4);
+        this.toneregister = new Int16Array(4);
+        this.wavePos = new Float32Array(4);
+        this.chan2belatched = 0;
+        this.what2latch = 0;
 
-        // Noise Channel Registers
-        this.noiseFreqMode = 0;
-        this.noiseType = SEGA_PSG_NOISE_TYPE_PERIODIC;
-        this.noiseShiftRegister = 0x8000;
-        this.noiseOut = 0;
-        this.noisePhase = 0.0;
-        this.noiseStepSize = 0.0;
-
-        this.eventsQueue = [];
+        // Dynamic Rate Control (DRC) synchronization properties
         this.internalClock = 0;
         this.internalClockPos = 0;
-
-        this.isMuted = false;
-        this.audioInitialized = false;
-
-        this.squareWaveLen = 8192;
-        this.sampleRate = 44100; // Default fallback sample rate
 
         // Web Audio components (For SMS active mode)
         this.context = null;
         this.jsNode = null;
         this.gainNode = null;
         this.biquadFilterNode = null; 
-        this.delayNode = null;        
-        
         this.audioBufSize = 2048;     
         this.multiplier = 0;
         this.audioEnabled = false;
 
-        this.initialise();
+        // Asynchronously load the modularized Emscripten WebAssembly output
+        if (typeof SegaPsgWasm !== 'undefined') {
+            SegaPsgWasm().then(instance => {
+                this.wasmInstance = instance;
+                
+                // Retrieve the static shared memory address from C++
+                this.sharedBufferPtr = this.wasmInstance._psg_get_buffer_pointer();
+                
+                // Map the Float32Array directly to the Wasm HEAPF32 memory buffer (Zero-Copy)
+                this.sharedBufferView = new Float32Array(
+                    this.wasmInstance.HEAPF32.buffer, 
+                    this.sharedBufferPtr, 
+                    this.audioBufSize
+                );
+
+                this.wasmInstance._psg_init();
+                this.audioInitialized = true;
+                console.log("[EGGStation::Wasm] SegaPsg C++ WebAssembly module linked successfully.");
+            });
+        } else {
+            console.error("[EGGStation::Wasm] Fatal: SegaPsgWasm loader is not defined in the global scope.");
+        }
     }
 
-    /**
-     * Resets internal audio registers and timing clocks back to default power-on states.
-     * Supports both British (initialise) and American (initialize) spelling conventions.
-     */
     initialise() {
-        this.initialize();
+        if (this.audioInitialized) {
+            this.wasmInstance._psg_init();
+            this.internalClock = 0;
+            this.internalClockPos = 0;
+            this.volregister.fill(0xF);
+            this.toneregister.fill(0);
+            this.wavePos.fill(0.0);
+            this.chan2belatched = 0;
+            this.what2latch = 0;
+        }
     }
 
     initialize() {
-        this.volregister.fill(0xf); // Silence
-        this.toneregister.fill(0);
-        this.wavePos.fill(0);
-        this.cachedStepSize.fill(0);
-
-        this.chan2belatched = 0;
-        this.what2latch = 0;
-
-        this.noiseFreqMode = 0;
-        this.noiseType = SEGA_PSG_NOISE_TYPE_PERIODIC;
-        this.noiseShiftRegister = 0x8000;
-        this.noiseOut = 0;
-        this.noisePhase = 0.0;
-        this.noiseStepSize = 0.0;
-
-        this.eventsQueue = [];
-        this.internalClock = 0;
-        this.internalClockPos = 0;
+        this.initialise();
     }
 
-    /**
-     * Sets the active host sample rate (Used to calculate precise analog wave phases).
-     */
     setSampleRate(rate) {
-        this.sampleRate = rate || 44100;
-        for (let i = 0; i < 3; i++) this.recalculateVoiceStep(i);
-        this.recalculateNoiseStep();
+        if (this.audioInitialized) {
+            this.wasmInstance._psg_set_sample_rate(rate);
+        }
+    }
+
+    writeByte(command) {
+        if (this.audioInitialized) {
+            this.wasmInstance._psg_write_command(command);
+        }
+    }
+
+    writeCommand(command) {
+        this.writeByte(command);
+    }
+
+    getSample() {
+        if (!this.audioInitialized) return 0.0;
+        return this.wasmInstance._psg_get_sample();
     }
 
     setMuted(shouldMute) {
@@ -116,10 +123,16 @@ class SegaPsg {
         }
     }
 
-    /**
-     * Bootstraps Web Audio API for Active Mode (Sega Master System).
-     */
+    setAudioEnabled(enabled) {
+        this.audioEnabled = enabled;
+        if (this.context) {
+            if (enabled && this.context.state === 'suspended') this.context.resume().catch(() => {});
+            else if (!enabled && this.context.state === 'running') this.context.suspend().catch(() => {});
+        }
+    }
+
     async startMix(cpu) {
+        // SMS Active Audio Mode bootstrap
         try {
             this.audioEnabled = window.audioEnabledState !== false;
             window.AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -141,170 +154,82 @@ class SegaPsg {
             this.biquadFilterNode.connect(this.gainNode);
             this.gainNode.connect(this.context.destination);
 
-            this.audioInitialized = true;
             if (!this.audioEnabled) this.context.suspend().catch(() => {});
         }
         catch(e) {
-            console.error("SegaPsg::Failed to bootstrap Web Audio.", e);
+            console.error("SegaPsg::WasmAdapter failed to bootstrap Web Audio.", e);
             this.audioEnabled = false;
         }        
     }
 
-    setAudioEnabled(enabled) {
-        this.audioEnabled = enabled;
-        if (this.context) {
-            if (enabled && this.context.state === 'suspended') this.context.resume().catch(() => {});
-            else if (!enabled && this.context.state === 'running') this.context.suspend().catch(() => {});
-        }
-    }
-
+    /**
+     * Updates CPU execution cycles reference to compute Dynamic Rate Control (DRC) drift.
+     */
     step(totCpuCycles) {
         this.internalClock = totCpuCycles;
     }
 
     /**
-     * Calculates square wave phase increment based on the 3.58MHz master clock.
+     * Calculates current WebAudio buffer delay deviation.
      */
-    recalculateVoiceStep(voiceIndex) {
-        const toneVal = this.toneregister[voiceIndex];
-        if (toneVal === 0) {
-            this.cachedStepSize[voiceIndex] = 0;
-        } else {
-            const freq = 3579545.0 / (32.0 * toneVal);
-            this.cachedStepSize[voiceIndex] = (freq / this.sampleRate) * this.squareWaveLen;
-        }
-    }
-
-    /**
-     * Calculates Noise channel shift rate based on the 3.58MHz master clock.
-     */
-    recalculateNoiseStep() {
-        if (this.noiseFreqMode < 3) {
-            const divisors = [512, 1024, 2048];
-            const freq = 3579545.0 / divisors[this.noiseFreqMode];
-            this.noiseStepSize = (freq / this.sampleRate);
-        } else {
-            const toneVal = this.toneregister[2];
-            if (toneVal === 0) {
-                this.noiseStepSize = 0;
-            } else {
-                const freq = 3579545.0 / (32.0 * toneVal);
-                this.noiseStepSize = (freq / this.sampleRate);
-            }
-        }
-    }
-
-    /**
-     * Shared Command Latch Processor.
-     * Maps physical Z80/M68K byte writes to the internal SN76489 registers.
-     */
-    applyCommand(command) {
-        command &= 0xFF;
-        if (command & 0x80) {
-            this.chan2belatched = (command >> 5) & 3;
-            this.what2latch = (command & 0x10) !== 0 ? 1 : 0;
-            const ch = this.chan2belatched;
-
-            if (this.what2latch === 1) {
-                this.volregister[ch] = command & 0xF;
-            } else {
-                if (ch === 3) {
-                    this.noiseFreqMode = command & 3;
-                    this.noiseType = (command & 4) !== 0 ? SEGA_PSG_NOISE_TYPE_WHITE : SEGA_PSG_NOISE_TYPE_PERIODIC;
-                    this.noiseShiftRegister = 0x8000;
-                    this.recalculateNoiseStep();
-                } else {
-                    this.toneregister[ch] = (this.toneregister[ch] & 0xFFF0) | (command & 0x0F);
-                    this.recalculateVoiceStep(ch);
-                    if (ch === 2) this.recalculateNoiseStep(); // Noise Mode 3 tracks Tone 2
-                }
-            }
-        } else {
-            const ch = this.chan2belatched;
-            if (this.what2latch === 1) {
-                this.volregister[ch] = command & 0xF;
-            } else if (ch !== 3) {
-                this.toneregister[ch] = (this.toneregister[ch] & 0x000F) | ((command & 0x3F) << 4);
-                this.recalculateVoiceStep(ch);
-                if (ch === 2) this.recalculateNoiseStep();
-            }
-        }
-    }
-
-    // ========================================================================
-    // SMS ACTIVE MODE: Queued execution to sync with CPU sub-cycles
-    // ========================================================================
-    writeByte(eventByte) {
-        this.eventsQueue.push([eventByte, this.internalClock]);
-    }
-
-    processEvents(targetClock) {
-        while (this.eventsQueue.length > 0 && this.eventsQueue[0][1] <= targetClock) {
-            const curEvent = this.eventsQueue.shift();
-            this.applyCommand(curEvent[0]);
-        }
-    }
-
     getClockDrift() {
         if (!this.audioInitialized) return 0;
         return this.internalClock - this.internalClockPos;
     }
 
-    // ========================================================================
-    // GENESIS PASSIVE MODE: Immediate execution without queueing
-    // ========================================================================
-    writeCommand(command) {
-        this.applyCommand(command);
-    }
-
-    // ========================================================================
-    // UNIFIED SYNTHESIS ENGINE (Polymorphic Math)
-    // ========================================================================
-    
     /**
-     * Generates a single frame of audio (-1.0 to 1.0) mathematically.
-     * Used synchronously by both SMS and Genesis.
+     * Recalculates PSG channel phases when state is restored during rewinding.
+     * Maps the local restored JS variables back to native C++ WebAssembly memory.
      */
-    getSample() {
-        let finalSample = 0.0;
-
-        // 1. Synthesize 3 Square Wave Tones
-        for (let i = 0; i < 3; i++) {
-            const vol = this.volregister[i];
-            if (vol !== 0xf && this.toneregister[i] !== 0) {
-                const curSamp = (this.wavePos[i] < (this.squareWaveLen >> 1)) ? 1.0 : -1.0;
-                const volScale = (15 - vol) / 15.0; 
-                finalSample += curSamp * volScale * 0.20; 
-                
-                this.wavePos[i] += this.cachedStepSize[i];
-                if (this.wavePos[i] >= this.squareWaveLen) this.wavePos[i] %= this.squareWaveLen;
-            }
-        }
-
-        // 2. Synthesize 1 LFSR Noise Channel
-        const volNoise = this.volregister[3];
-        if (volNoise !== 0xf) {
-            this.noisePhase += this.noiseStepSize;
-            while (this.noisePhase >= 1.0) {
-                this.noisePhase -= 1.0;
-                this.noiseOut = this.noiseShiftRegister & 1;
-                this.noiseShiftRegister = (this.noiseShiftRegister >> 1) | (this.noiseShiftRegister << 15);
-                
-                // Sega specific XOR-feedback polynomial for White Noise
-                if (this.noiseType === SEGA_PSG_NOISE_TYPE_WHITE && (this.noiseShiftRegister & 0x40)) {
-                    this.noiseShiftRegister ^= 0x8000;
-                }
-            }
-            const curSamp = this.noiseOut ? 1.0 : -1.0;
-            const volScale = (15 - volNoise) / 15.0;
-            finalSample += curSamp * volScale * 0.20;
-        }
-
-        return finalSample;
+    recalculateVoiceStep(voiceIndex) {
+        if (!this.audioInitialized) return;
+        this.wasmInstance._psg_restore_state(
+            voiceIndex,
+            this.volregister[voiceIndex],
+            this.toneregister[voiceIndex],
+            this.wavePos[voiceIndex],
+            this.chan2belatched,
+            this.what2latch
+        );
     }
 
     /**
-     * SMS Active Node Output Generator.
+     * Fetches current C++ registers state back to the Javascript mapped properties.
+     */
+    syncFromWasm() {
+        if (!this.audioInitialized) return;
+        for (let i = 0; i < 4; i++) {
+            this.volregister[i] = this.wasmInstance._psg_get_vol(i);
+            this.toneregister[i] = this.wasmInstance._psg_get_tone(i);
+            this.wavePos[i] = this.wasmInstance._psg_get_wave_pos(i);
+        }
+        this.chan2belatched = this.wasmInstance._psg_get_chan_latch();
+        this.what2latch = this.wasmInstance._psg_get_what_latch();
+    }
+
+    /**
+     * Genesis Passive Mode: Fills system buffer directly from the shared Wasm memory.
+     */
+    update(sampleBuffer, totalFrames) {
+        if (!this.audioInitialized) return;
+
+        // Tell C++ to fill its internal static buffer
+        this.wasmInstance._psg_update_buffer(totalFrames);
+
+        // Read directly from the shared Wasm Float32 heap and write to the output buffer
+        let ptr = 0;
+        for (let i = 0; i < totalFrames; i++) {
+            const wasmSample = this.sharedBufferView[i];
+            sampleBuffer[ptr] = (sampleBuffer[ptr] + (wasmSample * 32767)) | 0;
+            ptr++;
+        }
+
+        // Sync local variables right after render to keep rewind state snapshots stable
+        this.syncFromWasm();
+    }
+
+    /**
+     * SMS Active Mode: Fills the audio node buffer sample-by-sample
      */
     mixFunction(e) {
         const data = e.outputBuffer.getChannelData(0);
@@ -324,29 +249,18 @@ class SegaPsg {
             data.fill(0);
             return;
         }
-        
-        const realStep = numClocksToCover / (this.multiplier * data.length);
 
+        // Fill buffer instantly via WebAssembly C++ Generator
+        this.wasmInstance._psg_update_buffer(data.length);
         for (let i = 0; i < data.length; i++) {
-            const sampleClock = this.internalClockPos + (i * realStep * this.multiplier);
-            this.processEvents(sampleClock);
-            data[i] = this.getSample();
+            data[i] = this.sharedBufferView[i];
         }
 
+        // Increment reference play clock to balance drift
         this.internalClockPos += numClocksToCover;
-    }
 
-    /**
-     * Genesis Passive Buffer Output Generator.
-     */
-    update(sampleBuffer, totalFrames) {
-        let ptr = 0;
-        for (let i = 0; i < totalFrames; i++) {
-            // Genesis FM mixer expects signed 16-bit integers
-            const floatSample = this.getSample();
-            sampleBuffer[ptr] = (sampleBuffer[ptr] + (floatSample * 32767)) | 0;
-            ptr++;
-        }
+        // Sync variables for active mode state serialization
+        this.syncFromWasm();
     }
 
     syncWorkletState() {}
