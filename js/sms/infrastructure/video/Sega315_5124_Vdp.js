@@ -1,428 +1,269 @@
 /**
- * Project: EGGStation - Sega Master System Emulator
+ * Project: EGGStation - Sega & SNES Multi-System Emulator
  * Author: Enrique González Gutiérrez
  * File: js/sms/infrastructure/video/Sega315_5124_Vdp.js
  * 
+ * Presentation Layer: Sega 315-5124 VDP WebAssembly Bridge Adapter
+ * 
  * Role:
- * Infrastructure Layer: Sega 315-5124 custom VDP (Sequential Pointer Optimized).
- * Emulates the central control bus, ports, registers, and timing synchronizations.
- * Optimized with linear pointer increments to remove expensive coordinate index multiplications
- * from the high-frequency pixel rendering hot paths.
+ * Implements the Adapter Pattern to wrap the compiled C++ WebAssembly VDP module.
+ * Maps WebAssembly linear memory directly to JavaScript typed arrays to allow 
+ * Zero-Copy page flipping.
  * 
  * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Responsible strictly for raw scanline 
- *    drawing, sprite evaluation, and VDP register tracking. It delegates upscaling 
- *    and shaders to UniversalPostProcessor.
- * 2. Dependency Inversion Principle (DIP): No longer depends on a concrete, 
- *    tightly-coupled legacy post-processor. It now instantiates and communicates 
- *    directly with the universal shared UniversalPostProcessor.
+ * - Liskov Substitution Principle (LSP): Serves as a perfect drop-in replacement 
+ *   for the legacy JS VDP. The orchestrator continues to call `.update()` and 
+ *   `.hyperBlit()` without noticing the change.
+ * - Single Responsibility Principle (SRP): Handles only WebAssembly memory wrapping, 
+ *   asynchronous loading, and routing data to the UniversalPostProcessor.
  */
 
 class Sega315_5124_Vdp {
-    static get DataPortWriteMode() {
-        return { toVRAM: 0, toCRAM: 1 };
-    }
-
     static get Standard() {
         return { vdpNTSC: 0, vdpPAL: 1 };
     }
 
     /**
      * @param {number} vdpMode - 0: NTSC, 1: PAL
-     * @param {WebGL2RenderingContext} glContext
+     * @param {WebGL2RenderingContext} glContext - Canvas WebGL context target for CRT shaders.
      */
     constructor(vdpMode, glContext) {
+        this.vdpMode = vdpMode;
+        this.glContext = glContext;
+        this.isInitialized = false;
+
+        // Allocating JS Fallback buffers to prevent crash on early startup
         this.vRam = new Uint8Array(0x4000);
         this.colorRam = new Uint8Array(0x20);
+        this.glbFrameBuffer = new Uint8ClampedArray(256 * 240 * 4);
+        this.glbFrameBuffer32 = new Uint32Array(this.glbFrameBuffer.buffer);
 
-        this.vdpStd = (vdpMode === 0) ? Sega315_5124_Vdp.Standard.vdpNTSC : Sega315_5124_Vdp.Standard.vdpPAL;
+        // Pre-allocate temporary pointers for WASM stack allocation
+        this.stackPtrs = null;
 
-        if (this.vdpStd === Sega315_5124_Vdp.Standard.vdpNTSC) {
-            this.numberOfScanlines = 262;
-            this.clockCyclesPerScanline = 228;
+        // Asynchronously load the modularized Emscripten WebAssembly output
+        if (typeof SegaVdpWasm !== 'undefined') {
+            SegaVdpWasm().then(instance => {
+                this.wasmInstance = instance;
+                this.wasmInstance._vdp_init(this.vdpMode);
+
+                this.bindWasmMemory();
+                
+                // Initialize the shared UniversalPostProcessor on the WebGL context
+                this.postProcessor = new UniversalPostProcessor(this.glContext);
+                
+                this.isInitialized = true;
+                console.log("[EGGStation::Wasm] Sega 315-5124 VDP module linked successfully.");
+            });
         } else {
-            this.numberOfScanlines = 313;
-            this.clockCyclesPerScanline = 228;
-        }
-
-        this.currentScanlineIndex = 0;
-        this.lineCounter = 0;
-
-        this.controlWordFlag = false;
-        this.controlWord = 0;
-        this.dataPortReadWriteAddress = 0;
-        this.dataPortWriteMode = Sega315_5124_Vdp.DataPortWriteMode.toVRAM;
-        this.readBufferByte = 0;
-        this.statusFlags = 0;
-
-        this.nameTableBaseAddress = 0xff;
-        this.spriteAttributeTableBaseAddress = 0;
-        this.spritePatternGeneratorBaseAddress = 0;
-
-        this.vcounter = 0;
-        this.hcounter = 0;
-
-        this.phaserClicked = false;
-        this.phaserX = 0;
-        this.phaserY = 0;
-
-        // Default register values
-        this.register00 = 0x36;
-        this.register01 = 0x80;
-        this.register02 = 0xff;
-        this.writeByteToRegister(2, 0xff);
-        this.register03 = 0xff;
-        this.register04 = 0xff;
-        this.register05 = 0xff;
-        this.writeByteToRegister(5, 0xff);
-        this.register06 = 0xfb;
-        this.writeByteToRegister(6, 0xfb);
-        this.register08 = 0x00;
-        this.register09 = 0x00;
-        this.register07 = 0x00;
-        this.register0a = 0xff;
-
-        this.glbResolutionX = 256;
-        this.glbResolutionY = 240;
-        this.yScreenLines = 192;
-
-        this.analogColorScale = new Uint8Array([0, 80, 175, 255]);
-
-        this.glbFrameBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY * 4);
-        this.prevFrameBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY * 4);
-        this.priBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY);
-        this.spriteBuffer = new Uint8ClampedArray(this.glbResolutionX * this.glbResolutionY);
-
-        this.sg1000palette = new Uint8Array([
-            0,0,0, 0,0,0, 33,200,66, 94,220,120, 84,85,237, 125,118,252, 
-            212,82,77, 66,235,245, 252,85,84, 255,121,120, 212,193,84, 
-            230,206,128, 33,176,59, 201,91,186, 204,204,204, 255,255,255
-        ]);
-
-        // PHASE 4: Instantiate the UniversalPostProcessor directly without tight coupling
-        this.postProcessor = new UniversalPostProcessor(glContext);
-    }
-
-    cleanSpriteBuffer() {
-        this.spriteBuffer.fill(0);
-    }
-
-    writeByteToRegister(registerIndex, dataByte) {
-        if (registerIndex === 0) {
-            this.register00 = dataByte;
-        }
-        else if (registerIndex === 1) {
-            this.register01 = dataByte;
-            if (this.register00 & 0x02) {
-                if (this.register01 & 0x08) {
-                    this.yScreenLines = 240;
-                } else if (this.register01 & 0x10) {
-                    this.yScreenLines = 224;
-                }
-            }
-        }
-        else if (registerIndex === 2) {
-            this.nameTableBaseAddress = dataByte;
-            this.register02 = dataByte;
-        }
-        else if (registerIndex === 3) {
-            this.register03 = dataByte;
-        }
-        else if (registerIndex === 4) {
-            this.register04 = dataByte;
-        }
-        else if (registerIndex === 5) {
-            this.spriteAttributeTableBaseAddress = (dataByte & 0x7e) << 7;
-            this.register05 = dataByte;
-        }
-        else if (registerIndex === 6) {
-            this.spritePatternGeneratorBaseAddress = (dataByte & 0x04) << 11;
-            this.register06 = dataByte;
-        }
-        else if (registerIndex === 7) {
-            this.register07 = dataByte;
-        }
-        else if (registerIndex === 8) {
-            this.register08 = dataByte;
-        }
-        else if (registerIndex === 9) {
-            this.register09 = dataByte;
-        }
-        else if (registerIndex === 0x0a) {
-            this.register0a = dataByte;
+            console.error("[EGGStation::Wasm] Fatal: SegaVdpWasm loader is not defined in the global scope.");
         }
     }
 
-    writeByteToControlPort(b) {
-        if (!this.controlWordFlag) {
-            this.controlWord = b;
-            this.controlWordFlag = true;
-            this.dataPortReadWriteAddress = (this.dataPortReadWriteAddress & 0x3f00) | b;
-        } else {
-            this.controlWord |= (b << 8);
-            this.controlWordFlag = false;
+    /**
+     * Maps the C++ memory pointers directly to JavaScript typed arrays (Zero-Copy).
+     */
+    bindWasmMemory() {
+        const wasm = this.wasmInstance;
 
-            const controlCode = (this.controlWord & 0xc000) >> 14;
-            this.dataPortReadWriteAddress = (this.controlWord & 0x3fff);        
+        // 1. Get raw C++ Heap Pointers
+        const fbPtr = wasm._vdp_get_framebuffer_pointer();
+        const vramPtr = wasm._vdp_get_vram_pointer();
+        const cramPtr = wasm._vdp_get_cram_pointer();
+        const regsPtr = wasm._vdp_get_registers_pointer();
 
-            if (controlCode === 0) {
-                this.dataPortWriteMode = Sega315_5124_Vdp.DataPortWriteMode.toVRAM;
-                this.readBufferByte = this.vRam[this.dataPortReadWriteAddress & 0x3fff];
-                this.dataPortReadWriteAddress = (this.dataPortReadWriteAddress + 1) & 0x3fff;                
-            }
-            else if (controlCode === 1) {
-                this.dataPortWriteMode = Sega315_5124_Vdp.DataPortWriteMode.toVRAM;
-            }
-            else if (controlCode === 2) {
-                const registerIndex = (this.controlWord & 0x0f00) >> 8;
-                const dataByte = this.controlWord & 0x00ff;
-                this.writeByteToRegister(registerIndex, dataByte);                
-            }
-            else if (controlCode === 3) {
-                this.dataPortWriteMode = Sega315_5124_Vdp.DataPortWriteMode.toCRAM;
-            }
-        }
+        // 2. Wrap JS views directly over the WebAssembly Linear Heap (Zero-Copy!)
+        this.glbFrameBuffer = new Uint8ClampedArray(wasm.HEAPU8.buffer, fbPtr, 256 * 240 * 4);
+        this.glbFrameBuffer32 = new Uint32Array(wasm.HEAP32.buffer, fbPtr, 256 * 240);
+        this.vRam = new Uint8Array(wasm.HEAPU8.buffer, vramPtr, 0x4000);
+        this.colorRam = new Uint8Array(wasm.HEAPU8.buffer, cramPtr, 0x20);
+        this.registers = new Uint8Array(wasm.HEAPU8.buffer, regsPtr, 11);
+
+        // Allocate memory on the WASM stack for state syncing (Used by get/set state getters)
+        this.stackPtrs = {
+            scanlineIdx: wasm._malloc(4),
+            lineCnt: wasm._malloc(4),
+            ctrlFlag: wasm._malloc(4),
+            ctrlWord: wasm._malloc(2),
+            dataAddr: wasm._malloc(2),
+            writeMode: wasm._malloc(1),
+            readBuf: wasm._malloc(1),
+            status: wasm._malloc(1)
+        };
     }
 
-    writeByteToDataPort(b) {
-        this.controlWordFlag = false;
+    writeByteToControlPort(value) {
+        if (this.isInitialized) this.wasmInstance._vdp_write_control(value);
+    }
 
-        if (this.dataPortWriteMode === Sega315_5124_Vdp.DataPortWriteMode.toVRAM) {
-            this.vRam[this.dataPortReadWriteAddress] = b;
-        }
-        else if (this.dataPortWriteMode === Sega315_5124_Vdp.DataPortWriteMode.toCRAM) {
-            this.colorRam[this.dataPortReadWriteAddress & 0x1f] = b;
-        }
+    writeByteToDataPort(value) {
+        if (this.isInitialized) this.wasmInstance._vdp_write_data(value);
+    }
 
-        this.dataPortReadWriteAddress = (this.dataPortReadWriteAddress + 1) & 0x3fff;
-        this.readBufferByte = b;
+    readByteFromControlPort() {
+        return this.isInitialized ? this.wasmInstance._vdp_read_control() : 0xFF;
     }
 
     readByteFromDataPort() {
-        this.controlWordFlag = false;
-        const byte = this.readBufferByte;
-        this.readBufferByte = this.vRam[this.dataPortReadWriteAddress];
-        this.dataPortReadWriteAddress = (this.dataPortReadWriteAddress + 1) & 0x3fff;
-        return byte;
-    }    
+        return this.isInitialized ? this.wasmInstance._vdp_read_data() : 0x00;
+    }
 
-    readByteFromControlPort() {
-        this.controlWordFlag = false;
-        const currentStatusFlags = this.statusFlags;
-        this.statusFlags &= 0x1f;
-        return currentStatusFlags | 0x1f;
-    }    
+    readDataPort(port) {
+        return this.isInitialized ? this.wasmInstance._vdp_read_port(port) : 0x00;
+    }
 
-    readDataPort(p) {
-        if (p === 0x7e) return this.phaserClicked ? this.phaserY : this.vcounter;
-        if (p === 0x7f) return this.phaserClicked ? this.phaserX : this.hcounter;
+    /**
+     * Steps the VDP cycle timer.
+     * @param {Object} theCPU - The active Z80 CPU instance.
+     * @param {number} cycles - CPU cycles elapsed.
+     * @return {boolean} True if V-Blank was reached on this step.
+     */
+    update(theCPU, cycles) {
+        if (!this.isInitialized) return false;
+
+        const wasm = this.wasmInstance;
+        
+        // Pass a stack pointer to hold the raiseInterrupt IRQ out-value
+        const irqOutPtr = this.stackPtrs.status; // Reusing a 1-byte pre-allocated stack allocation
+        const vblankReached = wasm._vdp_update(cycles, irqOutPtr);
+
+        const raiseInterrupt = wasm.HEAPU8[irqOutPtr] !== 0;
+        if (raiseInterrupt && theCPU) {
+            theCPU.raiseMaskableInterrupt();
+        }
+
+        return vblankReached;
+    }
+
+    /**
+     * Delegates screen upscaling and WebGL shader tuning to the UniversalPostProcessor.
+     */
+    hyperBlit(ctx, postProcessMode) {
+        if (this.isInitialized && this.postProcessor) {
+            this.postProcessor.blit(ctx, this.glbFrameBuffer, this.yScreenLines, postProcessMode);
+        }
+    }
+
+    // ========================================================================
+    // COMPATIBILITY LAYER: ES6 GETTERS & SETTERS (LSP ALIGNMENT)
+    // Map individual registers transparently to keep the JS Orchestrator's
+    // Save/Load state serialization loops working flawlessly.
+    // ========================================================================
+
+    get register00() { return this.isInitialized ? this.registers[0] : 0x36; }
+    set register00(v) { if (this.isInitialized) this.registers[0] = v; }
+
+    get register01() { return this.isInitialized ? this.registers[1] : 0x80; }
+    set register01(v) { if (this.isInitialized) this.registers[1] = v; }
+
+    get register02() { return this.isInitialized ? this.registers[2] : 0xFF; }
+    set register02(v) { if (this.isInitialized) this.registers[2] = v; }
+
+    get register03() { return this.isInitialized ? this.registers[3] : 0xFF; }
+    set register03(v) { if (this.isInitialized) this.registers[3] = v; }
+
+    get register04() { return this.isInitialized ? this.registers[4] : 0xFF; }
+    set register04(v) { if (this.isInitialized) this.registers[4] = v; }
+
+    get register05() { return this.isInitialized ? this.registers[5] : 0xFF; }
+    set register05(v) { if (this.isInitialized) this.registers[5] = v; }
+
+    get register06() { return this.isInitialized ? this.registers[6] : 0xFB; }
+    set register06(v) { if (this.isInitialized) this.registers[6] = v; }
+
+    get register07() { return this.isInitialized ? this.registers[7] : 0x00; }
+    set register07(v) { if (this.isInitialized) this.registers[7] = v; }
+
+    get register08() { return this.isInitialized ? this.registers[8] : 0x00; }
+    set register08(v) { if (this.isInitialized) this.registers[8] = v; }
+
+    get register09() { return this.isInitialized ? this.registers[9] : 0x00; }
+    set register09(v) { if (this.isInitialized) this.registers[9] = v; }
+
+    get register0a() { return this.isInitialized ? this.registers[10] : 0xFF; }
+    set register0a(v) { if (this.isInitialized) this.registers[10] = v; }
+
+    get yScreenLines() {
+        if (!this.isInitialized) return 192;
+        if (this.registers[0] & 0x02) {
+            if (this.registers[1] & 0x08) return 240;
+            if (this.registers[1] & 0x10) return 224;
+        }
+        return 192;
+    }
+
+    // --- State Serialization Getters/Setters (Syncs internal C++ variables) ---
+
+    get currentScanlineIndex() { return this.getInternalField('scanlineIdx'); }
+    set currentScanlineIndex(v) { this.setInternalField('scanlineIdx', v); }
+
+    get lineCounter() { return this.getInternalField('lineCnt'); }
+    set lineCounter(v) { this.setInternalField('lineCnt', v); }
+
+    get controlWordFlag() { return this.getInternalField('ctrlFlag') !== 0; }
+    set controlWordFlag(v) { this.setInternalField('ctrlFlag', v ? 1 : 0); }
+
+    get controlWord() { return this.getInternalField('ctrlWord'); }
+    set controlWord(v) { this.setInternalField('ctrlWord', v); }
+
+    get dataPortReadWriteAddress() { return this.getInternalField('dataAddr'); }
+    set dataPortReadWriteAddress(v) { this.setInternalField('dataAddr', v); }
+
+    get dataPortWriteMode() { return this.getInternalField('writeMode'); }
+    set dataPortWriteMode(v) { this.setInternalField('writeMode', v); }
+
+    get readBufferByte() { return this.getInternalField('readBuf'); }
+    set readBufferByte(v) { this.setInternalField('readBuf', v); }
+
+    get statusFlags() { return this.getInternalField('status'); }
+    set statusFlags(v) { this.setInternalField('status', v); }
+
+    // Helpers to easily query and write individual fields across the WASM stack boundary
+    getInternalField(field) {
+        if (!this.isInitialized) return 0;
+        const wasm = this.wasmInstance;
+        const s = this.stackPtrs;
+        wasm._vdp_get_internal_state(s.scanlineIdx, s.lineCnt, s.ctrlFlag, s.ctrlWord, s.dataAddr, s.writeMode, s.readBuf, s.status);
+        
+        if (field === 'scanlineIdx') return wasm.HEAP32[s.scanlineIdx >> 2];
+        if (field === 'lineCnt') return wasm.HEAP32[s.lineCnt >> 2];
+        if (field === 'ctrlFlag') return wasm.HEAP32[s.ctrlFlag >> 2];
+        if (field === 'ctrlWord') return wasm.HEAPU16[s.ctrlWord >> 1];
+        if (field === 'dataAddr') return wasm.HEAPU16[s.dataAddr >> 1];
+        if (field === 'writeMode') return wasm.HEAPU8[s.writeMode];
+        if (field === 'readBuf') return wasm.HEAPU8[s.readBuf];
+        if (field === 'status') return wasm.HEAPU8[s.status];
         return 0;
     }
 
-    /**
-     * Renders a single pixel-row of a background tile on the screen.
-     * Optimized with sequential pointer addition to eliminate coordinate multiplication.
-     */
-    drawLineTile(addr, x, y, pal, fliph, flipv, finescrolly, priFlag) {
-        const offset = flipv ? (7 - ((y + finescrolly) % 8)) : ((y + finescrolly) % 8);
-        const tileRowAddr = addr + (offset * 4);
+    setInternalField(field, value) {
+        if (!this.isInitialized) return;
+        const wasm = this.wasmInstance;
+        const s = this.stackPtrs;
+        
+        // 1. Fetch current states first
+        wasm._vdp_get_internal_state(s.scanlineIdx, s.lineCnt, s.ctrlFlag, s.ctrlWord, s.dataAddr, s.writeMode, s.readBuf, s.status);
+        
+        // 2. Overwrite the specific target field
+        if (field === 'scanlineIdx') wasm.HEAP32[s.scanlineIdx >> 2] = value;
+        else if (field === 'lineCnt') wasm.HEAP32[s.lineCnt >> 2] = value;
+        else if (field === 'ctrlFlag') wasm.HEAP32[s.ctrlFlag >> 2] = value;
+        else if (field === 'ctrlWord') wasm.HEAPU16[s.ctrlWord >> 1] = value;
+        else if (field === 'dataAddr') wasm.HEAPU16[s.dataAddr >> 1] = value;
+        else if (field === 'writeMode') wasm.HEAPU8[s.writeMode] = value;
+        else if (field === 'readBuf') wasm.HEAPU8[s.readBuf] = value;
+        else if (field === 'status') wasm.HEAPU8[s.status] = value;
 
-        const byte0 = this.vRam[tileRowAddr];
-        const byte1 = this.vRam[tileRowAddr + 1];
-        const byte2 = this.vRam[tileRowAddr + 2];
-        const byte3 = this.vRam[tileRowAddr + 3];
-
-        const palOffset = pal * 16;
-        let bufferIndex = (x + (y * this.glbResolutionX)) * 4;
-
-        for (let xt = 0; xt < 8; xt++) {
-            const shift = fliph ? xt : (7 - xt);
-            const cramIdx = (((byte0 >> shift) & 1) | 
-                             (((byte1 >> shift) & 1) << 1) | 
-                             (((byte2 >> shift) & 1) << 2) | 
-                             (((byte3 >> shift) & 1) << 3)) & 0x0f;
-
-            const colorValue = this.colorRam[cramIdx + palOffset];
-            const xtile = x + xt;
-
-            if (xtile >= 0 && xtile < 256 && y >= 0 && y < this.yScreenLines) {
-                this.glbFrameBuffer[bufferIndex]     = this.analogColorScale[colorValue & 0x03];
-                this.glbFrameBuffer[bufferIndex + 1] = this.analogColorScale[(colorValue & 0x0c) >> 2];
-                this.glbFrameBuffer[bufferIndex + 2] = this.analogColorScale[(colorValue & 0x30) >> 4];
-                this.glbFrameBuffer[bufferIndex + 3] = 255;
-
-                this.priBuffer[x + xt + (y * this.glbResolutionX)] = (cramIdx !== 0) ? priFlag : 0;
-            }
-            
-            bufferIndex += 4; // Fast sequential index pointer increment
-        }
-    }
-
-    /**
-     * Renders a single horizontal slice of an active Sprite.
-     * Optimized with sequential pointer addition.
-     */
-    drawSpriteSlice(addr, spriteX, scanlineNum, slicey) {
-        const tileRowAddr = this.spritePatternGeneratorBaseAddress + addr + (slicey * 4);
-
-        const byte0 = this.vRam[tileRowAddr];
-        const byte1 = this.vRam[tileRowAddr + 1];
-        const byte2 = this.vRam[tileRowAddr + 2];
-        const byte3 = this.vRam[tileRowAddr + 3];
-
-        for (let xt = 0; xt < 8; xt++) {
-            const shift = 7 - xt;
-            const cramIdx = (((byte0 >> shift) & 1) | 
-                             (((byte1 >> shift) & 1) << 1) | 
-                             (((byte2 >> shift) & 1) << 2) | 
-                             (((byte3 >> shift) & 1) << 3)) & 0x0f;
-
-            if (cramIdx !== 0) {
-                const colorValue = this.colorRam[cramIdx + 16];
-                const cx = spriteX + xt;
-
-                if (cx >= 0 && cx < this.glbResolutionX && scanlineNum >= 0 && scanlineNum < this.yScreenLines) {
-                    const linearIndex = cx + (scanlineNum * this.glbResolutionX);
-                    
-                    if (this.spriteBuffer[linearIndex] === 0) {
-                        this.spriteBuffer[linearIndex] = 1;
-                    } else {
-                        this.statusFlags |= 0x20; // Trigger hardware collision flag
-                    }
-
-                    if (this.priBuffer[linearIndex] === 0) {
-                        const bufferIndex = linearIndex * 4;
-                        this.glbFrameBuffer[bufferIndex]     = this.analogColorScale[colorValue & 0x03];
-                        this.glbFrameBuffer[bufferIndex + 1] = this.analogColorScale[(colorValue & 0x0c) >> 2];
-                        this.glbFrameBuffer[bufferIndex + 2] = this.analogColorScale[(colorValue & 0x30) >> 4];
-                        this.glbFrameBuffer[bufferIndex + 3] = 255;
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Renders a single horizontal scanline row.
-     * @param {number} scanlineNum
-     */
-    drawScanline(scanlineNum) {
-        if (scanlineNum < 0 || scanlineNum >= this.yScreenLines) return;
-
-        let fbY = (scanlineNum * this.glbResolutionX) * 4;
-
-        if (!(this.register01 & 0x40)) { // Screen blanked (Register 1, Bit 6)
-            this.glbFrameBuffer.fill(0, fbY, fbY + 1024);
-            return;
-        }
-
-        // 1. Draw Background Layer
-        if ((this.register00 & 0x04) !== 0) {
-            VdpMode4Renderer.renderScanline(this, scanlineNum);
-        } else if ((this.register00 & 0x02) !== 0) {
-            VdpMode2Renderer.renderScanline(this, scanlineNum);
-        }
-
-        // 2. Draw Sprite Layer
-        if ((this.register00 & 0x04) !== 0) {
-            VdpSpriteManager.drawMode4(this, scanlineNum);
-        } else if ((this.register00 & 0x02) !== 0) {
-            VdpSpriteManager.drawMode2(this, scanlineNum);
-        }
-
-        // 3. Overscan Border Masking (Register 0, Bit 5)
-        if (this.register00 & 0x20) {
-            const oscol = this.colorRam[(this.register07 & 0x0f) + 16];
-            const r = this.analogColorScale[oscol & 0x03];
-            const g = this.analogColorScale[(oscol & 0x0c) >> 2];
-            const b = this.analogColorScale[(oscol & 0x30) >> 4];
-
-            let borderOffset = (scanlineNum * this.glbResolutionX) * 4;
-            for (let x = 0; x < 8; x++) {
-                this.glbFrameBuffer[borderOffset]     = r;
-                this.glbFrameBuffer[borderOffset + 1] = g;
-                this.glbFrameBuffer[borderOffset + 2] = b;
-                this.glbFrameBuffer[borderOffset + 3] = 255;
-                borderOffset += 4;
-            }
-        }
-    }
-
-    /**
-     * Delegates upscaling to the post-processing filter pipeline.
-     */
-    hyperBlit(ctx, postProcessMode) {
-        this.postProcessor.blit(ctx, this.glbFrameBuffer, this.yScreenLines, postProcessMode);
-    }
-
-    /**
-     * Steps V-Sync and coordinate sync timers.
-     */
-    update(theCPU, cycles) {
-        this.hcounter += cycles;
-        if (this.hcounter >= this.clockCyclesPerScanline) {
-            let raiseInterrupt = false;
-            this.hcounter %= this.clockCyclesPerScanline;
-
-            let vCounterJumpOnScanlineIndex = (this.vdpStd === Sega315_5124_Vdp.Standard.vdpNTSC) ? 219 : 243;
-            let vCounterJumpToIndex = (this.vdpStd === Sega315_5124_Vdp.Standard.vdpNTSC) ? 213 : 186;   
-
-            let interruptAfterScanlineIndex = 192;
-
-            if (this.yScreenLines === 224) {
-                vCounterJumpOnScanlineIndex = (this.vdpStd === Sega315_5124_Vdp.Standard.vdpNTSC) ? 235 : 256;
-                vCounterJumpToIndex = (this.vdpStd === Sega315_5124_Vdp.Standard.vdpNTSC) ? 229 : 0xca + 1;   
-                interruptAfterScanlineIndex = 224; 
-            }
-            else if (this.yScreenLines === 240) {
-                vCounterJumpOnScanlineIndex = (this.vdpStd === Sega315_5124_Vdp.Standard.vdpNTSC) ? 256 : 256;
-                vCounterJumpToIndex = (this.vdpStd === Sega315_5124_Vdp.Standard.vdpNTSC) ? 0 : 0xd2 + 1;    
-                interruptAfterScanlineIndex = 240;
-            }
-
-            if (this.currentScanlineIndex === vCounterJumpOnScanlineIndex) {
-                this.vcounter = vCounterJumpToIndex;
-            } else {
-                this.vcounter = (this.vcounter + 1) & 0xff;
-            }
-
-            if (this.currentScanlineIndex <= this.yScreenLines) {
-                if (this.lineCounter === 0x0) {
-                    this.lineCounter = this.register0a;
-                    if (this.register00 & 0x10) raiseInterrupt = true;
-                } else {
-                    this.lineCounter--;
-                }
-            } else {
-                this.lineCounter = this.register0a;
-            }            
-
-            if (this.currentScanlineIndex === interruptAfterScanlineIndex) {
-                this.statusFlags |= 0x80;
-            }
-
-            if (this.currentScanlineIndex === (interruptAfterScanlineIndex + 1)) {
-                if ((this.register01 & 0x20) !== 0) raiseInterrupt = true;
-            }
-
-            if (raiseInterrupt) {
-                theCPU.raiseMaskableInterrupt();
-            }
-
-            this.currentScanlineIndex++;
-            if (this.currentScanlineIndex === this.numberOfScanlines) {
-                this.currentScanlineIndex = 0;
-            }            
-
-            if (this.currentScanlineIndex === 0) {
-                this.prevFrameBuffer.set(this.glbFrameBuffer);
-                this.cleanSpriteBuffer();
-                return true;
-            } else {
-                this.drawScanline(this.currentScanlineIndex - 1);
-            }
-
-            return false;
-        }
+        // 3. Write back to C++ memory
+        wasm._vdp_set_internal_state(
+            wasm.HEAP32[s.scanlineIdx >> 2],
+            wasm.HEAP32[s.lineCnt >> 2],
+            wasm.HEAP32[s.ctrlFlag >> 2],
+            wasm.HEAPU16[s.ctrlWord >> 1],
+            wasm.HEAPU16[s.dataAddr >> 1],
+            wasm.HEAPU8[s.writeMode],
+            wasm.HEAPU8[s.readBuf],
+            wasm.HEAPU8[s.status]
+        );
     }
 }

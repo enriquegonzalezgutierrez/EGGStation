@@ -40,6 +40,18 @@ IO_EMCC_FLAGS   ?= -O3 \
                    -I/src/src/domain \
                    --no-entry
 
+# --- Sega 315-5124 VDP Configuration ---
+VDP_OUTPUT_NAME ?= Sega315_5124
+VDP_EMCC_FLAGS  ?= -O3 \
+                   -s EXPORTED_FUNCTIONS='["_vdp_init","_vdp_write_control","_vdp_write_data","_vdp_read_control","_vdp_read_data","_vdp_read_port","_vdp_update","_vdp_get_framebuffer_pointer","_vdp_get_vram_pointer","_vdp_get_cram_pointer","_vdp_get_registers_pointer","_vdp_get_internal_state","_vdp_set_internal_state","_malloc","_free"]' \
+                   -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","HEAPU8","HEAP32","HEAP16","HEAPU16"]' \
+                   -s MODULARIZE=1 \
+                   -s EXPORT_NAME='SegaVdpWasm' \
+                   -s ALLOW_MEMORY_GROWTH=1 \
+                   -s SINGLE_FILE=1 \
+                   -I/src/src/domain \
+                   --no-entry
+
 # ==========================================================================
 # 2. Phony Targets Declaration
 # ==========================================================================
@@ -82,6 +94,13 @@ build-wasm: ## Compile C++ Domain logic to WebAssembly using transient Docker co
 		$(DOCKER_IMAGE) \
 		emcc /src/src/domain/Sega315_5297.cpp /src/src/infrastructure/Sega315_5297WasmBridge.cpp -o /src/build/$(IO_OUTPUT_NAME).js $(IO_EMCC_FLAGS)
 		
+	@echo "Building Sega 315-5124 (VDP)..."
+	docker run --rm \
+		-v $(HOST_SRC_DIR):/src/src \
+		-v $(HOST_BUILD_DIR):/src/build \
+		$(DOCKER_IMAGE) \
+		emcc /src/src/domain/Sega315_5124.cpp /src/src/infrastructure/Sega315_5124WasmBridge.cpp -o /src/build/$(VDP_OUTPUT_NAME).js $(VDP_EMCC_FLAGS)
+
 	@echo "WebAssembly compilation completed. Targets available in build/"
 
 clean: ## Delete all generated build targets and cleanup space

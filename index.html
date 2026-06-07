@@ -249,7 +249,9 @@
 
     </div>
 
-    <!-- SHARED UTILITIES, HARDWARE CORES & COMPOSITION BOOTSTRAPPER -->
+    <!-- ====================================================================
+         SHARED SYSTEM INFRASTRUCTURE & PRESENTATION LAYER SERVICES
+         ==================================================================== -->
     <script src="js/shared/video/UniversalPostProcessor.js"></script>
     <script src="js/shared/storage/IndexedDbManager.js"></script>
     <script src="js/shared/storage/RomDecompressor.js"></script>
@@ -258,13 +260,21 @@
     <script src="js/shared/presentation/UniversalFeedbackManager.js"></script>
     <script src="js/shared/presentation/UniversalDevSuiteManager.js"></script>
     
-    <!-- Loaded Compiled WebAssembly Modules & Javascript Glue Layer -->
+    <!-- ====================================================================
+         COMPILED WEBASSEMBLY HARDWARE MODULES
+         Modular C++ engines bridged to JavaScript through Emscripten bindings.
+         ==================================================================== -->
     <script src="build/SegaPsg.js"></script>
     <script src="build/Sega315_5297.js"></script>
-    <script src="js/shared/audio/SegaPsg.js"></script>
+    <script src="build/Sega315_5124.js"></script>
     
+    <!-- ====================================================================
+         SHARED HARDWARE SIMULATOR ADAPTERS & CORES
+         ==================================================================== -->
+    <script src="js/shared/audio/SegaPsg.js"></script>
     <script src="js/shared/audio/UniversalAudioProcessor.js"></script>
 
+    <!-- Z80 CPU Family (Shared across Master System and Genesis systems) -->
     <script src="js/shared/cpu/z80/Z80Registers.js"></script>
     <script src="js/shared/cpu/z80/Z80Alu.js"></script>
     <script src="js/shared/cpu/z80/ZilogZ80.js"></script>
@@ -277,6 +287,7 @@
     <script src="js/shared/cpu/z80/instructions/Z80BlockOps.js"></script>
     <script src="js/shared/cpu/z80/instructions/Z80SystemIO.js"></script>
 
+    <!-- M68K CPU Family (Sega Genesis central processor) -->
     <script src="js/shared/cpu/m68k/m68k.js"></script>
     <script src="js/shared/cpu/m68k/instructions/M68kSystemExceptions.js"></script>
     <script src="js/shared/cpu/m68k/instructions/M68kDataTransfer.js"></script>
@@ -286,6 +297,9 @@
     <script src="js/shared/cpu/m68k/instructions/M68kLogical.js"></script>
     <script src="js/shared/cpu/m68k/instructions/M68kProgramFlow.js"></script>
 
+    <!-- ====================================================================
+         SEGA MASTER SYSTEM (SMS) DOMAIN & ARCHITECTURE
+         ==================================================================== -->
     <script src="js/sms/domain/bus/SegaMasterSystemBus.js"></script>
     <script src="js/sms/domain/cartridge/SegaMasterSystemCartridge.js"></script>
     <script src="js/sms/domain/cartridge/mappers/BaseMapper.js"></script>
@@ -294,13 +308,17 @@
     <script src="js/sms/domain/cartridge/mappers/KoreanMapper.js"></script>
     <script src="js/sms/domain/cartridge/mappers/SegaMasterSystemMapperFactory.js"></script>
     <script src="js/sms/domain/controller/Sega315_5297.js"></script>
+    
+    <!-- Video Processing (Zero-copy WebAssembly VDP adapter) -->
     <script src="js/sms/infrastructure/video/Sega315_5124_Vdp.js"></script>
-    <script src="js/sms/infrastructure/video/VdpSpriteManager.js"></script>
-    <script src="js/sms/infrastructure/video/VdpMode2Renderer.js"></script>
-    <script src="js/sms/infrastructure/video/VdpMode4Renderer.js"></script>
+    
+    <!-- Orchestration & Presentation -->
     <script src="js/sms/application/SmsOrchestrator.js"></script>
     <script src="js/sms/presentation/SmsUIController.js"></script>
 
+    <!-- ====================================================================
+         SEGA GENESIS / MEGA DRIVE DOMAIN & ARCHITECTURE
+         ==================================================================== -->
     <script src="js/genesis/domain/bus/GenesisBusZ80.js"></script>
     <script src="js/genesis/domain/bus/GenesisBusM68k.js"></script>
     <script src="js/genesis/domain/controller/GenesisIoPort.js"></script>
@@ -315,6 +333,9 @@
     <script src="js/genesis/application/GenesisOrchestrator.js"></script>
     <script src="js/genesis/presentation/GenesisUIController.js"></script>
 
+    <!-- ====================================================================
+         SUPER NINTENDO (SNES) DOMAIN & ARCHITECTURE
+         ==================================================================== -->
     <script src="js/snes/infrastructure/SnesCompatibilityLayer.js"></script>
     <script src="js/snes/domain/cpu/SnesCpu.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuAddressing.js"></script>
@@ -348,6 +369,7 @@
     <script src="js/snes/application/SnesOrchestrator.js"></script>
     <script src="js/snes/presentation/SnesUIController.js"></script>
 
+    <!-- Master Application Bootstrapper -->
     <script src="js/app.js"></script>
 </body>
 </html>
