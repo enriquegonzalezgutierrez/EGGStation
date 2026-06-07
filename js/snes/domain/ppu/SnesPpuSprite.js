@@ -6,11 +6,11 @@
  * Handles Object Attribute Memory (OAM) scanning, sprites bounds, range checks,
  * and high-fidelity sprite blitting.
  * 
- * PHASE 2 OPTIMIZATION:
- * - Implemented OAM Pre-evaluation (`buildSpriteCache`).
- * - Instead of evaluating 128 sprites per scanline (30,720 loops per frame),
- *   sprites are evaluated ONCE per frame and bucketed by scanline. The renderer 
- *   now only iterates over the exact visible sprites per line (~400 loops per frame).
+ * PHASE 4 OPTIMIZATION:
+ * - Refactored `evaluateSprites` to utilize the high-speed pre-decoded `vramCache`.
+ * - Leverages the X-Flipped cache partition (offset 262144) to entirely bypass 
+ *   conditional coordinate flipping checks during the hot pixel rendering loop.
+ * - Drastically accelerates active sprite rendering by removing all planar bit-shifting.
  */
 
 {
@@ -68,7 +68,7 @@
 
     /**
      * Highly optimized Sprite Renderer.
-     * Consumes the pre-evaluated OAM cache to draw only visible sprites.
+     * Consumes the pre-evaluated OAM cache and fast pre-decoded VRAM bitplanes.
      */
     SnesPpu.prototype.evaluateSprites = function(line) {
         // Rebuild the sprite cache only once per frame
@@ -112,6 +112,13 @@
             sprRow = ((ex & 0x80) > 0) ? (size * 8) - 1 - sprRow : sprRow;
             let tileRow = sprRow >> 3;
             sprRow &= 0x7;
+
+            // --- OPTIMIZED CACHE PATTERN SELECTION ---
+            // If the sprite is horizontally flipped, we read from the mirrored cache at 262144
+            const xFlip = (ex & 0x40) > 0;
+            const cacheBase = xFlip ? 262144 : 0;
+            const paletteOffset = 16 * ((ex & 0xe) >> 1);
+            const prio = (ex & 0x30) >> 4;
             
             for (let k = 0; k < size; k++) {
                 if ((x + k * 8) > -7 && (x + k * 8) < 256) {
@@ -123,23 +130,24 @@
                     let tileColumn = ((ex & 0x40) > 0) ? size - 1 - k : k;
                     let tileNum = tile + SnesPpu.spriteTileOffsets[tileRow * 8 + tileColumn];
                     tileNum &= 0xff;
-                    
-                    let tileP1 = this.vram[(adr + tileNum * 16 + sprRow) & 0x7fff];
-                    let tileP2 = this.vram[(adr + tileNum * 16 + sprRow + 8) & 0x7fff];
+
+                    // Calculate cached addresses for Plane 0/1 and Plane 2/3 (offset by 8 words)
+                    const offset1 = (adr + tileNum * 16 + sprRow) & 0x7fff;
+                    const offset2 = (offset1 + 8) & 0x7fff;
+
+                    const p1Idx = cacheBase + (offset1 << 3); // offset1 * 8
+                    const p2Idx = cacheBase + (offset2 << 3); // offset2 * 8
                     
                     for (let j = 0; j < 8; j++) {
-                        let shift = ((ex & 0x40) > 0) ? j : 7 - j;
-                        let tileData = (tileP1 >> shift) & 0x1;
-                        tileData |= ((tileP1 >> (8 + shift)) & 0x1) << 1;
-                        tileData |= ((tileP2 >> shift) & 0x1) << 2;
-                        tileData |= ((tileP2 >> (8 + shift)) & 0x1) << 3;
+                        // Decodes 4bpp pixel instantly combining the pre-decoded 2bpp bitplanes
+                        const tileData = this.vramCache[p1Idx + j] | (this.vramCache[p2Idx + j] << 2);
                         
-                        let color = tileData + 16 * ((ex & 0xe) >> 1);
-                        let xInd = x + k * 8 + j;
-                        
-                        if (tileData > 0 && xInd < 256 && xInd >= 0) {
-                            this.spriteLineBuffer[xInd] = 0x80 + color;
-                            this.spritePrioBuffer[xInd] = (ex & 0x30) >> 4;
+                        if (tileData > 0) {
+                            let xInd = x + k * 8 + j;
+                            if (xInd < 256 && xInd >= 0) {
+                                this.spriteLineBuffer[xInd] = 0x80 + paletteOffset + tileData;
+                                this.spritePrioBuffer[xInd] = prio;
+                            }
                         }
                     }
                     sliverCount++;
