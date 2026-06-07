@@ -14,8 +14,9 @@
 class ZilogZ80 {
     /**
      * @param {Object} mmu - The abstract JavaScript system memory bus.
+     * @param {boolean} isGenesis - True to swap target C++ CPU core to GenesisZ80 mode.
      */
-    constructor(mmu) {
+    constructor(mmu, isGenesis = false) {
         this.mmu = mmu;
         this.theMMU = mmu; // Alias for legacy Z80Disassembler.js support
 
@@ -23,17 +24,7 @@ class ZilogZ80 {
         this.totCycles = 0;
         this.wasmInstance = null;
         this.isReady = false;
-
-        // FIXED: Initializing empty legacy instruction tables to prevent 
-        // the on-demand JS Disassembler (Z80Disassembler.js) from throwing 
-        // "Uncaught TypeError: Cannot read properties of undefined" on UI refresh.
-        this.unprefixedOpcodes = new Array(256);
-        this.prefixcbOpcodes = new Array(256);
-        this.prefixedOpcodes = new Array(256);
-        this.prefixddOpcodes = new Array(256);
-        this.prefixfdOpcodes = new Array(256);
-        this.prefixddcbOpcodes = new Array(256);
-        this.prefixfdcbOpcodes = new Array(256);
+        this.isGenesis = isGenesis;
 
         // --- Registers Proxy Map (SOLID LSP alignment) ---
         // Dynamically queries the WASM linear memory so that the existing 
@@ -57,6 +48,15 @@ class ZilogZ80 {
             set iy(v) { if (window.activeCpuWasm) window.activeCpuWasm._z80_set_iy(v); }
         };
 
+        // --- Decoupled legacy arrays to support the static JS disassembler ---
+        this.unprefixedOpcodes = new Array(256);
+        this.prefixcbOpcodes = new Array(256);
+        this.prefixedOpcodes = new Array(256);
+        this.prefixddOpcodes = new Array(256);
+        this.prefixfdOpcodes = new Array(256);
+        this.prefixddcbOpcodes = new Array(256);
+        this.prefixfdcbOpcodes = new Array(256);
+
         this.initializeWasm();
     }
 
@@ -77,6 +77,9 @@ class ZilogZ80 {
             ZilogZ80Wasm().then(instance => {
                 this.wasmInstance = instance;
                 window.activeCpuWasm = instance;
+
+                // Safely swap the active CPU pointer inside C++ on-demand (DIP)
+                instance._z80_select_mode(this.isGenesis ? 1 : 0);
 
                 instance._z80_init();
                 this.isReady = true;

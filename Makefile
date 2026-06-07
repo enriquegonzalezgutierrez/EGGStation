@@ -6,7 +6,8 @@
 # Role:
 # High-performance, self-documenting build automation orchestrator. Spins up 
 # transient Docker containers to compile C++ domain layers into WebAssembly.
-# Supports complete SMS system emulation modules including the new native Z80 CPU.
+# Supports complete SMS and Sega Genesis system emulation modules, including 
+# the new polymorphic native Z80 and specialized GenesisZ80 CPU cores.
 # ==========================================================================
 
 .DEFAULT_GOAL := help
@@ -67,11 +68,12 @@ CART_SRC   := /src/src/domain/SegaMasterSystemCartridge.cpp \
 
 # --- Zilog Z80 CPU Core ---
 Z80_NAME  := ZilogZ80
-Z80_FUNC  := '["_z80_init","_z80_register_callbacks","_z80_execute_one","_z80_raise_interrupt","_z80_raise_nmi","_z80_get_pc","_z80_set_pc","_z80_get_sp","_z80_set_sp","_z80_get_af","_z80_set_af","_z80_get_bc","_z80_set_bc","_z80_get_de","_z80_set_de","_z80_get_hl","_z80_set_hl","_z80_get_ix","_z80_set_ix","_z80_get_iy","_z80_set_iy","_z80_get_cycles"]'
+Z80_FUNC  := '["_z80_init","_z80_select_mode","_z80_register_callbacks","_z80_execute_one","_z80_raise_interrupt","_z80_raise_nmi","_z80_get_pc","_z80_set_pc","_z80_get_sp","_z80_set_sp","_z80_get_af","_z80_set_af","_z80_get_bc","_z80_set_bc","_z80_get_de","_z80_set_de","_z80_get_hl","_z80_set_hl","_z80_get_ix","_z80_set_ix","_z80_get_iy","_z80_set_iy","_z80_get_cycles"]'
 Z80_METH  := '["ccall","cwrap"]'
 Z80_SRC   := /src/src/domain/cpu/z80/Z80Registers.cpp \
              /src/src/domain/cpu/z80/Z80Alu.cpp \
              /src/src/domain/cpu/z80/ZilogZ80.cpp \
+             /src/src/domain/cpu/z80/GenesisZ80.cpp \
              /src/src/domain/cpu/z80/instructions/Z80DataTransfer.cpp \
              /src/src/domain/cpu/z80/instructions/Z80Arithmetic.cpp \
              /src/src/domain/cpu/z80/instructions/Z80Bitwise.cpp \
