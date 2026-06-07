@@ -11,9 +11,11 @@
  *    when lag is detected.
  * 2. AUDIO FIX: Audio generation decoupled from Frameskip. Audio samples are now 
  *    pushed continuously to prevent buffer underruns and "stuttering".
- * 3. Additive Color Conversion: Rewrote convertOriginalRGBToRGBA to use 
+ * 3. CANVAS FIX: Added resolution reset for Fast-Path modes (1x) to prevent 
+ *    shrinking bugs when returning from hardware scaled modes (4x).
+ * 4. Additive Color Conversion: Rewrote convertOriginalRGBToRGBA to use 
  *    flat pointer addition instead of multiplication.
- * 4. 32-Bit Framebuffer Views: Packs color channels into single 32-bit writes.
+ * 5. 32-Bit Framebuffer Views: Packs color channels into single 32-bit writes.
  */
 
 class SnesOrchestrator {
@@ -222,6 +224,14 @@ class SnesOrchestrator {
 
             if (this.postProcessMode === 0 || this.postProcessMode === 1) {
                 this.hardware.ppu.setPixels(); 
+
+                // FIX: Guarantee internal canvas resolution is restored to 1x boundaries
+                if (this.ctx.canvas.width !== 512 || this.ctx.canvas.height !== 480) {
+                    this.ctx.canvas.width = 512;
+                    this.ctx.canvas.height = 480;
+                    this.ctx.imageSmoothingEnabled = (this.postProcessMode === 1);
+                }
+
                 this.ctx.putImageData(this.imgData, 0, 0);
             } else {
                 if (!this.rgba32) {

@@ -78,6 +78,7 @@ class SnesUIController {
 
     /**
      * Swaps display canvas DOM visibility and overrides inline styles.
+     * FIXED: Ensure canvas always stretches to fill the CRT Wrapper properly.
      */
     updateVideoPipeline(mode) {
         this.orchestrator.setPostProcessMode(mode);
@@ -91,9 +92,13 @@ class SnesUIController {
             videoCanvas.classList.add("hidden");
             glCanvas.classList.remove("hidden");
             
+            // WebGL canvas configuration
             glCanvas.style.display = "block";
             glCanvas.style.visibility = "visible";
             glCanvas.style.position = "relative";
+            glCanvas.style.width = "100%";
+            glCanvas.style.height = "100%";
+            glCanvas.style.objectFit = "contain";
             
             this.syncShaders();
         } else {
@@ -103,6 +108,11 @@ class SnesUIController {
             glCanvas.style.display = "none";
             glCanvas.style.visibility = "hidden";
             glCanvas.style.position = "absolute";
+
+            // Enforce canvas stretching across all standard modes to fix shrinking
+            videoCanvas.style.width = "100%";
+            videoCanvas.style.height = "100%";
+            videoCanvas.style.objectFit = "contain";
 
             if (mode === 1) {
                 videoCanvas.style.imageRendering = "auto";
