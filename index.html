@@ -58,14 +58,12 @@
                 
                 <!-- Mobile Action Button Group (Portrait Mode) -->
                 <div class="mobile-action-group show-on-mobile">
-                    <!-- Mobile Games Library Toggle Button -->
                     <button id="mobile-library-btn" class="btn outline-btn" aria-label="Library" style="margin-right: 8px;">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
                             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
                         </svg>
                     </button>
-                    <!-- Mobile Settings Toggle Button -->
                     <button id="mobile-menu-btn" class="btn outline-btn" aria-label="Settings">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <line x1="3" y1="12" x2="21" y2="12"></line>
@@ -80,10 +78,7 @@
         <!-- STAGE: Aspect-Ratio Television Viewport & ROM Overlay -->
         <main id="stage">
             <div id="crt-wrapper">
-                <!-- Hardware 2D Canvas (Primary frame output) -->
                 <canvas id="smsdisplay"></canvas>
-                
-                <!-- WebGL2 Canvas (Target for unified CRT-Royale Shader across all consoles) -->
                 <canvas id="webgldisplay" class="hidden"></canvas>
                 
                 <!-- Overlay ROM Uploader -->
@@ -100,9 +95,8 @@
                 </div>
             </div>
 
-            <!-- Virtual On-Screen Gamepad for Mobile Viewports -->
+            <!-- Virtual On-Screen Gamepad for Mobile -->
             <section id="virtual-gamepad">
-                <!-- Floating Settings Toggle Button (Landscape Mode Only) -->
                 <button id="landscape-menu-btn" class="floating-menu-btn hidden">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -133,20 +127,16 @@
             </section>
         </main>
 
-        <!-- GAMES LIBRARY DRAWER: Slides from the Left -->
+        <!-- GAMES LIBRARY DRAWER -->
         <aside id="library-panel" class="glass-panel library-closed">
             <div class="drawer-header">
                 <h2>Games Library</h2>
                 <button id="close-library-btn" class="btn outline-btn">✖</button>
             </div>
-            
-            <!-- Dynamic list populated at runtime by app.js -->
-            <div id="library-grid" class="library-scroll-area">
-                <!-- Injected dynamically -->
-            </div>
+            <div id="library-grid" class="library-scroll-area"></div>
         </aside>
 
-        <!-- SIDEBAR: Settings & Hardware Toggles (Monomorphic UI) -->
+        <!-- SIDEBAR: Settings & Hardware Toggles -->
         <aside id="settings-panel" class="glass-panel drawer-closed">
             <div class="drawer-header show-on-mobile">
                 <h2>Settings</h2>
@@ -155,7 +145,6 @@
 
             <div class="panel-section">
                 <h3>System Configuration</h3>
-
                 <div class="control-group">
                     <label>Audio Output</label>
                     <select id="audioToggleSelector">
@@ -163,7 +152,6 @@
                         <option value="disabled">Mute / Disable Audio</option>
                     </select>
                 </div>
-
                 <div class="control-group">
                     <label>Audio DSP Filter</label>
                     <select id="audioFilterSelector">
@@ -172,7 +160,6 @@
                         <option value="2">Analog Stereo Width</option>
                     </select>
                 </div>
-                
                 <button id="ejectBtn" class="btn eject-btn-retro mt-3">
                     <svg class="icon-eject" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M5 17h14v2H5zM12 5l-7 8h14z"/>
@@ -181,7 +168,6 @@
                 </button>
             </div>
 
-            <!-- Unified Post-Processing Sliders & Filters -->
             <div class="panel-section">
                 <h3>Video Output</h3>
                 <div class="control-group">
@@ -196,8 +182,6 @@
                         <option value="6">WebGL2: CRT-Royale Shader</option>
                     </select>
                 </div>
-                
-                <!-- Dynamic Shader Tuner -->
                 <div class="control-group shader-tuner">
                     <label>CRT Curvature</label>
                     <input type="range" id="sh-curvature" min="0" max="200" value="90">
@@ -206,7 +190,6 @@
                 </div>
             </div>
 
-            <!-- Persistence Panel linked to IndexedDB storage engine -->
             <div class="panel-section">
                 <h3>Temporal Physics</h3>
                 <div class="savestate-preview">
@@ -219,7 +202,7 @@
             </div>
         </aside>
 
-        <!-- DEVELOPER SUITE: Hardware Diagnostics (Grows dynamically on desktop) -->
+        <!-- DEVELOPER SUITE -->
         <footer id="developer-suite" class="glass-panel hidden">
             <div class="dev-section">
                 <h4>Execution Core</h4>
@@ -228,19 +211,16 @@
                     <button id="dbg-pause" class="btn dev-btn">⏸ PAUSE</button>
                 </div>
             </div>
-            
             <div class="dev-section">
                 <h4>Hardware Registers</h4>
                 <div class="registers-grid" id="reg-grid"></div>
             </div>
-
             <div class="dev-section">
                 <h4>Diagnostic VRAM Viewer</h4>
                 <div class="vram-preview-wrapper">
                     <canvas id="vram-canvas" width="128" height="192"></canvas>
                 </div>
             </div>
-
             <div class="dev-section">
                 <h4>System Logs</h4>
                 <div id="log" class="terminal-box"></div>
@@ -249,9 +229,7 @@
 
     </div>
 
-    <!-- ====================================================================
-         SHARED SYSTEM INFRASTRUCTURE & PRESENTATION LAYER SERVICES
-         ==================================================================== -->
+    <!-- SYSTEM INFRASTRUCTURE & PRESENTATION -->
     <script src="js/shared/video/UniversalPostProcessor.js"></script>
     <script src="js/shared/storage/IndexedDbManager.js"></script>
     <script src="js/shared/storage/RomDecompressor.js"></script>
@@ -260,21 +238,17 @@
     <script src="js/shared/presentation/UniversalFeedbackManager.js"></script>
     <script src="js/shared/presentation/UniversalDevSuiteManager.js"></script>
     
-    <!-- ====================================================================
-         COMPILED WEBASSEMBLY HARDWARE MODULES
-         Modular C++ engines bridged to JavaScript through Emscripten bindings.
-         ==================================================================== -->
+    <!-- COMPILED WEBASSEMBLY BINARY MODULES -->
     <script src="build/SegaPsg.js"></script>
     <script src="build/Sega315_5297.js"></script>
     <script src="build/Sega315_5124.js"></script>
-    
-    <!-- ====================================================================
-         SHARED HARDWARE SIMULATOR ADAPTERS & CORES
-         ==================================================================== -->
+    <script src="build/SegaMasterSystemCartridge.js"></script>
+
+    <!-- SHARED HARDWARE CORE ADAPTERS -->
     <script src="js/shared/audio/SegaPsg.js"></script>
     <script src="js/shared/audio/UniversalAudioProcessor.js"></script>
 
-    <!-- Z80 CPU Family (Shared across Master System and Genesis systems) -->
+    <!-- Z80 CPU FAMILY -->
     <script src="js/shared/cpu/z80/Z80Registers.js"></script>
     <script src="js/shared/cpu/z80/Z80Alu.js"></script>
     <script src="js/shared/cpu/z80/ZilogZ80.js"></script>
@@ -287,7 +261,7 @@
     <script src="js/shared/cpu/z80/instructions/Z80BlockOps.js"></script>
     <script src="js/shared/cpu/z80/instructions/Z80SystemIO.js"></script>
 
-    <!-- M68K CPU Family (Sega Genesis central processor) -->
+    <!-- M68K CPU FAMILY -->
     <script src="js/shared/cpu/m68k/m68k.js"></script>
     <script src="js/shared/cpu/m68k/instructions/M68kSystemExceptions.js"></script>
     <script src="js/shared/cpu/m68k/instructions/M68kDataTransfer.js"></script>
@@ -297,28 +271,16 @@
     <script src="js/shared/cpu/m68k/instructions/M68kLogical.js"></script>
     <script src="js/shared/cpu/m68k/instructions/M68kProgramFlow.js"></script>
 
-    <!-- ====================================================================
-         SEGA MASTER SYSTEM (SMS) DOMAIN & ARCHITECTURE
-         ==================================================================== -->
+    <!-- SEGA MASTER SYSTEM (SMS) DOMAIN - WASM ENABLED -->
     <script src="js/sms/domain/bus/SegaMasterSystemBus.js"></script>
     <script src="js/sms/domain/cartridge/SegaMasterSystemCartridge.js"></script>
     <script src="js/sms/domain/cartridge/mappers/BaseMapper.js"></script>
-    <script src="js/sms/domain/cartridge/mappers/SegaMapper.js"></script>
-    <script src="js/sms/domain/cartridge/mappers/CodemastersMapper.js"></script>
-    <script src="js/sms/domain/cartridge/mappers/KoreanMapper.js"></script>
-    <script src="js/sms/domain/cartridge/mappers/SegaMasterSystemMapperFactory.js"></script>
     <script src="js/sms/domain/controller/Sega315_5297.js"></script>
-    
-    <!-- Video Processing (Zero-copy WebAssembly VDP adapter) -->
     <script src="js/sms/infrastructure/video/Sega315_5124_Vdp.js"></script>
-    
-    <!-- Orchestration & Presentation -->
     <script src="js/sms/application/SmsOrchestrator.js"></script>
     <script src="js/sms/presentation/SmsUIController.js"></script>
 
-    <!-- ====================================================================
-         SEGA GENESIS / MEGA DRIVE DOMAIN & ARCHITECTURE
-         ==================================================================== -->
+    <!-- SEGA GENESIS / MEGA DRIVE DOMAIN -->
     <script src="js/genesis/domain/bus/GenesisBusZ80.js"></script>
     <script src="js/genesis/domain/bus/GenesisBusM68k.js"></script>
     <script src="js/genesis/domain/controller/GenesisIoPort.js"></script>
@@ -333,9 +295,7 @@
     <script src="js/genesis/application/GenesisOrchestrator.js"></script>
     <script src="js/genesis/presentation/GenesisUIController.js"></script>
 
-    <!-- ====================================================================
-         SUPER NINTENDO (SNES) DOMAIN & ARCHITECTURE
-         ==================================================================== -->
+    <!-- SUPER NINTENDO (SNES) DOMAIN -->
     <script src="js/snes/infrastructure/SnesCompatibilityLayer.js"></script>
     <script src="js/snes/domain/cpu/SnesCpu.js"></script>
     <script src="js/snes/domain/cpu/SnesCpuAddressing.js"></script>

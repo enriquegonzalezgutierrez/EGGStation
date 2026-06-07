@@ -1,11 +1,13 @@
-/* 
- * Project: EGGStation - Sega Master System Emulator
+/**
+ * Project: EGGStation - Sega & SNES Multi-System Emulator
  * Author: Enrique González Gutiérrez
+ * File: js/sms/domain/cartridge/SegaMasterSystemCartridge.js
  * 
- * Domain Layer: Sega Master System Cartridge Entity
+ * Domain Layer: Sega Master System Cartridge Wasm Adapter (Async Optimized)
  * 
- * Represents a physical Master System Cartridge. Handles raw binary loading, 
- * copier header removal, metadata validation, and checksum generation.
+ * Role:
+ * Adapter that bridges the browser's ROM File Reading to the C++ Cartridge Entity.
+ * Now supports asynchronous "wait-for-ready" logic to prevent startup races.
  */
 
 class SegaMasterSystemCartridge {
@@ -13,128 +15,73 @@ class SegaMasterSystemCartridge {
      * @param {string} filename - The filename of the ROM image.
      */
     constructor(filename) {
-        this.cartridgeSize = 0;
-        this.cartridgeRom = [];
         this.cartridgeName = filename;
-        this.romChecksum = 0;
-    }
-
-    /**
-     * Checks for the presence of the standard SEGA security registration string ("TMR SEGA").
-     * @param {string[]} headerCharacters - The 8 characters retrieved from address 0x7FF0.
-     * @returns {boolean} True if standard Sega header is present.
-     */
-    checkForTmrSega(headerCharacters) {
-        const tmrSegaSignature = ['T', 'M', 'R', ' ', 'S', 'E', 'G', 'A'];
-
-        for (let i = 0; i < 8; i++) {
-            if (headerCharacters[i] !== tmrSegaSignature[i]) {
-                return false;
+        this.wasmInstance = null;
+        this.isInitialized = false;
+        
+        // --- 1. Async Initialization Pipeline ---
+        // We create a promise that resolves only when the Wasm binary is compiled.
+        this.readyPromise = new Promise((resolve) => {
+            if (typeof SegaCartWasm !== 'undefined') {
+                SegaCartWasm().then(instance => {
+                    this.wasmInstance = instance;
+                    this.isInitialized = true;
+                    console.log("[EGGStation::Wasm] Sega Cartridge/Mapper module linked.");
+                    resolve();
+                });
+            } else {
+                console.error("[Cartridge] Fatal: SegaCartWasm loader is missing.");
             }
-        }
-
-        return true;
+        });
     }
 
     /**
-     * Diagnostically prints regional hardware specifications based on ROM metadata.
-     * @param {number} regionCode - 4-bit regional code.
-     */
-    printRegionCode(regionCode) {
-        if (regionCode === 0x03) {
-            console.log("Cartridge::Region Code decoded: SMS Japan");
-        } else if (regionCode === 0x04) {
-            console.log("Cartridge::Region Code decoded: SMS Export");
-        }
-    }
-
-    /**
-     * Diagnostically prints the ROM storage size based on internal metadata.
-     * @param {number} sizeCode - 4-bit size classification code.
-     */
-    printRomSize(sizeCode) {
-        if (sizeCode === 0x0c) {
-            console.log("Cartridge::Internal ROM size value: 32KB");
-        } else if (sizeCode === 0x0f) {
-            console.log("Cartridge::Internal ROM size value: 128KB");
-        } else if (sizeCode === 0x0) {
-            console.log("Cartridge::Internal ROM size value: 256KB");
-        }
-    }
-
-    /**
-     * Calculates the standard 32-bit checksum of the internal ROM byte array.
-     * @returns {number} Unsigned 32-bit checksum value.
-     */
-    calculateChecksum() {
-        let checksum = 0;
-
-        if ((this.cartridgeRom.length % 4) !== 0) {
-            throw new Error("Cartridge::Error: ROM length is not a multiple of 4, cannot calculate checksum.");
-        }
-
-        for (let i = 0; i < this.cartridgeRom.length; i += 4) {
-            let chunk = this.cartridgeRom[i];
-            chunk |= this.cartridgeRom[i + 1] << 8;
-            chunk |= this.cartridgeRom[i + 2] << 16;
-            chunk |= this.cartridgeRom[i + 3] << 24;
-
-            checksum += chunk;
-            checksum &= 0xffffffff; // Force unsigned 32-bit math wrap-around      
-        }
-
-        return Math.abs(checksum);
-    }
-
-    /**
-     * Parses the raw ArrayBuffer, extracts metadata, and prepares ROM arrays.
+     * Copies the ROM ArrayBuffer into the WASM heap.
+     * Updated to be ASYNC to wait for the module readiness.
+     * 
      * @param {ArrayBuffer} buffer - Raw file array buffer.
      */
-    load(buffer) {
-        this.cartridgeSize = buffer.byteLength;
-        const tempArray = new Uint8Array(buffer);
-
-        for (let i = 0; i < this.cartridgeSize; i++) {
-            this.cartridgeRom.push(tempArray[i]);
+    async load(buffer) {
+        // --- 2. Startup Race Protection ---
+        // If Wasm is not yet ready, we await the promise before proceeding.
+        if (!this.isInitialized) {
+            console.warn("[Cartridge] Waiting for Wasm module to initialize...");
+            await this.readyPromise;
         }
 
-        if (this.cartridgeSize < (32 * 1024)) {
-            console.warn("Cartridge::Warning: Loaded ROM size is smaller than the standard 32KB system minimum.");
-        }
+        const wasm = this.wasmInstance;
+        const uint8 = new Uint8Array(buffer);
+        const size = uint8.length;
 
-        // Clean outdated copier prefixes (e.g. game doctor headers) if detected
-        if (this.cartridgeRom.length % 0x4000 === 512) {
-            console.log("Cartridge::Detected and removed 512-byte copier header.");
-            const cleanedRom = [];
-            for (let i = 512; i < this.cartridgeRom.length; i++) {
-                cleanedRom.push(this.cartridgeRom[i]);
-            }
-            this.cartridgeRom = cleanedRom;
-        }
+        // 3. Memory Allocation on the WASM Heap
+        const romBufferPtr = wasm._malloc(size);
+        wasm.HEAPU8.set(uint8, romBufferPtr);
 
-        // Compute unique game checksum identification
-        this.romChecksum = this.calculateChecksum();
-        console.log(`Cartridge::Checksum identity calculated as: 0x${this.romChecksum.toString(16).padStart(8, '0')}`);
+        const filenamePtr = this.allocateString(this.cartridgeName);
+        
+        // 4. Invoke C++ Domain loading logic
+        wasm._cart_load(filenamePtr, romBufferPtr, size);
 
-        // Validate Standard Sega registration block at address 0x7FF0
-        const headerBytes = [];
-        for (let i = 0; i < 16; i++) {
-            headerBytes.push(this.cartridgeRom[0x7ff0 + i]);
-        }
+        // 5. Cleanup temporary heap strings and pointers
+        wasm._free(romBufferPtr);
+        wasm._free(filenamePtr);
 
-        const characters = [];
-        headerBytes.forEach(byte => {
-            characters.push(String.fromCharCode(byte));
-        });
-
-        if (this.checkForTmrSega(characters)) {
-            console.log("Cartridge::Standard SEGA registration signature confirmed at address 0x7FF0.");
-        } else {
-            console.warn("Cartridge::No standard SEGA signature found. Proceeding with flat fallback mode.");
-            return;
-        }
-
-        this.printRegionCode(headerBytes[0x0f] >> 4);
-        this.printRomSize(headerBytes[0x0f] & 0x0f);
+        console.log(`[Cartridge] Successfully injected ${size} bytes into C++ Domain.`);
     }
+
+    /** Helper to allocate C-compatible strings on the WASM heap */
+    allocateString(str) {
+        const wasm = this.wasmInstance;
+        const size = str.length + 1;
+        const ptr = wasm._malloc(size);
+        for (let i = 0; i < str.length; i++) {
+            wasm.HEAPU8[ptr + i] = str.charCodeAt(i);
+        }
+        wasm.HEAPU8[ptr + str.length] = 0; // Null terminator
+        return ptr;
+    }
+
+    // --- Domain Getters (Proxied from C++) ---
+    get romChecksum() { return this.isInitialized ? this.wasmInstance._cart_get_checksum() : 0; }
+    get cartridgeSize() { return this.isInitialized ? this.wasmInstance._cart_get_size() : 0; }
 }
