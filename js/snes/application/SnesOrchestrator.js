@@ -8,10 +8,11 @@
  * 
  * APPLIED OPTIMIZATIONS:
  * 1. Dynamic Intelligent Frameskip: Automatically bypasses heavy PPU rendering 
- *    when lag is detected, keeping audio and gameplay logic at full speed.
- * 2. Additive Color Conversion: Rewrote convertOriginalRGBToRGBA to use 
- *    flat pointer addition instead of multiplication inside the pixel loop.
- * 3. Death Spiral Protection: Caps the time accumulator to prevent cascading lag.
+ *    when lag is detected.
+ * 2. AUDIO FIX: Audio generation decoupled from Frameskip. Audio samples are now 
+ *    pushed continuously to prevent buffer underruns and "stuttering".
+ * 3. Additive Color Conversion: Rewrote convertOriginalRGBToRGBA to use 
+ *    flat pointer addition instead of multiplication.
  * 4. 32-Bit Framebuffer Views: Packs color channels into single 32-bit writes.
  */
 
@@ -57,7 +58,7 @@ class SnesOrchestrator {
 
         this.serializer = new IndexedDbManager();
 
-        console.log("[SnesOrchestrator] Orchestrator Layer Initialized with Dynamic Frameskip.");
+        console.log("[SnesOrchestrator] Orchestrator Layer Initialized with Audio-Safe Frameskip.");
     }
 
     /**
@@ -153,6 +154,7 @@ class SnesOrchestrator {
 
     /**
      * Highly optimized execution loop featuring intelligent dynamic frameskip.
+     * Audio synchronization is safely decoupled from rendering skips.
      */
     executionLoop(timestamp) {
         if (!this.isRunning) return;
@@ -194,16 +196,16 @@ class SnesOrchestrator {
                 if (!this.isPaused) {
                     this.pollInputs();
 
-                    // DYNAMIC FRAMESKIP:
-                    // If the time accumulator has built up more than 1.5 frames of lag, 
-                    // skip rendering (runFrame(true)) to preserve audio execution speed.
+                    // DYNAMIC FRAMESKIP: Skip PPU rendering if we are lagging
                     const skipRendering = this.accumulatedTime >= (targetFrameDuration * 1.5);
 
                     this.hardware.runFrame(skipRendering);
 
+                    // AUDIO FIX: ALWAYS fetch and push audio samples to keep the WebAudio buffer full!
+                    this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
+                    this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
+                    
                     if (!skipRendering) {
-                        this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
-                        this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
                         renderedThisFrame = true;
                     }
                     

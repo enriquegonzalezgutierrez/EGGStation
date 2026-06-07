@@ -5,6 +5,12 @@
  * ROLE:
  * Handles window masks configurations, color blending equations, scanline rastering,
  * I/O ports reading/writing, and canvas blitting.
+ * 
+ * PHASE 1 OPTIMIZATION:
+ * - getColor and getColorFast now return the pre-allocated `this.pixelOutputCache` 
+ *   instead of creating a new array `[color, layer, pixel]`.
+ * - Eliminated the allocation of ~3.6 million short-lived arrays per second, 
+ *   significantly reducing Garbage Collection stuttering.
  */
 
 {
@@ -106,6 +112,7 @@
 
                 if (!this.forcedBlank) {
                     const colLay = useScanlineFastPath ? this.getColorFast(false, i, line) : this.getColor(false, i, line);
+                    // Extract values immediately since the array is shared and could be overwritten
                     const color = colLay[0];
                     const activeLayer = colLay[1];
                     const activePal = colLay[2];
@@ -122,21 +129,21 @@
                         r2 = 0; g2 = 0; b2 = 0;
                     }
 
-                    let secondLay = null;
+                    let secondLayerNum = 5;
                     const mathEnabled = this.getMathEnabled(i, activeLayer, activePal);
                     
                     if (
                         modeNum === 5 || modeNum === 6 || isPseudoHires ||
                         (mathEnabled && isSubEnabled)
                     ) {
-                        secondLay = useScanlineFastPath ? this.getColorFast(true, i, line) : this.getColor(true, i, line);
+                        const secondLay = useScanlineFastPath ? this.getColorFast(true, i, line) : this.getColor(true, i, line);
                         r1 = secondLay[0] & 0x1f;
                         g1 = (secondLay[0] & 0x3e0) >> 5;
                         b1 = (secondLay[0] & 0x7c00) >> 10;
+                        secondLayerNum = secondLay[1];
                     }
 
                     if (mathEnabled) {
-                        const secondLayerNum = secondLay ? secondLay[1] : 5;
                         const useSecondColor = isSubEnabled && secondLayerNum < 5;
                         const mathR = useSecondColor ? r1 : this.fixedColorR;
                         const mathG = useSecondColor ? g1 : this.fixedColorG;
@@ -234,7 +241,11 @@
             color = (b << 10) | (g << 5) | r;
         }
 
-        return [color, layer, pixel];
+        // OPTIMIZATION: Return pre-allocated Int32Array instead of new []
+        this.pixelOutputCache[0] = color;
+        this.pixelOutputCache[1] = layer;
+        this.pixelOutputCache[2] = pixel;
+        return this.pixelOutputCache;
     };
 
     SnesPpu.prototype.getColor = function(sub, x, y) {
@@ -335,7 +346,11 @@
             color = (b << 10) | (g << 5) | r;
         }
 
-        return [color, layer, pixel];
+        // OPTIMIZATION: Return pre-allocated Int32Array instead of new []
+        this.pixelOutputCache[0] = color;
+        this.pixelOutputCache[1] = layer;
+        this.pixelOutputCache[2] = pixel;
+        return this.pixelOutputCache;
     };
 
     SnesPpu.prototype.getWindowState = function(x, l) {

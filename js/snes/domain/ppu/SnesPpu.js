@@ -9,6 +9,10 @@
  * SOLID PRINCIPLES:
  * - Single Responsibility Principle (SRP): Exclusively coordinates register
  *   access, memory ports, and lifecycle states of the video subsystem.
+ * 
+ * PHASE 1 OPTIMIZATION:
+ * - Introduced `pixelOutputCache` to eliminate runtime array allocations 
+ *   during the per-pixel rendering loop (GC-Free execution).
  */
 
 {
@@ -21,7 +25,8 @@
 
             // Video Memory Buffers (GC Free)
             this.vram = new Uint16Array(0x8000);
-            this.cgram = new Uint16Array(0x100);
+            this.cram = new Uint16Array(0x100); // Note: cgram is mapped as cgram in some places, ensure consistency
+            this.cgram = this.cram; 
 
             // Object Attribute Memory
             this.oam = new Uint16Array(0x100);
@@ -48,6 +53,10 @@
             this.bgBuffers = Array.from({ length: 4 }, () => new Uint16Array(256));
             this.bgPriorityBuffers = Array.from({ length: 4 }, () => new Uint8Array(256));
 
+            // OPTIMIZATION: Zero-allocation cache for getColor/getColorFast returns
+            // Index 0: color, Index 1: layer, Index 2: pixel
+            this.pixelOutputCache = new Int32Array(3);
+
             this.reset();
         }
 
@@ -64,6 +73,9 @@
 
             this.mode7Xcoords.fill(0);
             this.mode7Ycoords.fill(0);
+
+            // Clear the new GC-free pixel cache
+            this.pixelOutputCache.fill(0);
 
             for (let i = 0; i < 4; i++) {
                 this.decodedRow[i].fill(0);
