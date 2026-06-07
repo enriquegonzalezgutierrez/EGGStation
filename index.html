@@ -243,23 +243,15 @@
     <script src="build/Sega315_5297.js"></script>
     <script src="build/Sega315_5124.js"></script>
     <script src="build/SegaMasterSystemCartridge.js"></script>
+    <script src="build/ZilogZ80.js"></script> <!-- Compilated WebAssembly Z80 Binary -->
 
     <!-- SHARED HARDWARE CORE ADAPTERS -->
     <script src="js/shared/audio/SegaPsg.js"></script>
     <script src="js/shared/audio/UniversalAudioProcessor.js"></script>
 
-    <!-- Z80 CPU FAMILY -->
-    <script src="js/shared/cpu/z80/Z80Registers.js"></script>
-    <script src="js/shared/cpu/z80/Z80Alu.js"></script>
-    <script src="js/shared/cpu/z80/ZilogZ80.js"></script>
+    <!-- Z80 CPU FAMILY & ADAPTERS -->
+    <script src="js/shared/cpu/z80/ZilogZ80.js"></script> <!-- Mapped Javascript WASM Adapter -->
     <script src="js/shared/cpu/z80/Z80Disassembler.js"></script>
-    <script src="js/shared/cpu/z80/instructions/Z80DataTransfer.js"></script>
-    <script src="js/shared/cpu/z80/instructions/Z80Arithmetic.js"></script>
-    <script src="js/shared/cpu/z80/instructions/Z80Bitwise.js"></script>
-    <script src="js/shared/cpu/z80/instructions/Z80ShiftRotate.js"></script>
-    <script src="js/shared/cpu/z80/instructions/Z80ProgramFlow.js"></script>
-    <script src="js/shared/cpu/z80/instructions/Z80BlockOps.js"></script>
-    <script src="js/shared/cpu/z80/instructions/Z80SystemIO.js"></script>
 
     <!-- M68K CPU FAMILY -->
     <script src="js/shared/cpu/m68k/m68k.js"></script>

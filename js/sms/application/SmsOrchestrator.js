@@ -91,7 +91,7 @@ class SmsOrchestrator {
 
     /**
      * Primary entry point to boot a game.
-     * UPDATED: Now ASYNC to handle WebAssembly module readiness.
+     * NOW ASYNC to handle WebAssembly module readiness.
      */
     async loadRom(filename, arrayBuffer) {
         if (this.animationFrameId) {
@@ -151,8 +151,6 @@ class SmsOrchestrator {
         }
     }
 
-    // ... saveState and loadState removed for brevity but they remain identical ...
-
     /**
      * Primary loop synchronization method.
      */
@@ -170,7 +168,6 @@ class SmsOrchestrator {
         this.fastForward = window.UniversalInput ? window.UniversalInput.isPressed("FAST_FORWARD") : false;
 
         if (this.isRewinding) {
-            // (Rewind logic remains unchanged)
             this.lastTime = currentTime;
             this.animationFrameId = requestAnimationFrame(this.loop);
             return;
@@ -290,10 +287,53 @@ class SmsOrchestrator {
         return lines;
     }
 
-    drawVramDiagnostics(ctx) {
-        // Native 4bpp tile rasterizer can be called here or handled in JS via VRAM pointer
-        if (this.vdp && this.vdp.isInitialized) {
-            // (Standard JS tile rendering loop using this.vdp.vRam)
+    /**
+     * Decode 4bpp planar patterns inside Master System VRAM directly from WebAssembly memory
+     * to render the 16x24 diagnostic tile grid on the developer canvas.
+     */
+    rasterizeVramTiles(ctx) {
+        if (!this.vdp || !this.vdp.isInitialized) return;
+        
+        const imgData = ctx.createImageData(128, 192); // 16 columns * 8px x 24 rows * 8px
+        const vram = this.vdp.vRam; 
+
+        // FIXED: Changed standard declaration type from 'int' to 'let' 
+        // to comply with ECMAScript syntax and avoid Unexpected Identifier Exceptions.
+        for (let tileIdx = 0; tileIdx < 384; tileIdx++) {
+            const tileX = tileIdx % 16;
+            const tileY = Math.floor(tileIdx / 16);
+            const destBaseX = tileX * 8;
+            const destBaseY = tileY * 8;
+
+            for (let row = 0; row < 8; row++) {
+                const rowAddr = tileIdx * 32 + row * 4;
+                const byte0 = vram[rowAddr];
+                const byte1 = vram[rowAddr + 1];
+                const byte2 = vram[rowAddr + 2];
+                const byte3 = vram[rowAddr + 3];
+
+                for (let col = 0; col < 8; col++) {
+                    const shift = 7 - col;
+                    const colorIdx = (((byte0 >> shift) & 1) |
+                                     (((byte1 >> shift) & 1) << 1) |
+                                     (((byte2 >> shift) & 1) << 2) |
+                                     (((byte3 >> shift) & 1) << 3)) & 0x0F;
+
+                    // Greyscale conversion (0-15 mapped into standard 0-255 luminance channels)
+                    const rgb = colorIdx * 17; 
+                    const destIdx = ((destBaseX + col) + ((destBaseY + row) * 128)) * 4;
+
+                    imgData.data[destIdx] = rgb;
+                    imgData.data[destIdx + 1] = rgb;
+                    imgData.data[destIdx + 2] = rgb;
+                    imgData.data[destIdx + 3] = 255;
+                }
+            }
         }
+        ctx.putImageData(imgData, 0, 0);
+    }
+
+    drawVramDiagnostics(ctx) {
+        this.rasterizeVramTiles(ctx);
     }
 }

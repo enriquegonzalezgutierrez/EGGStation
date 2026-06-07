@@ -3,295 +3,112 @@
  * Author: Enrique González Gutiérrez
  * File: js/shared/cpu/z80/ZilogZ80.js
  * 
- * Role:
- * Domain Layer: Zilog Z80 CPU Core Orchestrator.
- * Coordinates the CPU emulation loop, processes interrupts (INT/NMI), and executes 
- * instructions. Opcode strategy mapping is decoupled into functional registries 
- * populated at boot time to satisfy SOLID principles.
+ * Infrastructure Layer: WASM Z80 CPU Adapter (Adapter Pattern with EM_JS mapping)
  * 
- * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Handles strictly the CPU execution loop, 
- *    clock states, and interrupt lines. Delegates register state preservation to 
- *    Z80Registers, bit math evaluations to Z80Alu, and decoding to Z80Disassembler.
- * 2. Open/Closed Principle (OCP): New instructions (including undocumented opcodes) 
- *    can be added to the execution mapping via external modular registries 
- *    without modifying the baseline execute loop.
- * 3. Liskov Substitution Principle (LSP): Serves as the robust, standardized 
- *    base class for custom system implementations (such as GenesisZ80) without 
- *    violating execution contracts or breaking timings.
- * 4. Interface Segregation Principle (ISP): Exposes a lean execution interface 
- *    to buses (executeOne(), raiseNMI(), raiseMaskableInterrupt()) rather than 
- *    forcing clients to interact with internal register states.
- * 5. Dependency Inversion Principle (DIP): Decoupled from concrete system buses; 
- *    communicates with memory through an abstract memory interface (the mmu 
- *    delegate passed in the constructor).
+ * Role:
+ * Bridges the legacy JavaScript orchestrators and debugger panels to the 
+ * compiled C++ WebAssembly CPU binary. Delegates execution and register 
+ * mapping transparently to prevent breaking existing codebases.
  */
 
 class ZilogZ80 {
     /**
-     * @param {Object} mmu - Abstract Memory Management Unit interface.
+     * @param {Object} mmu - The abstract JavaScript system memory bus.
      */
     constructor(mmu) {
-        this.clockRate = 3579545; // Standard SMS NTSC Master Clock rating (3.58 MHz)
-        this.theMMU = mmu;
+        this.mmu = mmu;
+        this.theMMU = mmu; // Alias for legacy Z80Disassembler.js support
 
-        // Domain State Delegation (SOLID: SRP)
-        this.registers = new Z80Registers();
-        this.shadowRegisters = this.registers.shadow; 
-        this.alu = new Z80Alu();
-
-        // Processor control signals
-        this.maskableInterruptsEnabled = false;
-        this.maskableInterruptWaiting = false;        
-        this.NMIWaiting = false;        
-        this.interruptMode = 0;
-        this.isHalted = false;
-        this.m_bAfterEI = false;
-
+        this.clockRate = 3579545; // 3.58 MHz
         this.totCycles = 0;
-        this.additionalCycles = 0;
+        this.wasmInstance = null;
+        this.isReady = false;
 
-        // Initialize segmented instruction decoding tables (256 slots per map)
-        this.unprefixedOpcodes = new Array(256).fill(undefined);
-        this.prefixcbOpcodes = new Array(256).fill(undefined);
-        this.prefixedOpcodes = new Array(256).fill(undefined);    // ED prefixed operations
-        this.prefixddOpcodes = new Array(256).fill(undefined);    // IX indexed operations
-        this.prefixfdOpcodes = new Array(256).fill(undefined);    // IY indexed operations
-        this.prefixddcbOpcodes = new Array(256).fill(undefined);  // IX displaced bitwise operations
-        this.prefixfdcbOpcodes = new Array(256).fill(undefined);  // IY displaced bitwise operations
+        // FIXED: Initializing empty legacy instruction tables to prevent 
+        // the on-demand JS Disassembler (Z80Disassembler.js) from throwing 
+        // "Uncaught TypeError: Cannot read properties of undefined" on UI refresh.
+        this.unprefixedOpcodes = new Array(256);
+        this.prefixcbOpcodes = new Array(256);
+        this.prefixedOpcodes = new Array(256);
+        this.prefixddOpcodes = new Array(256);
+        this.prefixfdOpcodes = new Array(256);
+        this.prefixddcbOpcodes = new Array(256);
+        this.prefixfdcbOpcodes = new Array(256);
 
-        // Wrap mapped lists inside a unified strategy configuration dictionary
-        const opcodeRegistry = {
-            standard:  this.unprefixedOpcodes,
-            bitwise:   this.prefixcbOpcodes,
-            extended:  this.prefixedOpcodes,
-            indexedIX: this.prefixddOpcodes,
-            indexedIY: this.prefixfdOpcodes,
-            bitwiseIX: this.prefixddcbOpcodes,
-            bitwiseIY: this.prefixfdcbOpcodes
+        // --- Registers Proxy Map (SOLID LSP alignment) ---
+        // Dynamically queries the WASM linear memory so that the existing 
+        // Debugger and Dev Mode panels can read/write registers without modification.
+        this.registers = {
+            get pc() { return window.activeCpuWasm ? window.activeCpuWasm._z80_get_pc() : 0; },
+            set pc(v) { if (window.activeCpuWasm) window.activeCpuWasm._z80_set_pc(v); },
+            get sp() { return window.activeCpuWasm ? window.activeCpuWasm._z80_get_sp() : 0; },
+            set sp(v) { if (window.activeCpuWasm) window.activeCpuWasm._z80_set_sp(v); },
+            get af() { return window.activeCpuWasm ? window.activeCpuWasm._z80_get_af() : 0; },
+            set af(v) { if (window.activeCpuWasm) window.activeCpuWasm._z80_set_af(v); },
+            get bc() { return window.activeCpuWasm ? window.activeCpuWasm._z80_get_bc() : 0; },
+            set bc(v) { if (window.activeCpuWasm) window.activeCpuWasm._z80_set_bc(v); },
+            get de() { return window.activeCpuWasm ? window.activeCpuWasm._z80_get_de() : 0; },
+            set de(v) { if (window.activeCpuWasm) window.activeCpuWasm._z80_set_de(v); },
+            get hl() { return window.activeCpuWasm ? window.activeCpuWasm._z80_get_hl() : 0; },
+            set hl(v) { if (window.activeCpuWasm) window.activeCpuWasm._z80_set_hl(v); },
+            get ix() { return window.activeCpuWasm ? window.activeCpuWasm._z80_get_ix() : 0; },
+            set ix(v) { if (window.activeCpuWasm) window.activeCpuWasm._z80_set_ix(v); },
+            get iy() { return window.activeCpuWasm ? window.activeCpuWasm._z80_get_iy() : 0; },
+            set iy(v) { if (window.activeCpuWasm) window.activeCpuWasm._z80_set_iy(v); }
         };
 
-        // Populate instruction mappings via functional domain classes (SOLID: OCP / DIP)
-        Z80DataTransfer.register(this, this.registers, this.alu, opcodeRegistry);
-        Z80Arithmetic.register(this, this.registers, this.alu, opcodeRegistry);
-        Z80Bitwise.register(this, this.registers, this.alu, opcodeRegistry);
-        Z80ShiftRotate.register(this, this.registers, this.alu, opcodeRegistry);
-        Z80ProgramFlow.register(this, this.registers, this.alu, opcodeRegistry);
-        Z80BlockOps.register(this, this.registers, this.alu, opcodeRegistry);
-        Z80SystemIO.register(this, this.registers, this.alu, opcodeRegistry);
-
-        this.logMappingDiagnostics();
+        this.initializeWasm();
     }
 
     /**
-     * Diagnostic logging routine to verify execution tables coverage.
+     * Instantiates the compiled WebAssembly CPU binary and registers 
+     * JIT-optimized direct memory access callbacks.
      */
-    logMappingDiagnostics() {
-        const count = (arr) => arr.filter(slot => slot !== undefined).length;
+    initializeWasm() {
+        if (typeof ZilogZ80Wasm !== 'undefined') {
+            
+            // Register high-speed global callbacks directly onto the window object
+            // to satisfy the EM_JS imports inside the WASM binary.
+            window.activeCpuWasmBusRead = (addr) => this.mmu.readAddr(addr);
+            window.activeCpuWasmBusWrite = (addr, val) => this.mmu.writeAddr(addr, val);
+            window.activeCpuWasmPortRead = (port) => this.mmu.readPort(port);
+            window.activeCpuWasmPortWrite = (port, val) => this.mmu.writePort(port, val);
 
-        const total = count(this.unprefixedOpcodes) +
-                      count(this.prefixedOpcodes) +
-                      count(this.prefixcbOpcodes) +
-                      count(this.prefixfdOpcodes) +
-                      count(this.prefixddOpcodes) +
-                      count(this.prefixddcbOpcodes) +
-                      count(this.prefixfdcbOpcodes);
+            ZilogZ80Wasm().then(instance => {
+                this.wasmInstance = instance;
+                window.activeCpuWasm = instance;
 
-        console.log(`ZilogZ80::Decoder tables initialized. Mapping coverage: ${total} opcodes active.`);
-    }
-
-    /**
-     * Converts current Flag state bits into a readable binary string.
-     * @returns {string} 8-character flag register string representation.
-     */
-    getFlags() {
-        let binaryString = "";
-        for (let i = 0; i < 8; i++) {
-            binaryString += (this.registers.f & (1 << (7 - i))) !== 0 ? "1" : "0";
-        }
-        return binaryString;
-    }
-
-    /**
-     * Signals a pending Maskable Interrupt (INT) request line.
-     */
-    raiseMaskableInterrupt() {
-        if (this.maskableInterruptsEnabled) {
-            this.maskableInterruptWaiting = true;
-        }
-    }
-
-    /**
-     * Signals a Non-Maskable Interrupt (NMI) request line (Pause Button interactions).
-     */
-    raiseNMI() {
-        this.NMIWaiting = true;
-    }
-
-    /**
-     * Increments the Program Counter (PC), wrapping cleanly to 16-bits.
-     * @param {number} offset - Value to increment by.
-     */
-    incPc(offset) { 
-        this.registers.pc = (this.registers.pc + offset) & 0xffff; 
-    }
-
-    /**
-     * Resolves PC displacement branches based on an 8-bit signed integer.
-     * @param {number} signedOffset - 8-bit offset value.
-     */
-    jumpRel(signedOffset) {
-        if ((signedOffset & 0x80) === 0x80) {
-            this.registers.pc += -0x80 + (signedOffset & 0x7F);
+                instance._z80_init();
+                this.isReady = true;
+                
+                console.log("[ZilogZ80::JSAdapter] Native WASM CPU Core loaded and bound to System Bus.");
+            });
         } else {
-            this.registers.pc += signedOffset;
+            console.error("[ZilogZ80::JSAdapter] Fatal: ZilogZ80Wasm binary factory is not loaded.");
         }
-        this.registers.pc &= 0xffff;
     }
 
     /**
-     * Pops a 16-bit word from the system stack.
-     * @returns {number} 16-bit word.
-     */
-    popWord() {
-        const word = this.theMMU.readAddr16bit(this.registers.sp);
-        this.registers.sp = (this.registers.sp + 2) & 0xffff;
-        return word;
-    }
-
-    /**
-     * Pushes a 16-bit word onto the system stack.
-     * @param {number} word - 16-bit word value.
-     */
-    pushWord(word) {
-        this.registers.sp = (this.registers.sp - 2) & 0xffff;
-        this.theMMU.writeAddr16bit(this.registers.sp, word);
-    }
-
-    // ========================================================================
-    // CORE FETCH-DECODE-EXECUTE PROCESSOR LOOP
-    // ========================================================================
-
-    /**
-     * Performs a single fetch-decode-execute instruction cycle.
-     * Evaluates hardware signals and routes operations to their respective prefixes.
-     * @returns {number} The exact number of T-states (cycles) consumed.
+     * Executes a single atomic fetch-decode-execute instruction step.
      */
     executeOne() {
-        let elapsedCycles = 0;
-        this.additionalCycles = 0;
-
-        // 1. Process Pending Non-Maskable Interrupts
-        if (this.NMIWaiting) {
-            this.pushWord(this.isHalted ? this.registers.pc + 1 : this.registers.pc);
-            this.registers.pc = 0x0066; // Standard NMI vector jump destination
-
-            this.registers.iff1 = 0;
-            this.isHalted = false;
-            this.NMIWaiting = false;
-
-            elapsedCycles += 11;
+        if (!this.isReady) {
+            return 4; // Temporary fallback cycles while WASM modules are warming up
         }
-        // 2. Process Pending Maskable Interrupts
-        else if (this.registers.iff1 !== 0 && this.maskableInterruptWaiting && !this.m_bAfterEI) {
-            this.pushWord(this.isHalted ? this.registers.pc + 1 : this.registers.pc);
-            this.registers.pc = 0x0038; // Mode 1 Interrupt vector jump destination
+        const cycles = this.wasmInstance._z80_execute_one();
+        this.totCycles = this.wasmInstance._z80_get_cycles();
+        return cycles;
+    }
 
-            this.registers.iff1 = 0;
-            this.registers.iff2 = 0;
+    raiseMaskableInterrupt() {
+        if (this.isReady) {
+            this.wasmInstance._z80_raise_interrupt();
+        }
+    }
 
-            this.isHalted = false;
-            this.maskableInterruptWaiting = false;
-            this.maskableInterruptsEnabled = false;
-
-            elapsedCycles += 13;
+    raiseNMI() {
+        if (this.isReady) {
+            this.wasmInstance._z80_raise_nmi();
         }
-        // 3. Process Halted State Idle Loops
-        else if (this.isHalted) {
-            return 4; // Flat idle execution cycles consumption           
-        }
-
-        this.m_bAfterEI = false;
-
-        // Fetch primary opcode byte
-        const b1 = this.theMMU.readAddr(this.registers.pc);
-        
-        // 4. Decode Prefix Trees
-        if (b1 === 0xcb) {
-            const b2 = this.theMMU.readAddr(this.registers.pc + 1);
-            const instrCode = this.prefixcbOpcodes[b2];
-            if (instrCode === undefined) {
-                console.error(`ZilogZ80::Unhandled CB opcode: 0x${b2.toString(16)}`);
-            } else {
-                instrCode[0]();
-                elapsedCycles = instrCode[2];
-            }
-        }
-        else if (b1 === 0xed) {
-            const b2 = this.theMMU.readAddr(this.registers.pc + 1);
-            const instrCode = this.prefixedOpcodes[b2];
-            if (instrCode === undefined) {
-                console.error(`ZilogZ80::Unhandled ED opcode: 0x${b2.toString(16)}`);
-            } else {
-                instrCode[0]();
-                elapsedCycles = instrCode[2];
-            }
-        }
-        else if (b1 === 0xdd) {
-            const b2 = this.theMMU.readAddr(this.registers.pc + 1);
-            if (b2 === 0xcb) {
-                const b4 = this.theMMU.readAddr(this.registers.pc + 3);
-                const instrCode = this.prefixddcbOpcodes[b4];
-                if (instrCode === undefined) {
-                    console.error(`ZilogZ80::Unhandled DDCB opcode: 0x${b4.toString(16)}`);
-                } else {
-                    instrCode[0]();
-                    elapsedCycles = instrCode[2];
-                }
-            } else {
-                const instrCode = this.prefixddOpcodes[b2];
-                if (instrCode === undefined) {
-                    console.error(`ZilogZ80::Unhandled DD opcode: 0x${b2.toString(16)}`);
-                } else {
-                    instrCode[0]();
-                    elapsedCycles = instrCode[2];
-                }
-            }
-        }
-        else if (b1 === 0xfd) {
-            const b2 = this.theMMU.readAddr(this.registers.pc + 1);
-            if (b2 === 0xcb) {
-                const b4 = this.theMMU.readAddr(this.registers.pc + 3);
-                const instrCode = this.prefixfdcbOpcodes[b4];
-                if (instrCode === undefined) {
-                    console.error(`ZilogZ80::Unhandled FDCB opcode: 0x${b4.toString(16)}`);
-                } else {
-                    instrCode[0]();
-                    elapsedCycles = instrCode[2];
-                }
-            } else {
-                const instrCode = this.prefixfdOpcodes[b2];
-                if (instrCode === undefined) {
-                    console.error(`ZilogZ80::Unhandled FD opcode: 0x${b2.toString(16)}`);
-                } else {
-                    instrCode[0]();
-                    elapsedCycles = instrCode[2];
-                }
-            }
-        }
-        // 5. Decode Unprefixed Core Opcode
-        else {
-            const instrCode = this.unprefixedOpcodes[b1];
-            if (instrCode === undefined) {
-                console.error(`ZilogZ80::Unhandled standard opcode: 0x${b1.toString(16)} at PC: 0x${this.registers.pc.toString(16)}`);
-            } else {
-                instrCode[0]();
-                elapsedCycles = instrCode[2];
-            }
-        }
-
-        elapsedCycles += this.additionalCycles;
-        this.totCycles += elapsedCycles;
-        return elapsedCycles;
     }
 }

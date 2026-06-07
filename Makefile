@@ -6,6 +6,7 @@
 # Role:
 # High-performance, self-documenting build automation orchestrator. Spins up 
 # transient Docker containers to compile C++ domain layers into WebAssembly.
+# Supports complete SMS system emulation modules including the new native Z80 CPU.
 # ==========================================================================
 
 .DEFAULT_GOAL := help
@@ -17,10 +18,11 @@ DOCKER_IMAGE    ?= emscripten/emsdk:latest
 HOST_BUILD_DIR  ?= $(shell pwd)/build
 HOST_SRC_DIR    ?= $(shell pwd)/src
 
-# Common Emscripten settings for all modules
+# Common Emscripten settings for all modules:
 # -O3: Maximum optimization
 # -s SINGLE_FILE=1: Inlines WASM binary as Base64 to allow local file:/// execution
 # -s MODULARIZE=1: Wraps the output in a Promise-based factory function
+# -s ALLOW_MEMORY_GROWTH=1: Permits dynamic allocation on the WASM Heap
 COMMON_EMCC_FLAGS := -O3 \
                      -s MODULARIZE=1 \
                      -s SINGLE_FILE=1 \
@@ -51,7 +53,6 @@ VDP_METH  := '["ccall","cwrap","HEAPU8","HEAP32","HEAP16","HEAPU16"]'
 VDP_SRC   := /src/src/domain/Sega315_5124.cpp /src/src/infrastructure/Sega315_5124WasmBridge.cpp
 
 # --- Sega Master System Cartridge & Mapper Suite ---
-# Includes the polymorphic mapper strategies (Sega, Codemasters, Korean) and the Factory.
 CART_NAME  := SegaMasterSystemCartridge
 CART_FUNC  := '["_cart_load","_cart_read","_cart_write","_cart_write_system_ram_override","_cart_get_checksum","_cart_get_size","_cart_get_sram_pointer","_cart_get_sram_state","_cart_set_sram_state","_malloc","_free"]'
 CART_METH  := '["ccall","cwrap","HEAPU8"]'
@@ -63,6 +64,22 @@ CART_SRC   := /src/src/domain/SegaMasterSystemCartridge.cpp \
               /src/src/domain/mappers/KoreanMapper.cpp \
               /src/src/domain/mappers/SegaMasterSystemMapperFactory.cpp \
               /src/src/infrastructure/SegaMasterSystemCartridgeWasmBridge.cpp
+
+# --- Zilog Z80 CPU Core ---
+Z80_NAME  := ZilogZ80
+Z80_FUNC  := '["_z80_init","_z80_register_callbacks","_z80_execute_one","_z80_raise_interrupt","_z80_raise_nmi","_z80_get_pc","_z80_set_pc","_z80_get_sp","_z80_set_sp","_z80_get_af","_z80_set_af","_z80_get_bc","_z80_set_bc","_z80_get_de","_z80_set_de","_z80_get_hl","_z80_set_hl","_z80_get_ix","_z80_set_ix","_z80_get_iy","_z80_set_iy","_z80_get_cycles"]'
+Z80_METH  := '["ccall","cwrap"]'
+Z80_SRC   := /src/src/domain/cpu/z80/Z80Registers.cpp \
+             /src/src/domain/cpu/z80/Z80Alu.cpp \
+             /src/src/domain/cpu/z80/ZilogZ80.cpp \
+             /src/src/domain/cpu/z80/instructions/Z80DataTransfer.cpp \
+             /src/src/domain/cpu/z80/instructions/Z80Arithmetic.cpp \
+             /src/src/domain/cpu/z80/instructions/Z80Bitwise.cpp \
+             /src/src/domain/cpu/z80/instructions/Z80ShiftRotate.cpp \
+             /src/src/domain/cpu/z80/instructions/Z80ProgramFlow.cpp \
+             /src/src/domain/cpu/z80/instructions/Z80BlockOps.cpp \
+             /src/src/domain/cpu/z80/instructions/Z80SystemIO.cpp \
+             /src/src/infrastructure/ZilogZ80WasmBridge.cpp
 
 # ==========================================================================
 # 3. Build Targets
@@ -100,6 +117,11 @@ build-wasm: ## Compile all C++ Domain logic to WebAssembly inside Docker
 	docker run --rm -v $(HOST_SRC_DIR):/src/src -v $(HOST_BUILD_DIR):/src/build $(DOCKER_IMAGE) \
 		emcc $(CART_SRC) -o /src/build/$(CART_NAME).js $(COMMON_EMCC_FLAGS) $(CART_INC) \
 		-s EXPORTED_FUNCTIONS=$(CART_FUNC) -s EXPORTED_RUNTIME_METHODS=$(CART_METH) -s EXPORT_NAME='SegaCartWasm'
+
+	@echo ">>> Building ZilogZ80 (CPU Engine)..."
+	docker run --rm -v $(HOST_SRC_DIR):/src/src -v $(HOST_BUILD_DIR):/src/build $(DOCKER_IMAGE) \
+		emcc $(Z80_SRC) -o /src/build/$(Z80_NAME).js $(COMMON_EMCC_FLAGS) \
+		-s EXPORTED_FUNCTIONS=$(Z80_FUNC) -s EXPORTED_RUNTIME_METHODS=$(Z80_METH) -s EXPORT_NAME='ZilogZ80Wasm'
 
 	@echo "=========================================================================="
 	@echo " Build Success: All WebAssembly hardware modules generated in build/"
