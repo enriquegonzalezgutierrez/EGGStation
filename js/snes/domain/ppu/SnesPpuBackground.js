@@ -1,10 +1,16 @@
 /**
- * Project: EGGStation - Super Nintendo (SNES) Emulator
+ * Project: EGGStation - Sega & SNES Multi-System Emulator
  * Component: SnesPpuBackground (Background Layers Pipeline)
  * 
  * ROLE:
  * Handles screen tiles maps decoding, planar bitplane shifts, and 
  * high-performance rasterization of the background layers.
+ * 
+ * PHASE 3 OPTIMIZATION (BUGFIX EDITION):
+ * - Refactored `fetchTileInBuffer` to use the pre-decoded planar cache (`this.vramCache`).
+ * - FIXED: Relational range checks (`bits <= 2`, `bits <= 4`, `else`) are now used 
+ *   instead of strict equalities. This correctly handles custom or dummy layers 
+ *   where `bits` evaluates to 5, 7, etc., restoring 100% of the game graphics.
  */
 
 {
@@ -54,7 +60,7 @@
     SnesPpu.prototype.fetchTileInBuffer = function(x, y, l, offset) {
         let rx = x;
         let ry = y;
-        let useXbig = this.bigTiles[l] | this.mode === 5 | this.mode === 6;
+        let useXbig = this.bigTiles[l] || this.mode === 5 || this.mode === 6;
         x >>= useXbig ? 1 : 0;
         y >>= this.bigTiles[l] ? 1 : 0;
 
@@ -80,57 +86,55 @@
         tileNum += this.bigTiles[l] && (ry & 0x8) === (yFlip ? 0 : 8) ? 0x10 : 0;
 
         let bits = SnesPpu.bitPerMode[this.mode * 4 + l];
-        let tileBaseOffset = this.tileAdr[l] + tileNum * 4 * bits + yRow;
+        let tileBaseOffset = (this.tileAdr[l] + tileNum * 4 * bits + yRow) & 0x7fff;
 
-        const p1 = this.vram[tileBaseOffset & 0x7fff];
+        // Keep legacy buffers populated for external sub-system references (e.g. debugger)
+        const p1 = this.vram[tileBaseOffset];
         this.tileBufferP1[l] = p1;
 
-        let p2 = 0, p3 = 0, p4 = 0;
         if (bits > 2) {
-            p2 = this.vram[(tileBaseOffset + 8) & 0x7fff];
-            this.tileBufferP2[l] = p2;
+            this.tileBufferP2[l] = this.vram[(tileBaseOffset + 8) & 0x7fff];
         }
         if (bits > 4) {
-            p3 = this.vram[(tileBaseOffset + 16) & 0x7fff];
-            p4 = this.vram[(tileBaseOffset + 24) & 0x7fff];
-            this.tileBufferP3[l] = p3;
-            this.tileBufferP4[l] = p4;
+            this.tileBufferP3[l] = this.vram[(tileBaseOffset + 16) & 0x7fff];
+            this.tileBufferP4[l] = this.vram[(tileBaseOffset + 24) & 0x7fff];
         }
 
         const decoded = this.decodedRow[l];
         
-        if (xFlip) {
+        // --- OPTIMIZED CACHE PATTERN FETCH ---
+        // Normal cache is located at 0. Horizontal flipped version is pre-rendered at index 262144
+        const cacheBase = xFlip ? 262144 : 0;
+        const p1Idx = cacheBase + (tileBaseOffset << 3); // tileBaseOffset * 8
+
+        if (bits <= 2) {
+            // Direct memory copy of the pre-decoded 2bpp row (GC Free)
+            decoded[0] = this.vramCache[p1Idx];
+            decoded[1] = this.vramCache[p1Idx + 1];
+            decoded[2] = this.vramCache[p1Idx + 2];
+            decoded[3] = this.vramCache[p1Idx + 3];
+            decoded[4] = this.vramCache[p1Idx + 4];
+            decoded[5] = this.vramCache[p1Idx + 5];
+            decoded[6] = this.vramCache[p1Idx + 6];
+            decoded[7] = this.vramCache[p1Idx + 7];
+        } 
+        else if (bits <= 4) {
+            // Fast-combine Plane 0/1 (p1Idx) with Plane 2/3 (p2Idx)
+            const p2Idx = cacheBase + (((tileBaseOffset + 8) & 0x7fff) << 3);
             for (let j = 0; j < 8; j++) {
-                let tileData = (p1 >> j) & 0x1;
-                tileData |= ((p1 >> (8 + j)) & 0x1) << 1;
-                if (bits > 2) {
-                    tileData |= ((p2 >> j) & 0x1) << 2;
-                    tileData |= ((p2 >> (8 + j)) & 0x1) << 3;
-                }
-                if (bits > 4) {
-                    tileData |= ((p3 >> j) & 0x1) << 4;
-                    tileData |= ((p3 >> (8 + j)) & 0x1) << 5;
-                    tileData |= ((p4 >> j) & 0x1) << 6;
-                    tileData |= ((p4 >> (8 + j)) & 0x1) << 7;
-                }
-                decoded[j] = tileData;
+                decoded[j] = this.vramCache[p1Idx + j] | (this.vramCache[p2Idx + j] << 2);
             }
-        } else {
+        } 
+        else {
+            // Handles 8bpp tiles as well as dummy configurations (like bits = 5, 7, 8)
+            const p2Idx = cacheBase + (((tileBaseOffset + 8) & 0x7fff) << 3);
+            const p3Idx = cacheBase + (((tileBaseOffset + 16) & 0x7fff) << 3);
+            const p4Idx = cacheBase + (((tileBaseOffset + 24) & 0x7fff) << 3);
             for (let j = 0; j < 8; j++) {
-                const shift = 7 - j;
-                let tileData = (p1 >> shift) & 0x1;
-                tileData |= ((p1 >> (8 + shift)) & 0x1) << 1;
-                if (bits > 2) {
-                    tileData |= ((p2 >> shift) & 0x1) << 2;
-                    tileData |= ((p2 >> (8 + shift)) & 0x1) << 3;
-                }
-                if (bits > 4) {
-                    tileData |= ((p3 >> shift) & 0x1) << 4;
-                    tileData |= ((p3 >> (8 + shift)) & 0x1) << 5;
-                    tileData |= ((p4 >> shift) & 0x1) << 6;
-                    tileData |= ((p4 >> (8 + shift)) & 0x1) << 7;
-                }
-                decoded[j] = tileData;
+                decoded[j] = this.vramCache[p1Idx + j] | 
+                             (this.vramCache[p2Idx + j] << 2) |
+                             (this.vramCache[p3Idx + j] << 4) |
+                             (this.vramCache[p4Idx + j] << 6);
             }
         }
     };

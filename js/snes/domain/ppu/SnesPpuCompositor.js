@@ -6,11 +6,11 @@
  * Handles window masks configurations, color blending equations, scanline rastering,
  * I/O ports reading/writing, and canvas blitting.
  * 
- * PHASE 1 OPTIMIZATION:
- * - getColor and getColorFast now return the pre-allocated `this.pixelOutputCache` 
- *   instead of creating a new array `[color, layer, pixel]`.
- * - Eliminated the allocation of ~3.6 million short-lived arrays per second, 
- *   significantly reducing Garbage Collection stuttering.
+ * OPTIMIZATIONS APPLIED:
+ * - PHASE 1: getColor and getColorFast now return the pre-allocated `this.pixelOutputCache` 
+ *   instead of creating new short-lived arrays.
+ * - PHASE 3: Fixed prototype collision. Intercepts VRAM writes at registers 0x18 and 0x19 
+ *   inside the prototype `write` method to update `this.vramCache` in real-time.
  */
 
 {
@@ -112,7 +112,6 @@
 
                 if (!this.forcedBlank) {
                     const colLay = useScanlineFastPath ? this.getColorFast(false, i, line) : this.getColor(false, i, line);
-                    // Extract values immediately since the array is shared and could be overwritten
                     const color = colLay[0];
                     const activeLayer = colLay[1];
                     const activePal = colLay[2];
@@ -241,7 +240,6 @@
             color = (b << 10) | (g << 5) | r;
         }
 
-        // OPTIMIZATION: Return pre-allocated Int32Array instead of new []
         this.pixelOutputCache[0] = color;
         this.pixelOutputCache[1] = layer;
         this.pixelOutputCache[2] = pixel;
@@ -346,7 +344,6 @@
             color = (b << 10) | (g << 5) | r;
         }
 
-        // OPTIMIZATION: Return pre-allocated Int32Array instead of new []
         this.pixelOutputCache[0] = color;
         this.pixelOutputCache[1] = layer;
         this.pixelOutputCache[2] = pixel;
@@ -508,13 +505,13 @@
             case 0x3e: {
                 let val = this.timeOver ? 0x80 : 0;
                 val |= this.rangeOver ? 0x40 : 0;
-                val |= this.isPal ? 0x10 : 0; // Bit 4: PAL mode flag (0=NTSC, 1=PAL)
+                val |= this.isPal ? 0x10 : 0;
                 return val | 0x1;
             }
             case 0x3f: {
                 let val = this.evenFrame ? 0x80 : 0;
                 val |= this.countersLatched ? 0x40 : 0;
-                val |= this.isPal ? 0x10 : 0; // Bit 4: PAL mode flag (0=NTSC, 1=PAL)
+                val |= this.isPal ? 0x10 : 0;
                 if (this.snes.ppuLatch) {
                     this.countersLatched = false;
                 }
@@ -524,7 +521,7 @@
             }
         }
         return this.snes.openBus;
-    };
+    }
 
     SnesPpu.prototype.write = function(adr, value) {
         switch (adr) {
@@ -660,8 +657,12 @@
                 return;
             }
             case 0x18: {
-                let adr = this.getVramRemap();
-                this.vram[adr] = (this.vram[adr] & 0xff00) | value;
+                let adrV = this.getVramRemap();
+                this.vram[adrV] = (this.vram[adrV] & 0xff00) | value;
+                
+                // CACHE INTERCEPT TRIGGERED FROM PROTOTYPE
+                this.updateVramCache(adrV, this.vram[adrV]);
+
                 if (!this.vramIncOnHigh) {
                     this.vramAdr += this.vramInc;
                     this.vramAdr &= 0xffff;
@@ -669,8 +670,12 @@
                 return;
             }
             case 0x19: {
-                let adr = this.getVramRemap();
-                this.vram[adr] = (this.vram[adr] & 0xff) | (value << 8);
+                let adrV = this.getVramRemap();
+                this.vram[adrV] = (this.vram[adrV] & 0xff) | (value << 8);
+                
+                // CACHE INTERCEPT TRIGGERED FROM PROTOTYPE
+                this.updateVramCache(adrV, this.vram[adrV]);
+
                 if (this.vramIncOnHigh) {
                     this.vramAdr += this.vramInc;
                     this.vramAdr &= 0xffff;

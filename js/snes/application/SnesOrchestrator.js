@@ -421,6 +421,7 @@ class SnesOrchestrator {
 
                 // 2. Reconstitute PPU
                 this.hardware.ppu.vram.set(state.ppu.vram);
+                this.hardware.ppu.rebuildVramCache();
                 this.hardware.ppu.cgram.set(state.ppu.cgram);
                 this.hardware.ppu.oam.set(state.ppu.oam);
                 this.hardware.ppu.highOam.set(state.ppu.highOam);
