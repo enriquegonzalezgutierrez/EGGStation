@@ -6,15 +6,8 @@
 # Role:
 # High-performance, self-documenting build automation orchestrator. Spins up 
 # transient Docker containers to compile C++ domain layers into WebAssembly.
-# Fully scalable to support additional systems (Genesis, SNES) in later phases.
-#
-# Optimization Note:
-# Uses '-s SINGLE_FILE=1' to inline the compiled .wasm binary into the generated 
-# .js glue layer as a Base64 string. This allows playing locally (via file:///)
-# without triggering browser CORS blocks.
 # ==========================================================================
 
-# Modern GNU Make directive to enforce 'help' as the default goal when running raw 'make'
 .DEFAULT_GOAL := help
 
 # ==========================================================================
@@ -24,21 +17,25 @@ DOCKER_IMAGE    ?= emscripten/emsdk:latest
 HOST_BUILD_DIR  ?= $(shell pwd)/build
 HOST_SRC_DIR    ?= $(shell pwd)/src
 
-# Compilation Output Target Names
+# --- Sega PSG Audio Engine Configuration ---
 OUTPUT_NAME     ?= SegaPsg
-WASM_OUT_JS     ?= $(HOST_BUILD_DIR)/$(OUTPUT_NAME).js
-
-# Emscripten Compilation Flags
-# -O3: Maximum production optimization
-# -s ALLOW_MEMORY_GROWTH=1: Secure dynamic resizing of WebAssembly heap memory
-# -s SINGLE_FILE=1: Inlines WASM binary as Base64 to bypass local file:/// CORS restrictions
-# -s EXPORTED_FUNCTIONS: Exposes internal C bindings (Getters and state restorers for rewind support)
 EMCC_FLAGS      ?= -O3 \
                    -s EXPORTED_FUNCTIONS='["_psg_init","_psg_set_sample_rate","_psg_write_command","_psg_get_sample","_psg_update_buffer","_psg_get_buffer_pointer","_psg_get_vol","_psg_get_tone","_psg_get_wave_pos","_psg_get_chan_latch","_psg_get_what_latch","_psg_restore_state"]' \
                    -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","HEAPF32"]' \
                    -s MODULARIZE=1 \
                    -s EXPORT_NAME='SegaPsgWasm' \
                    -s ALLOW_MEMORY_GROWTH=1 \
+                   -s SINGLE_FILE=1 \
+                   -I/src/src/domain \
+                   --no-entry
+
+# --- Sega 315-5297 I/O Controller Configuration ---
+IO_OUTPUT_NAME  ?= Sega315_5297
+IO_EMCC_FLAGS   ?= -O3 \
+                   -s EXPORTED_FUNCTIONS='["_io_init","_io_write_pin_dc","_io_write_pin_dd","_io_read_dc","_io_read_dd","_io_restore_state"]' \
+                   -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap"]' \
+                   -s MODULARIZE=1 \
+                   -s EXPORT_NAME='SegaIOWasm' \
                    -s SINGLE_FILE=1 \
                    -I/src/src/domain \
                    --no-entry
@@ -70,12 +67,21 @@ check-docker: ## Validate that Docker is installed and running on the host syste
 build-wasm: ## Compile C++ Domain logic to WebAssembly using transient Docker container
 	@echo "Creating output build directory..."
 	mkdir -p $(HOST_BUILD_DIR)
-	@echo "Running Emscripten compiler inside Docker container..."
+	
+	@echo "Building SegaPsg (Audio Engine)..."
 	docker run --rm \
 		-v $(HOST_SRC_DIR):/src/src \
 		-v $(HOST_BUILD_DIR):/src/build \
 		$(DOCKER_IMAGE) \
 		emcc /src/src/domain/SegaPsg.cpp /src/src/infrastructure/SegaPsgWasmBridge.cpp -o /src/build/$(OUTPUT_NAME).js $(EMCC_FLAGS)
+		
+	@echo "Building Sega 315-5297 (I/O Controller)..."
+	docker run --rm \
+		-v $(HOST_SRC_DIR):/src/src \
+		-v $(HOST_BUILD_DIR):/src/build \
+		$(DOCKER_IMAGE) \
+		emcc /src/src/domain/Sega315_5297.cpp /src/src/infrastructure/Sega315_5297WasmBridge.cpp -o /src/build/$(IO_OUTPUT_NAME).js $(IO_EMCC_FLAGS)
+		
 	@echo "WebAssembly compilation completed. Targets available in build/"
 
 clean: ## Delete all generated build targets and cleanup space

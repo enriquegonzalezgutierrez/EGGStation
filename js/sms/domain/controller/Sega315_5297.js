@@ -1,12 +1,21 @@
-/* 
- * Project: EGGStation - Sega Master System Emulator
+/**
+ * Project: EGGStation - Sega & SNES Multi-System Emulator
  * Author: Enrique González Gutiérrez
+ * File: js/sms/domain/controller/Sega315_5297.js
  * 
- * Domain Layer: Sega 315-5297 Input/Output Chip
+ * Infrastructure Layer: Sega 315-5297 WebAssembly Bridge Adapter
  * 
- * Emulates the physical Sega 315-5297 controller interface chip.
- * Coordinates pin-out states for standard DB-9 Gamepad ports using native 
- * active-low digital logic (low-voltage Ground reads as 0 when pressed).
+ * Role:
+ * Implements the Adapter Pattern to wrap the compiled C++ WebAssembly module.
+ * Exposes the exact same public interface as the legacy JavaScript class, 
+ * allowing seamless drop-in integration with zero changes to any Orchestrator loops.
+ * 
+ * SOLID Principles Applied:
+ * - Liskov Substitution Principle (LSP): Fully interchangeable with the original 
+ *   JS implementation. It provides the same delegator methods (pressUp, depressUp, etc.).
+ * - Single Responsibility Principle (SRP): Handles only the asynchronous loading 
+ *   of the Wasm binary and routes function calls. It provides a safety fallback state
+ *   to prevent crashes if a user presses a button before the Wasm payload finishes loading.
  */
 
 // General Bitmasks mapping DB-9 lines onto SMS Register Ports 0xDC and 0xDD
@@ -34,51 +43,86 @@ const SegaIOPinMask = {
 
 class Sega315_5297 {
     constructor() {
-        // Registers default to 0xFF (VCC pull-up logic state: all inputs open)
-        this.portRegisterDC = 0xff;
-        this.portRegisterDD = 0xff; 
+        this.wasmInstance = null;
+        this.isInitialized = false;
+
+        // Safety fallback properties.
+        // Used to queue and simulate hardware state if the user presses a button 
+        // during the ~50ms window before Emscripten finishes compiling the module.
+        this.fallbackDC = 0xff;
+        this.fallbackDD = 0xff;
+
+        // Asynchronously load the modularized Emscripten WebAssembly output
+        if (typeof SegaIOWasm !== 'undefined') {
+            SegaIOWasm().then(instance => {
+                this.wasmInstance = instance;
+                this.wasmInstance._io_init();
+                
+                // Sync any buttons pressed during the loading phase down to C++
+                this.wasmInstance._io_restore_state(this.fallbackDC, this.fallbackDD);
+                
+                this.isInitialized = true;
+                console.log("[EGGStation::Wasm] Sega 315-5297 I/O module linked successfully.");
+            });
+        } else {
+            console.error("[EGGStation::Wasm] Fatal: SegaIOWasm loader is not defined in the global scope.");
+        }
     }
 
     /**
-     * Toggles the Ground (low-level 0) state of a Port 0xDC register pin.
+     * Routes Port DC state changes to WebAssembly.
      * @param {string} pinName - Name of the pin defined in SegaIOPinMask.
      * @param {boolean} isPressed - True if active-low state is triggered.
      */
     writePinStateDC(pinName, isPressed) {
-        if (isPressed) {
-            this.portRegisterDC &= ~SegaIOPinMask[pinName]; // Pull-down to 0 (pressed)
+        if (this.isInitialized) {
+            this.wasmInstance._io_write_pin_dc(SegaIOPinMask[pinName], isPressed);
         } else {
-            this.portRegisterDC |= SegaIOPinMask[pinName];  // Pull-up to 1 (unpressed)
+            if (isPressed) this.fallbackDC &= ~SegaIOPinMask[pinName];
+            else this.fallbackDC |= SegaIOPinMask[pinName];
         }
     }
 
     /**
-     * Toggles the Ground (low-level 0) state of a Port 0xDD register pin.
+     * Routes Port DD state changes to WebAssembly.
      * @param {string} pinName - Name of the pin defined in SegaIOPinMask.
      * @param {boolean} isPressed - True if active-low state is triggered.
      */
     writePinStateDD(pinName, isPressed) {
-        if (isPressed) {
-            this.portRegisterDD &= ~SegaIOPinMask[pinName]; // Pull-down to 0
+        if (this.isInitialized) {
+            this.wasmInstance._io_write_pin_dd(SegaIOPinMask[pinName], isPressed);
         } else {
-            this.portRegisterDD |= SegaIOPinMask[pinName];  // Pull-up to 1
+            if (isPressed) this.fallbackDD &= ~SegaIOPinMask[pinName];
+            else this.fallbackDD |= SegaIOPinMask[pinName];
         }
     }
 
     /**
-     * Reads register 0xDC.
+     * Reads register 0xDC from WebAssembly.
      * @returns {number} 8-bit state.
      */
     readRegisterDC() {
-        return this.portRegisterDC;
+        return this.isInitialized ? this.wasmInstance._io_read_dc() : this.fallbackDC;
     }
 
     /**
-     * Reads register 0xDD.
+     * Reads register 0xDD from WebAssembly.
      * @returns {number} 8-bit state.
      */
     readRegisterDD() {
-        return this.portRegisterDD;
+        return this.isInitialized ? this.wasmInstance._io_read_dd() : this.fallbackDD;
+    }
+
+    /**
+     * Used by the Temporal Physics engine to sync rewind states instantly.
+     */
+    syncFromRewind(dc, dd) {
+        if (this.isInitialized) {
+            this.wasmInstance._io_restore_state(dc, dd);
+        } else {
+            this.fallbackDC = dc;
+            this.fallbackDD = dd;
+        }
     }
 
     // ========================================================================
