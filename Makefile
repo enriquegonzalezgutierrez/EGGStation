@@ -7,7 +7,7 @@
 # High-performance, self-documenting build automation orchestrator. Spins up 
 # transient Docker containers to compile C++ domain layers into WebAssembly.
 # Supports complete SMS and Sega Genesis system emulation modules, including 
-# the new polymorphic native Z80 and specialized GenesisZ80 CPU cores.
+# the new polymorphic Z80 CPU, Sega PSG, and Yamaha YM2612 sound engines.
 # ==========================================================================
 
 .DEFAULT_GOAL := help
@@ -44,7 +44,7 @@ PSG_SRC   := /src/src/domain/SegaPsg.cpp /src/src/infrastructure/SegaPsgWasmBrid
 # --- Sega 315-5297 I/O Controller ---
 IO_NAME   := Sega315_5297
 IO_FUNC   := '["_io_init","_io_write_pin_dc","_io_write_pin_dd","_io_read_dc","_io_read_dd","_io_restore_state"]'
-IO_METH   := '["ccall","cwrap"]'
+IO_METH  := '["ccall","cwrap"]'
 IO_SRC    := /src/src/domain/Sega315_5297.cpp /src/src/infrastructure/Sega315_5297WasmBridge.cpp
 
 # --- Sega 315-5124 VDP (Graphics) ---
@@ -82,6 +82,12 @@ Z80_SRC   := /src/src/domain/cpu/z80/Z80Registers.cpp \
              /src/src/domain/cpu/z80/instructions/Z80BlockOps.cpp \
              /src/src/domain/cpu/z80/instructions/Z80SystemIO.cpp \
              /src/src/infrastructure/ZilogZ80WasmBridge.cpp
+
+# --- Sega Genesis YM2612 FM Sound Engine ---
+FM_NAME   := GenesisYm2612
+FM_FUNC   := '["_fm_init","_fm_write_address","_fm_write_data","_fm_update","_fm_output_samples","_fm_get_buffer_pointer"]'
+FM_METH   := '["ccall","cwrap","HEAP16"]'
+FM_SRC    := /src/src/domain/audio/GenesisYm2612.cpp /src/src/infrastructure/GenesisYm2612WasmBridge.cpp
 
 # ==========================================================================
 # 3. Build Targets
@@ -124,6 +130,11 @@ build-wasm: ## Compile all C++ Domain logic to WebAssembly inside Docker
 	docker run --rm -v $(HOST_SRC_DIR):/src/src -v $(HOST_BUILD_DIR):/src/build $(DOCKER_IMAGE) \
 		emcc $(Z80_SRC) -o /src/build/$(Z80_NAME).js $(COMMON_EMCC_FLAGS) \
 		-s EXPORTED_FUNCTIONS=$(Z80_FUNC) -s EXPORTED_RUNTIME_METHODS=$(Z80_METH) -s EXPORT_NAME='ZilogZ80Wasm'
+
+	@echo ">>> Building GenesisYm2612 (FM Sound Engine)..."
+	docker run --rm -v $(HOST_SRC_DIR):/src/src -v $(HOST_BUILD_DIR):/src/build $(DOCKER_IMAGE) \
+		emcc $(FM_SRC) -o /src/build/$(FM_NAME).js $(COMMON_EMCC_FLAGS) \
+		-s EXPORTED_FUNCTIONS=$(FM_FUNC) -s EXPORTED_RUNTIME_METHODS=$(FM_METH) -s EXPORT_NAME='GenesisYm2612Wasm'
 
 	@echo "=========================================================================="
 	@echo " Build Success: All WebAssembly hardware modules generated in build/"

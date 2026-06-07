@@ -243,14 +243,15 @@
     <script src="build/Sega315_5297.js"></script>
     <script src="build/Sega315_5124.js"></script>
     <script src="build/SegaMasterSystemCartridge.js"></script>
-    <script src="build/ZilogZ80.js"></script> <!-- Compilated WebAssembly Z80 Binary -->
+    <script src="build/ZilogZ80.js"></script>
+    <script src="build/GenesisYm2612.js"></script> <!-- MODIFIED: Added native WASM compiled YM2612 sound engine -->
 
     <!-- SHARED HARDWARE CORE ADAPTERS -->
     <script src="js/shared/audio/SegaPsg.js"></script>
     <script src="js/shared/audio/UniversalAudioProcessor.js"></script>
 
-    <!-- Z80 CPU FAMILY & ADAPTERS -->
-    <script src="js/shared/cpu/z80/ZilogZ80.js"></script> <!-- Mapped Javascript WASM Adapter -->
+    <!-- Z80 CPU FAMILY -->
+    <script src="js/shared/cpu/z80/ZilogZ80.js"></script>
     <script src="js/shared/cpu/z80/Z80Disassembler.js"></script>
 
     <!-- M68K CPU FAMILY -->
