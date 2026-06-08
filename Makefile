@@ -6,8 +6,8 @@
 # Role:
 # High-performance, self-documenting build automation orchestrator. Spins up 
 # transient Docker containers to compile C++ domain layers into WebAssembly.
-# Supports complete SMS and Sega Genesis system emulation modules, including 
-# the new polymorphic Z80 CPU, Sega PSG, and Yamaha YM2612 sound engines.
+# Supports complete SMS and Sega Genesis system emulation modules, and now 
+# the new Super Nintendo (SNES) Cartridge/SRAM hardware module.
 # ==========================================================================
 
 .DEFAULT_GOAL := help
@@ -89,6 +89,12 @@ FM_FUNC   := '["_fm_init","_fm_write_address","_fm_write_data","_fm_update","_fm
 FM_METH   := '["ccall","cwrap","HEAP16"]'
 FM_SRC    := /src/src/domain/audio/GenesisYm2612.cpp /src/src/infrastructure/GenesisYm2612WasmBridge.cpp
 
+# --- Super Nintendo (SNES) Cartridge Hardware Module ---
+SNES_CART_NAME := SnesCartridge
+SNES_CART_FUNC := '["_snes_cart_load","_snes_cart_read","_snes_cart_write","_snes_cart_reset","_snes_cart_get_is_hirom","_snes_cart_get_is_pal","_snes_cart_get_sram_size","_snes_cart_get_sram_pointer","_malloc","_free"]'
+SNES_CART_METH := '["ccall","cwrap","HEAPU8"]'
+SNES_CART_SRC  := /src/src/domain/SnesCartridge.cpp /src/src/infrastructure/SnesCartridgeWasmBridge.cpp
+
 # ==========================================================================
 # 3. Build Targets
 # ==========================================================================
@@ -135,6 +141,11 @@ build-wasm: ## Compile all C++ Domain logic to WebAssembly inside Docker
 	docker run --rm -v $(HOST_SRC_DIR):/src/src -v $(HOST_BUILD_DIR):/src/build $(DOCKER_IMAGE) \
 		emcc $(FM_SRC) -o /src/build/$(FM_NAME).js $(COMMON_EMCC_FLAGS) \
 		-s EXPORTED_FUNCTIONS=$(FM_FUNC) -s EXPORTED_RUNTIME_METHODS=$(FM_METH) -s EXPORT_NAME='GenesisYm2612Wasm'
+
+	@echo ">>> Building SnesCartridge (Super Nintendo)..."
+	docker run --rm -v $(HOST_SRC_DIR):/src/src -v $(HOST_BUILD_DIR):/src/build $(DOCKER_IMAGE) \
+		emcc $(SNES_CART_SRC) -o /src/build/$(SNES_CART_NAME).js $(COMMON_EMCC_FLAGS) \
+		-s EXPORTED_FUNCTIONS=$(SNES_CART_FUNC) -s EXPORTED_RUNTIME_METHODS=$(SNES_CART_METH) -s EXPORT_NAME='SnesCartWasm'
 
 	@echo "=========================================================================="
 	@echo " Build Success: All WebAssembly hardware modules generated in build/"
