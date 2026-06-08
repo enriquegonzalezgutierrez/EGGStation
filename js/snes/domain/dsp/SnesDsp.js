@@ -1,281 +1,157 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Emulator
- * Component: SnesDsp (Audio Synthesizer Core)
+ * Author: Enrique González Gutiérrez
+ * File: js/snes/domain/dsp/SnesDsp.js
  * 
- * ROLE:
- * Synthesizes analog audio channels by processing ADSR/Gain envelopes, 
- * channel volume panning, and master mixing.
+ * Domain/Infrastructure Layer: SnesDsp WASM Bridge Adapter (Unified APU RAM Sync Edition)
  * 
- * SOLID PRINCIPLES:
- * - Single Responsibility Principle (SRP): Exclusively orchestrates DSP registers,
- *   state buffers, and master audio mixing.
+ * Role:
+ * Bridges the JS SNES Audio Processing Unit (APU) directly to the compiled 
+ * C++ SnesDsp WebAssembly module. Dynamically overrides and binds the RAM pointers
+ * of both the APU and the SPC700 CPU to guarantee shared C++ memory synchronization.
+ * 
+ * SOLID Principles:
+ * - Liskov Substitution Principle (LSP): Fully interchangeable with the legacy 
+ *   JS SnesDsp class, allowing SnesApu to execute its mixers seamlessly.
  */
 
-{
-    class SnesDsp {
-        /**
-         * @param {SnesApu} apu - Mapped sound processor unit context.
-         */
-        constructor(apu) {
-            this.apu = apu;
+class SnesDsp {
+    /**
+     * @param {SnesApu} apu - Active audio processing unit context.
+     */
+    constructor(apu) {
+        this.apu = apu;
+        this.wasmInstance = null;
+        this.isReady = false;
 
-            this.ram = new Uint8Array(0x80);
+        // Fallbacks during early asynchronous compiling phase
+        this.fallbackL = new Float32Array(534);
+        this.fallbackR = new Float32Array(534);
+        this.regCache = new Uint8Array(0x80);
 
-            // Float32 buffer outputs (GC-free pipeline mapping)
-            this.samplesL = new Float32Array(534);
-            this.samplesR = new Float32Array(534);
-            this.sampleOffset = 0;
+        if (typeof SnesDspWasm !== 'undefined') {
+            SnesDspWasm().then(instance => {
+                this.wasmInstance = instance;
+                instance._dsp_init();
 
-            // Decoded wave buffers
-            this.decodeBuffer = new Int16Array(19 * 8);
-            this.rateNums = new Int16Array(5 * 8);
+                // 1. Allocate APU 64KB RAM natively on the WASM Heap
+                const apuRamPtr = instance._malloc(0x10000);
+                instance._dsp_set_apuram_ptr(apuRamPtr);
 
-            this.reset();
-        }
-
-        reset() {
-            this.ram.fill(0);
-
-            this.decodeBuffer.fill(0);
-            this.rateNums.fill(0);
-            
-            for (let i = 0; i < 8; i++) {
-                this.rateNums[i * 5 + 3] = 1;
-            }
-
-            this.pitch = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.counter = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.pitchMod = [false, false, false, false, false, false, false, false];
-
-            this.srcn = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.decodeOffset = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.prevFlags = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.old = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.older = [0, 0, 0, 0, 0, 0, 0, 0];
-
-            this.enableNoise = [false, false, false, false, false, false, false, false];
-            this.noiseSample = -0x4000;
-            this.noiseRate = 0;
-            this.noiseCounter = 0;
-
-            this.rateCounter = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.adsrState = [3, 3, 3, 3, 3, 3, 3, 3];
-            this.sustainLevel = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.useGain = [false, false, false, false, false, false, false, false];
-            this.gainMode = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.directGain = [false, false, false, false, false, false, false, false];
-            this.gainValue = [0, 0, 0, 0, 0, 0, 0, 0];
-
-            this.gain = [0, 0, 0, 0, 0, 0, 0, 0];
-
-            this.channelVolumeL = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.channelVolumeR = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.volumeL = 0;
-            this.volumeR = 0;
-            this.mute = true;
-
-            this.resetFlag = true;
-            this.noteOff = [true, true, true, true, true, true, true, true];
-
-            this.sampleOut = [0, 0, 0, 0, 0, 0, 0, 0];
-            this.dirPage = 0;
-        }
-
-        /**
-         * Main DSP processing step. Synthesizes and mixes channel samples.
-         */
-        cycle() {
-            let totalL = 0;
-            let totalR = 0;
-
-            for (let i = 0; i < 8; i++) {
-                this.cycleChannel(i);
-                totalL += (this.sampleOut[i] * this.channelVolumeL[i]) >> 6;
-                totalR += (this.sampleOut[i] * this.channelVolumeR[i]) >> 6;
-                
-                totalL = totalL < -0x8000 ? -0x8000 : (totalL > 0x7fff ? 0x7fff : totalL);
-                totalR = totalR < -0x8000 ? -0x8000 : (totalR > 0x7fff ? 0x7fff : totalR);
-            }
-
-            totalL = (totalL * this.volumeL) >> 7;
-            totalR = (totalR * this.volumeR) >> 7;
-            totalL = totalL < -0x8000 ? -0x8000 : (totalL > 0x7fff ? 0x7fff : totalL);
-            totalR = totalR < -0x8000 ? -0x8000 : (totalR > 0x7fff ? 0x7fff : totalR);
-            
-            if (this.mute) {
-                totalL = 0;
-                totalR = 0;
-            }
-
-            this.handleNoise();
-
-            this.samplesL[this.sampleOffset] = totalL * SnesDsp.INV_32768;
-            this.samplesR[this.sampleOffset] = totalR * SnesDsp.INV_32768;
-            this.sampleOffset++;
-            
-            if (this.sampleOffset > 533) {
-                this.sampleOffset = 533;
-            }
-        }
-
-        read(address) {
-            return this.ram[address & 0x7f];
-        }
-
-        write(address, value) {
-            let channel = (address & 0x70) >> 4;
-            const ch5 = channel * 5;
-            
-            switch (address) {
-                case 0x0: case 0x10: case 0x20: case 0x30: case 0x40: case 0x50: case 0x60: case 0x70: {
-                    this.channelVolumeL[channel] = (value > 0x7f ? value - 0x100 : value);
-                    break;
-                }
-                case 0x1: case 0x11: case 0x21: case 0x31: case 0x41: case 0x51: case 0x61: case 0x71: {
-                    this.channelVolumeR[channel] = (value > 0x7f ? value - 0x100 : value);
-                    break;
-                }
-                case 0x2: case 0x12: case 0x22: case 0x32: case 0x42: case 0x52: case 0x62: case 0x72: {
-                    this.pitch[channel] &= 0x3f00;
-                    this.pitch[channel] |= value;
-                    break;
-                }
-                case 0x3: case 0x13: case 0x23: case 0x33: case 0x43: case 0x53: case 0x63: case 0x73: {
-                    this.pitch[channel] &= 0xff;
-                    this.pitch[channel] |= (value << 8) & 0x3f00;
-                    break;
-                }
-                case 0x4: case 0x14: case 0x24: case 0x34: case 0x44: case 0x54: case 0x64: case 0x74: {
-                    this.srcn[channel] = value;
-                    break;
-                }
-                case 0x5: case 0x15: case 0x25: case 0x35: case 0x45: case 0x55: case 0x65: case 0x75: {
-                    this.rateNums[ch5 + 0] = SnesDsp.rates[(value & 0xf) * 2 + 1];
-                    this.rateNums[ch5 + 1] = SnesDsp.rates[((value & 0x70) >> 4) * 2 + 16];
-                    this.useGain[channel] = (value & 0x80) === 0;
-                    break;
-                }
-                case 0x6: case 0x16: case 0x26: case 0x36: case 0x46: case 0x56: case 0x66: case 0x76: {
-                    this.rateNums[ch5 + 2] = SnesDsp.rates[value & 0x1f];
-                    this.sustainLevel[channel] = (((value & 0xe0) >> 5) + 1) * 0x100;
-                    break;
-                }
-                case 0x7: case 0x17: case 0x27: case 0x37: case 0x47: case 0x57: case 0x67: case 0x77: {
-                    if ((value & 0x80) > 0) {
-                        this.directGain[channel] = false;
-                        this.gainMode[channel] = (value & 0x60) >> 5;
-                        this.rateNums[ch5 + 4] = SnesDsp.rates[value & 0x1f];
-                    } else {
-                        this.directGain[channel] = true;
-                        this.gainValue[channel] = (value & 0x7f) * 16;
+                // 2. Synchronize any early register writes safely (excluding triggers first)
+                const triggers = [0x4c, 0x5c, 0x6c];
+                for (let i = 0; i < 0x80; i++) {
+                    if (!triggers.includes(i)) {
+                        instance._dsp_write(i, this.regCache[i]);
                     }
-                    break;
                 }
-                case 0x0c: {
-                    this.volumeL = (value > 0x7f ? value - 0x100 : value);
-                    break;
+                // Write triggers last in proper chronological order to avoid out-of-order execution
+                instance._dsp_write(0x6c, this.regCache[0x6c]); // FLG
+                instance._dsp_write(0x5c, this.regCache[0x5c]); // KOF
+                instance._dsp_write(0x4c, this.regCache[0x4c]); // KON (Corrected to 0x4C)
+
+                // 3. Define shared, high-performance getter for APU and CPU RAM 
+                // Uses dynamic HEAPU8 subarray mapping to survive WASM Memory Growth seamlessly
+                const syncRamGetter = {
+                    get: () => {
+                        return instance.HEAPU8.subarray(apuRamPtr, apuRamPtr + 0x10000);
+                    },
+                    set: (v) => { /* Read-only safety */ }
+                };
+
+                // Copy existing boot ROM or memory contents into the newly allocated WASM memory space
+                const tempRam = new Uint8Array(instance.HEAPU8.buffer, apuRamPtr, 0x10000);
+                tempRam.set(this.apu.ram);
+
+                // Define dynamic getter on SnesApu instance
+                Object.defineProperty(this.apu, 'ram', syncRamGetter);
+
+                // Define dynamic getter on SnesSpc (SPC700 CPU) instance to avoid stale reference caching
+                if (this.apu.spc) {
+                    Object.defineProperty(this.apu.spc, 'ram', syncRamGetter);
                 }
-                case 0x1c: {
-                    this.volumeR = (value > 0x7f ? value - 0x100 : value);
-                    break;
-                }
-                case 0x2c: {
-                    break;
-                }
-                case 0x3c: {
-                    break;
-                }
-                case 0x4c: {
-                    // Log KON (Key On) trigger events to see if sound channels are actually fired
-                    // console.log(`%c[EGGStation::DSP-Diag] Key On (KON) Triggered: 0x${value.toString(16).toUpperCase()}`, "color: #04d361; font-weight: bold;");
-                    let test = 1;
-                    for (let i = 0; i < 8; i++) {
-                        if ((value & test) > 0) {
-                            this.prevFlags[i] = 0;
-                            let sampleAdr = (this.dirPage << 8) + (this.srcn[i] * 4);
-                            let startAdr = this.apu.ram[sampleAdr & 0xffff];
-                            startAdr |= this.apu.ram[(sampleAdr + 1) & 0xffff] << 8;
-                            this.decodeOffset[i] = startAdr;
-                            this.gain[i] = 0;
-                            if (this.useGain[i]) {
-                                this.adsrState[i] = 4;
-                            } else {
-                                this.adsrState[i] = 0;
-                            }
-                            for (let j = 0; j < 19; j++) {
-                                this.decodeBuffer[i * 19 + j] = 0;
-                            }
-                        }
-                        test <<= 1;
-                    }
-                    break;
-                }
-                case 0x5c: {
-                    let test = 1;
-                    for (let i = 0; i < 8; i++) {
-                        this.noteOff[i] = (value & test) > 0;
-                        test <<= 1;
-                    }
-                    break;
-                }
-                case 0x6c: {
-                    this.resetFlag = (value & 0x80) > 0;
-                    this.mute = (value & 0x40) > 0;
-                    this.noiseRate = SnesDsp.rates[value & 0x1f];
-                    
-                    // Log DSP Mute status modifications
-                    // console.log(`%c[EGGStation::DSP-Diag] Synthesizer Mute State: ${this.mute} | Reset Flag: ${this.resetFlag}`, "color: #ff007f; font-weight: bold;");
-                    break;
-                }
-                case 0x7c: {
-                    this.ram[0x7c] = 0;
-                    value = 0;
-                    break;
-                }
-                case 0x0d: {
-                    break;
-                }
-                case 0x2d: {
-                    let test = 2;
-                    for (let i = 1; i < 8; i++) {
-                        this.pitchMod[i] = (value & test) > 0;
-                        test <<= 1;
-                    }
-                    break;
-                }
-                case 0x3d: {
-                    let test = 1;
-                    for (let i = 0; i < 8; i++) {
-                        this.enableNoise[i] = (value & test) > 0;
-                        test <<= 1;
-                    }
-                    break;
-                }
-                case 0x4d: {
-                    break;
-                }
-                case 0x5d: {
-                    this.dirPage = value;
-                    break;
-                }
-                case 0x6d: {
-                    break;
-                }
-                case 0x7d: {
-                    break;
-                }
-                case 0xf: case 0x1f: case 0x2f: case 0x3f: case 0x4f: case 0x5f: case 0x6f: case 0x7f: {
-                    break;
-                }
-            }
-            this.ram[address & 0x7f] = value;
+
+                this.isReady = true;
+                console.log("[SnesDsp::Wasm] Linked mapped APU RAM and direct audio buffers over WASM heap.");
+            }).catch(err => {
+                console.error("[SnesDsp::Wasm] Instantiation failed:", err);
+            });
         }
     }
 
-    if (typeof module !== 'undefined' && module.exports) {
-        module.exports = SnesDsp;
-    } else if (typeof window !== 'undefined') {
-        window.SnesDsp = SnesDsp;
-        window.Dsp = SnesDsp; // Backward compatibility alias
+    /**
+     * Resets internal registers.
+     */
+    reset() {
+        if (this.isReady) {
+            this.wasmInstance._dsp_init();
+        } else {
+            this.regCache.fill(0);
+        }
+    }
+
+    /**
+     * Reads a byte from the active registers.
+     */
+    read(address) {
+        if (this.isReady) {
+            return this.wasmInstance._dsp_read(address);
+        }
+        return this.regCache[address & 0x7F];
+    }
+
+    /**
+     * Writes a byte value into the target register.
+     */
+    write(address, value) {
+        if (this.isReady) {
+            this.wasmInstance._dsp_write(address, value);
+        } else {
+            this.regCache[address & 0x7F] = value;
+        }
+    }
+
+    /**
+     * Steps the synthesizer clock cycle.
+     */
+    cycle() {
+        if (this.isReady) {
+            this.wasmInstance._dsp_cycle();
+        }
+    }
+
+    // ========================================================================
+    // GETTERS & SETTERS (Apu Mixer interface mappings)
+    // Uses direct subarray slices over Emscripten's active auto-updating HEAPF32
+    // ========================================================================
+
+    get samplesL() {
+        if (this.isReady) {
+            const ptr = this.wasmInstance._dsp_get_samples_l_ptr() >> 2; // Float32 index is byte address / 4
+            return this.wasmInstance.HEAPF32.subarray(ptr, ptr + 534);
+        }
+        return this.fallbackL;
+    }
+
+    get samplesR() {
+        if (this.isReady) {
+            const ptr = this.wasmInstance._dsp_get_samples_r_ptr() >> 2; // Float32 index is byte address / 4
+            return this.wasmInstance.HEAPF32.subarray(ptr, ptr + 534);
+        }
+        return this.fallbackR;
+    }
+
+    get sampleOffset() {
+        return this.isReady ? this.wasmInstance._dsp_get_sample_offset() : 0;
+    }
+
+    set sampleOffset(value) {
+        if (this.isReady && value === 0) {
+            this.wasmInstance._dsp_clear_sample_offset();
+        }
     }
 }
+
+// Bind globally to maintain script-based global scope lookup
+window.SnesDsp = SnesDsp;
+window.Dsp = SnesDsp;

@@ -7,7 +7,7 @@
 # High-performance, self-documenting build automation orchestrator. Spins up 
 # transient Docker containers to compile C++ domain layers into WebAssembly.
 # Supports complete SMS and Sega Genesis system emulation modules, and now 
-# the new Super Nintendo (SNES) Cartridge/SRAM hardware module.
+# Super Nintendo (SNES) Cartridge/SRAM and DSP Synthesizer hardware modules.
 # ==========================================================================
 
 .DEFAULT_GOAL := help
@@ -95,6 +95,12 @@ SNES_CART_FUNC := '["_snes_cart_load","_snes_cart_read","_snes_cart_write","_sne
 SNES_CART_METH := '["ccall","cwrap","HEAPU8"]'
 SNES_CART_SRC  := /src/src/domain/SnesCartridge.cpp /src/src/infrastructure/SnesCartridgeWasmBridge.cpp
 
+# --- Super Nintendo (SNES) DSP Audio Synthesizer Module ---
+SNES_DSP_NAME := SnesDsp
+SNES_DSP_FUNC := '["_dsp_init","_dsp_set_apuram_ptr","_dsp_write","_dsp_read","_dsp_cycle","_dsp_get_samples_l_ptr","_dsp_get_samples_r_ptr","_dsp_get_sample_offset","_dsp_clear_sample_offset","_dsp_get_ram_ptr","_dsp_get_adsr_state_ptr","_dsp_get_gain_ptr","_dsp_get_counter_ptr","_malloc","_free"]'
+SNES_DSP_METH := '["ccall","cwrap","HEAPU8","HEAPF32","HEAP16","HEAP32"]'
+SNES_DSP_SRC  := /src/src/domain/SnesDsp.cpp /src/src/infrastructure/SnesDspWasmBridge.cpp
+
 # ==========================================================================
 # 3. Build Targets
 # ==========================================================================
@@ -146,6 +152,11 @@ build-wasm: ## Compile all C++ Domain logic to WebAssembly inside Docker
 	docker run --rm -v $(HOST_SRC_DIR):/src/src -v $(HOST_BUILD_DIR):/src/build $(DOCKER_IMAGE) \
 		emcc $(SNES_CART_SRC) -o /src/build/$(SNES_CART_NAME).js $(COMMON_EMCC_FLAGS) \
 		-s EXPORTED_FUNCTIONS=$(SNES_CART_FUNC) -s EXPORTED_RUNTIME_METHODS=$(SNES_CART_METH) -s EXPORT_NAME='SnesCartWasm'
+
+	@echo ">>> Building SnesDsp (Super Nintendo Audio Synthesizer)..."
+	docker run --rm -v $(HOST_SRC_DIR):/src/src -v $(HOST_BUILD_DIR):/src/build $(DOCKER_IMAGE) \
+		emcc $(SNES_DSP_SRC) -o /src/build/$(SNES_DSP_NAME).js $(COMMON_EMCC_FLAGS) \
+		-s EXPORTED_FUNCTIONS=$(SNES_DSP_FUNC) -s EXPORTED_RUNTIME_METHODS=$(SNES_DSP_METH) -s EXPORT_NAME='SnesDspWasm'
 
 	@echo "=========================================================================="
 	@echo " Build Success: All WebAssembly hardware modules generated in build/"
