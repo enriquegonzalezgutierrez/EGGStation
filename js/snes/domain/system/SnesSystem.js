@@ -277,16 +277,18 @@
             this.joypad1State &= (~(1 << num)) & 0xfff;
         }
 
-        loadRom(rom, isHirom) {
-            rom = SnesCartridge.stripSmcHeader(rom);
-            
-            // Auto-detect HiROM mapping on startup (bypasses manual dropdown settings)
-            const detectedHirom = SnesCartridge.detectHirom(rom);
-            const header = SnesCartridge.parseHeader(rom, detectedHirom);
-            this.cart = new SnesCartridge(rom, header, detectedHirom);
-            
-            // Set regional configuration automatically to the PPU
-            this.ppu.isPal = header.isPal;
+        /**
+         * Parses and mounts a new SNES cartridge ROM.
+         * Async optimized to await WebAssembly modular load resolution.
+         * 
+         * @param {Uint8Array} rom - Cleaned ROM bytes.
+         * @param {boolean} isHirom - Manual mapping override flag.
+         * @returns {Promise<boolean>} True if loaded successfully.
+         */
+        async loadRom(rom, isHirom) {
+            this.cart = new SnesCartridge();
+            await this.cart.load(rom);
+            this.ppu.isPal = this.cart.isPal;
             return true;
         }
 

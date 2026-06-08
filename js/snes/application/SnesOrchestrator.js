@@ -117,9 +117,15 @@ class SnesOrchestrator {
         if (this.postProcessor) this.postProcessor.updateShaderUniforms(curvature, scanlines, phosphor, bloom);
     }
 
-    loadCartridge(romData, isHirom) {
+    /**
+     * Loads a new SNES Cartridge asynchronously and begins processing.
+     * 
+     * @param {Uint8Array} romData - Raw binary cartridge image.
+     * @param {boolean} isHirom - Manual mapping override flag.
+     */
+    async loadCartridge(romData, isHirom) {
         try {
-            const loaded = this.hardware.loadRom(romData, isHirom);
+            const loaded = await this.hardware.loadRom(romData, isHirom);
             if (!loaded) throw new Error("ROM parsing failed.");
             this.hardware.reset(true);
             this.start();
