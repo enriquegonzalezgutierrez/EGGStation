@@ -276,7 +276,7 @@
     <script src="js/sms/presentation/SmsUIController.js"></script>
 
     <!-- SEGA GENESIS / MEGA DRIVE DOMAIN -->
-    <!-- NEW: Cartridge Domain & Mapper Factory Pattern injections -->
+    <!-- Cartridge Domain & Mapper Factory Pattern injections -->
     <script src="js/genesis/domain/cartridge/GenesisCartridge.js"></script>
     <script src="js/genesis/domain/cartridge/mappers/GenesisBaseMapper.js"></script>
     <script src="js/genesis/domain/cartridge/mappers/GenesisStandardMapper.js"></script>
@@ -288,7 +288,12 @@
     <script src="js/genesis/domain/controller/GenesisIoPort.js"></script>
     <script src="js/genesis/domain/controller/GenesisControllerManager.js"></script>
     <script src="js/genesis/domain/cpu/GenesisZ80.js"></script>
+    
+    <!-- Video Subsystems (SOLID Refactored) -->
+    <script src="js/genesis/infrastructure/video/GenesisVdpRenderer.js"></script>
+    <script src="js/genesis/infrastructure/video/GenesisDmaController.js"></script>
     <script src="js/genesis/infrastructure/video/GenesisVdp.js"></script>
+    
     <script src="js/genesis/infrastructure/audio/GenesisLowPassFilter.js"></script>
     <script src="js/genesis/infrastructure/audio/GenesisYm2612.js"></script>
     <script src="js/genesis/infrastructure/audio/GenesisCdc.js"></script>
