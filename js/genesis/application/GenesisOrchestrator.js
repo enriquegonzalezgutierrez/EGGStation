@@ -7,15 +7,6 @@
  * Application Layer: Sega Genesis Orchestrator.
  * Coordinates system execution loops, schedules frame sync rates, and handles
  * pre-allocated state pools to achieve zero Garbage Collection allocations.
- * 
- * APPLIED OPTIMIZATIONS:
- * 1. Safe Intelligent Frameskip: Only drops intermediate frames during heavy lag,
- *    guaranteeing that the final frame of the loop is always fully rendered to prevent black screens.
- * 2. 32-Bit Scanline Rendering: Writes pixels using Uint32Array rather than isolated 
- *    RGBA byte assignments, reducing array access overhead by 75%.
- * 3. Fast-Forward Audio Muting: Silences audio generation during fast-forwarding, 
- *    saving massive CPU cycles and preventing audio thread cracking.
- * 4. Death Spiral Protection: Caps the accumulator to prevent cascading lag.
  */
 
 class GenesisOrchestrator {
@@ -46,12 +37,10 @@ class GenesisOrchestrator {
         this.lastTime = 0;
         this.accumulatedTime = 0;
         
-        // Accurate real frame counters
         this.fpsCount = 0;
         this.fpsTimer = 0;
         this.framesRendered = 0;
 
-        // State Serializer and GC-Free Rewind Pool
         this.serializer = new IndexedDbManager();
         this.maxRewindStates = 100; 
         this.rewindHistory = [];
@@ -78,7 +67,6 @@ class GenesisOrchestrator {
         this.z80 = new GenesisZ80(this.z80Bus);
         this.z80Bus.bindCpu(this.z80);
 
-        // Register 68K Instruction Sets
         if (typeof M68kDataTransfer !== 'undefined') this.m68k.registerModule(M68kDataTransfer.register);
         if (typeof M68kArithmetic !== 'undefined') this.m68k.registerModule(M68kArithmetic.register);
         if (typeof M68kLogical !== 'undefined') this.m68k.registerModule(M68kLogical.register);
@@ -93,13 +81,10 @@ class GenesisOrchestrator {
         this.glbFrameBuffer = new Uint8ClampedArray(320 * 240 * 4);
         this.prevFrameBuffer = new Uint8ClampedArray(320 * 240 * 4);
         
-        // Fast-path 32-bit views over pre-allocated framebuffers
         this.glbFrameBuffer32 = new Uint32Array(this.glbFrameBuffer.buffer);
         this.prevFrameBuffer32 = new Uint32Array(this.prevFrameBuffer.buffer);
 
         this.postProcessMode = 0; 
-
-        // Use the UniversalPostProcessor directly
         this.postProcessor = new UniversalPostProcessor(this.glContext);
         this.loop = this.loop.bind(this);
     }
@@ -180,7 +165,6 @@ class GenesisOrchestrator {
     }
 
     mixAudio(e) {
-        // Mute and skip calculations during Fast-Forward, Rewind, or Muted state to save CPU
         if (!this.isRunning || this.isPaused || this.isRewinding || this.fastForward || this.audioEnabled === false) {
             e.outputBuffer.getChannelData(0).fill(0);
             e.outputBuffer.getChannelData(1).fill(0);
@@ -226,7 +210,7 @@ class GenesisOrchestrator {
         }
 
         this.initialise();
-        this.bus.setCartridge(romBuffer);
+        this.bus.setCartridge(romBuffer); // Delegate loading to Cartridge abstraction
         this.setTvStandard(this.bus.tvStandard === 1 ? "PAL" : "NTSC");
         this.m68k.reset();
         this.startAudio();
@@ -293,7 +277,7 @@ class GenesisOrchestrator {
     }
 
     async saveState() {
-        if (this.isRunning && this.bus.cartridgeRom) {
+        if (this.isRunning && this.bus.cartridge) { // FIXED: Refers to this.bus.cartridge
             try {
                 const statePayload = {
                     m68k: {
@@ -320,10 +304,10 @@ class GenesisOrchestrator {
                         vsram: Array.from(this.vdp.vsram)
                     },
                     mmu: {
-                        workRam: Array.from(this.bus.workRam),
-                        externalRam: Array.from(this.bus.externalRam),
-                        bankRegisters: Array.from(this.bus.bankRegisters)
+                        workRam: Array.from(this.bus.workRam)
                     },
+                    // SOLID Fix: Ask the mapper to serialize itself!
+                    mapper: this.bus.mapper ? this.bus.mapper.serializeState() : null,
                     psg: {
                         tonesCountdown: Array.from(this.psg.tonesCountdown),
                         tonesCountdownMaster: Array.from(this.psg.tonesCountdownMaster),
@@ -369,7 +353,7 @@ class GenesisOrchestrator {
     }
 
     async loadState() {
-        if (this.isRunning && this.bus.cartridgeRom) {
+        if (this.isRunning && this.bus.cartridge) { // FIXED: Refers to this.bus.cartridge
             try {
                 const state = await this.serializer.load("GENESIS_SAVESTATE");
                 if (!state) return;
@@ -395,10 +379,13 @@ class GenesisOrchestrator {
                 this.vdp.cram.set(state.vdp.cram);
                 this.vdp.vsram.set(state.vdp.vsram);
 
-                // Restore MMU
+                // Restore MMU and Mapper
                 this.bus.workRam.set(state.mmu.workRam);
-                this.bus.externalRam.set(state.mmu.externalRam);
-                this.bus.bankRegisters.set(state.mmu.bankRegisters);
+                
+                // SOLID Fix: Ask mapper to deserialize itself!
+                if (this.bus.mapper && state.mapper) {
+                    this.bus.mapper.deserializeState(state.mapper);
+                }
 
                 // Restore PSG
                 this.psg.tonesCountdown.set(state.psg.tonesCountdown);
@@ -478,7 +465,6 @@ class GenesisOrchestrator {
 
         let deltaTime = currentTime - this.lastTime;
         
-        // Prevent massive time jumps when switching browser tabs
         if (deltaTime > 100) {
             deltaTime = targetFrameTime;
         }
@@ -486,14 +472,10 @@ class GenesisOrchestrator {
         this.lastTime = currentTime;
         this.accumulatedTime += deltaTime;
 
-        // CRITICAL OPTIMIZATION (Spiral of Death Protection):
-        // If the CPU is too slow to maintain full speed, cap the accumulator 
-        // to prevent the loop from trying to process too many frames at once and crashing the tab.
         if (this.accumulatedTime > targetFrameTime * 2) {
             this.accumulatedTime = targetFrameTime * 2;
         }
 
-        // Sync inputs from Universal Input Manager
         if (window.UniversalInput) {
             this.isRewinding = window.UniversalInput.isPressed("REWIND");
             this.fastForward = window.UniversalInput.isPressed("FAST_FORWARD");
@@ -502,23 +484,17 @@ class GenesisOrchestrator {
         let framesRun = 0;
 
         if (this.fastForward) {
-            // Fast-Forward Logic: Accelerate execution and disable audio processing
             for (let i = 0; i < 3; i++) {
-                // Bypass VDP scanline composition completely during intermediate Fast-Forward steps
                 this.executeFrame(targetFps, true);
                 framesRun++;
             }
-            // Force rendering only on the final step to keep display current
             this.executeFrame(targetFps, false);
             this.accumulatedTime = 0; 
         } else {
-            // Normal Execution with Safe Dynamic Frameskip
             let framesToRun = Math.floor(this.accumulatedTime / targetFrameTime);
             this.accumulatedTime %= targetFrameTime;
 
             for (let i = 0; i < framesToRun; i++) {
-                // Only skip rendering on intermediate frames.
-                // The very last frame (i === framesToRun - 1) MUST be rendered (skipRendering = false).
                 const isLastFrame = (i === framesToRun - 1);
                 const skipRendering = !isLastFrame && (framesToRun > 1);
 
@@ -527,7 +503,6 @@ class GenesisOrchestrator {
             }
         }
 
-        // Real-time FPS update
         if (currentTime - this.fpsTimer >= 1000) {
             if (this.onFpsUpdate) {
                 this.onFpsUpdate(this.fastForward ? "FFWD" : this.fpsCount);
@@ -539,9 +514,6 @@ class GenesisOrchestrator {
         this.animationFrameId = requestAnimationFrame(this.loop);
     }
 
-    /**
-     * Simulates exactly one frame's worth of CPU and VDP scanlines.
-     */
     executeFrame(targetFps, skipRendering = false) {
         const totalScanlines = this.tvStandard === 1 ? 312 : 262;
         const activeHeight = this.vdp.v30Enabled ? 240 : 224;
@@ -559,7 +531,6 @@ class GenesisOrchestrator {
 
         const m68kCyclesPerScanline = Math.floor(targetCycles / totalScanlines);
 
-        // Dynamically replace render callback with an empty dummy when frameskipping
         const dummyCallback = () => {};
         const renderCallback = skipRendering ? dummyCallback : (user_data, line, pixels, shadowMap, w, h) => {
             this.renderScanline(line, pixels, shadowMap, w, h);
@@ -575,7 +546,6 @@ class GenesisOrchestrator {
 
                 this.stepCPUs(Math.floor(m68kCyclesPerScanline / 2));
 
-                // Passes our dynamic callback (if skipRendering is active, this skips raster calculations)
                 this.vdp.endScanline(scanline, renderCallback, null);
 
                 this.stepCPUs(Math.floor(m68kCyclesPerScanline / 2));
@@ -599,7 +569,6 @@ class GenesisOrchestrator {
             }
         }
         
-        // Skip final post-processor screen blits if frameskipping
         if (!skipRendering) {
             const activeWidth = this.vdp.h40Enabled ? 320 : 256;
             if (this.postProcessor) {
@@ -696,9 +665,6 @@ class GenesisOrchestrator {
         ctx.putImageData(imgData, 0, 0);
     }
 
-    /**
-     * Fast scanline renderer using 32-bit packed color integers.
-     */
     renderScanline(line, pixels, shadowMap, width, height) {
         const shadowEnabled = this.vdp.shadowHighlightEnabled;
         const destOffset32 = line * width;
@@ -719,7 +685,6 @@ class GenesisOrchestrator {
             const g = ((rgb & 0x0E0) >> 5) * 36;
             const b = ((rgb & 0xE00) >> 9) * 36;
 
-            // ABGR format for Little-Endian Uint32Array view of Uint8ClampedArray
             glb32[destOffset32 + i] = r | (g << 8) | (b << 16) | 0xff000000;
         }
     }

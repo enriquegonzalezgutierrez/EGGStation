@@ -266,7 +266,7 @@
     <script src="js/shared/cpu/m68k/instructions/M68kLogical.js"></script>
     <script src="js/shared/cpu/m68k/instructions/M68kProgramFlow.js"></script>
 
-    <!-- SEGA MASTER SYSTEM (SMS) DOMAIN - WASM ENABLED -->
+    <!-- SEGA MASTER SYSTEM (SMS) DOMAIN -->
     <script src="js/sms/domain/bus/SegaMasterSystemBus.js"></script>
     <script src="js/sms/domain/cartridge/SegaMasterSystemCartridge.js"></script>
     <script src="js/sms/domain/cartridge/mappers/BaseMapper.js"></script>
@@ -276,6 +276,13 @@
     <script src="js/sms/presentation/SmsUIController.js"></script>
 
     <!-- SEGA GENESIS / MEGA DRIVE DOMAIN -->
+    <!-- NEW: Cartridge Domain & Mapper Factory Pattern injections -->
+    <script src="js/genesis/domain/cartridge/GenesisCartridge.js"></script>
+    <script src="js/genesis/domain/cartridge/mappers/GenesisBaseMapper.js"></script>
+    <script src="js/genesis/domain/cartridge/mappers/GenesisStandardMapper.js"></script>
+    <script src="js/genesis/domain/cartridge/mappers/GenesisSsf2Mapper.js"></script>
+    <script src="js/genesis/domain/cartridge/mappers/GenesisMapperFactory.js"></script>
+
     <script src="js/genesis/domain/bus/GenesisBusZ80.js"></script>
     <script src="js/genesis/domain/bus/GenesisBusM68k.js"></script>
     <script src="js/genesis/domain/controller/GenesisIoPort.js"></script>
