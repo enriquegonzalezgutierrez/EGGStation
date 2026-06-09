@@ -264,6 +264,35 @@ class SegaPsg {
     }
 
     syncWorkletState() {}
+
+    // ========================================================================
+    // ENCAPSULATED STATE SERIALIZATION FOR SAVESTATES (SOLID SRP/OCP)
+    // ========================================================================
+
+    serializeState() {
+        this.syncFromWasm(); // Sync registers from WASM heap first
+        return {
+            volregister: Array.from(this.volregister),
+            toneregister: Array.from(this.toneregister),
+            wavePos: Array.from(this.wavePos),
+            chan2belatched: this.chan2belatched,
+            what2latch: this.what2latch
+        };
+    }
+
+    deserializeState(state) {
+        if (!state) return;
+        this.volregister.set(state.volregister);
+        this.toneregister.set(state.toneregister);
+        this.wavePos.set(state.wavePos);
+        this.chan2belatched = state.chan2belatched;
+        this.what2latch = state.what2latch;
+
+        // Push restored registers back to WASM and recalculate steps
+        for (let i = 0; i < 4; i++) {
+            this.recalculateVoiceStep(i);
+        }
+    }
 }
 
 // Bind globally as a shared module

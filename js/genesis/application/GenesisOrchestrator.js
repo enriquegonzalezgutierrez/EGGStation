@@ -7,6 +7,13 @@
  * Application Layer: Sega Genesis Orchestrator.
  * Coordinates system execution loops, schedules frame sync rates, and handles
  * pre-allocated state pools to achieve zero Garbage Collection allocations.
+ * 
+ * SOLID Principles Applied:
+ * - Single Responsibility Principle (SRP): Coordinates clock cycles, schedules frames, 
+ *   and synchronizes inputs. Delegates audio mixing to UniversalAudioProcessor 
+ *   and state serialization to individual hardware cores.
+ * - Dependency Inversion Principle (DIP): Depends on the abstract UniversalAudioProcessor 
+ *   service instead of directly instantiating low-level browser audio nodes.
  */
 
 class GenesisOrchestrator {
@@ -24,14 +31,16 @@ class GenesisOrchestrator {
 
         this.tvStandard = 0; // 0 = NTSC (60Hz), 1 = PAL (50Hz)
 
-        this.audioCtx = null;
-        this.jsNode = null;
-        this.gainNode = null;
-        this.audioEnabled = true;
+        // Unified Audio Processor integration (DIP)
+        this.audioProcessor = new UniversalAudioProcessor();
+        this.audioProcessor.orchestrator = this;
 
-        this.maxAudioBufferSize = 2048;
-        this.tempFm = new Int16Array(this.maxAudioBufferSize * 2);
-        this.tempPsg = new Int16Array(this.maxAudioBufferSize);
+        // Zero-Allocation audio buffers
+        this.samplesPerFrame = Math.floor(this.audioProcessor.samplesPerFrame);
+        this.tempFm = new Int16Array(this.samplesPerFrame * 2);
+        this.tempPsg = new Int16Array(this.samplesPerFrame);
+        this.transferBufferL = new Float32Array(this.samplesPerFrame);
+        this.transferBufferR = new Float32Array(this.samplesPerFrame);
 
         this.animationFrameId = null;
         this.lastTime = 0;
@@ -41,6 +50,7 @@ class GenesisOrchestrator {
         this.fpsTimer = 0;
         this.framesRendered = 0;
 
+        // Savestate Serializer
         this.serializer = new IndexedDbManager();
         this.maxRewindStates = 100; 
         this.rewindHistory = [];
@@ -67,6 +77,7 @@ class GenesisOrchestrator {
         this.z80 = new GenesisZ80(this.z80Bus);
         this.z80Bus.bindCpu(this.z80);
 
+        // Register 68K Instruction Sets
         if (typeof M68kDataTransfer !== 'undefined') this.m68k.registerModule(M68kDataTransfer.register);
         if (typeof M68kArithmetic !== 'undefined') this.m68k.registerModule(M68kArithmetic.register);
         if (typeof M68kLogical !== 'undefined') this.m68k.registerModule(M68kLogical.register);
@@ -131,69 +142,12 @@ class GenesisOrchestrator {
     }
 
     setAudioFilterMode(mode) {
-        if (this.psg && this.isRunning) {
-            this.psg.setAudioFilter(mode);
-        }
+        this.audioProcessor.setFilterMode(mode);
     }
 
     updateShaderUniforms(curvature, scanlines, phosphor, bloom) {
         if (this.postProcessor) {
             this.postProcessor.updateShaderUniforms(curvature, scanlines, phosphor, bloom);
-        }
-    }
-
-    startAudio() {
-        if (this.audioCtx) return;
-        this.audioEnabled = window.audioEnabledState !== false;
-        window.AudioContext = window.AudioContext || window.webkitAudioContext;
-        this.audioCtx = new AudioContext();
-        
-        if (this.psg) {
-            this.psg.setSampleRate(this.audioCtx.sampleRate);
-        }
-
-        this.gainNode = this.audioCtx.createGain();
-        this.gainNode.gain.value = 0.5; 
-        this.jsNode = this.audioCtx.createScriptProcessor(this.maxAudioBufferSize, 0, 2);
-        this.jsNode.onaudioprocess = (e) => this.mixAudio(e);
-        this.jsNode.connect(this.gainNode);
-        this.gainNode.connect(this.audioCtx.destination);
-
-        if (!this.audioEnabled) {
-            this.audioCtx.suspend().catch(() => {});
-        }
-    }
-
-    mixAudio(e) {
-        if (!this.isRunning || this.isPaused || this.isRewinding || this.fastForward || this.audioEnabled === false) {
-            e.outputBuffer.getChannelData(0).fill(0);
-            e.outputBuffer.getChannelData(1).fill(0);
-            return;
-        }
-
-        const outL = e.outputBuffer.getChannelData(0);
-        const outR = e.outputBuffer.getChannelData(1);
-        const totalFrames = outL.length;
-
-        if (totalFrames > this.tempPsg.length) {
-            this.tempFm = new Int16Array(totalFrames * 2);
-            this.tempPsg = new Int16Array(totalFrames);
-        }
-
-        this.tempFm.fill(0);
-        this.tempPsg.fill(0);
-
-        if (this.fm) this.fm.outputSamples(this.tempFm, totalFrames);
-        if (this.psg) this.psg.update(this.tempPsg, totalFrames);
-
-        for (let i = 0; i < totalFrames; i++) {
-            const fmIdx = i * 2;
-            const fmLeftNormalized = this.tempFm[fmIdx] / 32768.0;
-            const fmRightNormalized = this.tempFm[fmIdx + 1] / 32768.0;
-            const psgNormalized = this.tempPsg[i] / 32768.0;
-
-            outL[i] = fmLeftNormalized + psgNormalized;
-            outR[i] = fmRightNormalized + psgNormalized;
         }
     }
 
@@ -210,10 +164,17 @@ class GenesisOrchestrator {
         }
 
         this.initialise();
-        this.bus.setCartridge(romBuffer); // Delegate loading to Cartridge abstraction
+        this.bus.setCartridge(romBuffer); 
         this.setTvStandard(this.bus.tvStandard === 1 ? "PAL" : "NTSC");
         this.m68k.reset();
-        this.startAudio();
+        
+        this.audioProcessor.resume();
+        this.setAudioEnabled(window.audioEnabledState);
+
+        // Sound Synchronization Fix: Map the browser's dynamic sample rate to the WASM PSG bridge
+        if (this.psg && this.audioProcessor.audioCtx) {
+            this.psg.setSampleRate(this.audioProcessor.audioCtx.sampleRate);
+        }
 
         this.isRunning = true;
         this.isPaused = false;
@@ -237,28 +198,15 @@ class GenesisOrchestrator {
     
     stop() {
         this.isRunning = false;
+        this.audioProcessor.stop();
         if (this.animationFrameId) {
             cancelAnimationFrame(this.animationFrameId);
             this.animationFrameId = null;
         }
-        if (this.audioCtx && this.audioCtx.state !== 'closed') {
-            this.audioCtx.close().catch(() => {});
-        }
     }
 
     setAudioEnabled(enabled) {
-        this.audioEnabled = enabled;
-        if (this.audioCtx) {
-            if (enabled) {
-                if (this.audioCtx.state === 'suspended') {
-                    this.audioCtx.resume().catch(() => {});
-                }
-            } else {
-                if (this.audioCtx.state === 'running') {
-                    this.audioCtx.suspend().catch(() => {});
-                }
-            }
-        }
+        this.audioProcessor.setAudioEnabled(enabled);
     }
 
     togglePause() {
@@ -277,46 +225,17 @@ class GenesisOrchestrator {
     }
 
     async saveState() {
-        if (this.isRunning && this.bus.cartridge) { // FIXED: Refers to this.bus.cartridge
+        if (this.isRunning && this.bus.cartridge) { 
             try {
+                // SOLID Fix: Clean, encapsulated serialization (Delegates work to cores)
                 const statePayload = {
-                    m68k: {
-                        d: Array.from(this.m68k.d),
-                        a: Array.from(this.m68k.a),
-                        pc: this.m68k.pc,
-                        sr: this.m68k.sr,
-                        usp: this.m68k.usp,
-                        ssp: this.m68k.ssp,
-                        irqPending: this.m68k.irqPending,
-                        cyclesRemaining: this.m68k.cyclesRemaining,
-                        flags: {
-                            n: this.m68k.fN,
-                            z: this.m68k.fZ,
-                            v: this.m68k.fV,
-                            c: this.m68k.fC,
-                            x: this.m68k.fX
-                        }
-                    },
-                    vdp: {
-                        regs: Array.from(this.vdp.regs),
-                        vram: Array.from(this.vdp.vRam),
-                        cram: Array.from(this.vdp.cram),
-                        vsram: Array.from(this.vdp.vsram)
-                    },
+                    m68k: this.m68k.serializeState ? this.m68k.serializeState() : null,
+                    vdp: this.vdp.serializeState ? this.vdp.serializeState() : null,
+                    psg: this.psg.serializeState ? this.psg.serializeState() : null,
                     mmu: {
                         workRam: Array.from(this.bus.workRam)
                     },
-                    // SOLID Fix: Ask the mapper to serialize itself!
-                    mapper: this.bus.mapper ? this.bus.mapper.serializeState() : null,
-                    psg: {
-                        tonesCountdown: Array.from(this.psg.tonesCountdown),
-                        tonesCountdownMaster: Array.from(this.psg.tonesCountdownMaster),
-                        tonesAttenuation: Array.from(this.psg.tonesAttenuation),
-                        tonesOutputState: Array.from(this.psg.tonesOutputState),
-                        noiseType: this.psg.noiseType,
-                        noiseShiftRegister: this.psg.noiseShiftRegister,
-                        noiseOut: this.psg.noiseOut
-                    }
+                    mapper: this.bus.mapper ? this.bus.mapper.serializeState() : null
                 };
                 await this.serializer.save("GENESIS_SAVESTATE", statePayload);
 
@@ -353,48 +272,32 @@ class GenesisOrchestrator {
     }
 
     async loadState() {
-        if (this.isRunning && this.bus.cartridge) { // FIXED: Refers to this.bus.cartridge
+        if (this.isRunning && this.bus.cartridge) { 
             try {
                 const state = await this.serializer.load("GENESIS_SAVESTATE");
                 if (!state) return;
 
                 // Restore M68K
-                this.m68k.d.set(state.m68k.d);
-                this.m68k.a.set(state.m68k.a);
-                this.m68k.pc = state.m68k.pc;
-                this.m68k.sr = state.m68k.sr;
-                this.m68k.usp = state.m68k.usp;
-                this.m68k.ssp = state.m68k.ssp;
-                this.m68k.irqPending = state.m68k.irqPending;
-                this.m68k.cyclesRemaining = state.m68k.cyclesRemaining;
-                this.m68k.fN = state.m68k.flags.n;
-                this.m68k.fZ = state.m68k.flags.z;
-                this.m68k.fV = state.m68k.flags.v;
-                this.m68k.fC = state.m68k.flags.c;
-                this.m68k.fX = state.m68k.flags.x;
+                if (this.m68k.deserializeState && state.m68k) {
+                    this.m68k.deserializeState(state.m68k);
+                }
 
                 // Restore VDP
-                this.vdp.regs.set(state.vdp.regs);
-                this.vdp.vRam.set(state.vdp.vram);
-                this.vdp.cram.set(state.vdp.cram);
-                this.vdp.vsram.set(state.vdp.vsram);
+                if (this.vdp.deserializeState && state.vdp) {
+                    this.vdp.deserializeState(state.vdp);
+                }
 
                 // Restore MMU and Mapper
                 this.bus.workRam.set(state.mmu.workRam);
                 
-                // SOLID Fix: Ask mapper to deserialize itself!
                 if (this.bus.mapper && state.mapper) {
                     this.bus.mapper.deserializeState(state.mapper);
                 }
 
                 // Restore PSG
-                this.psg.tonesCountdown.set(state.psg.tonesCountdown);
-                this.psg.tonesCountdownMaster.set(state.psg.tonesCountdownMaster);
-                this.psg.tonesAttenuation.set(state.psg.tonesAttenuation);
-                this.psg.tonesOutputState.set(state.psg.tonesOutputState);
-                this.psg.noiseType = state.psg.noiseType;
-                this.psg.noiseShiftRegister = state.psg.noiseShiftRegister;
-                this.psg.noiseOut = state.psg.noiseOut;
+                if (this.psg.deserializeState && state.psg) {
+                    this.psg.deserializeState(state.psg);
+                }
 
                 this.rewindActiveCount = 0;
                 this.rewindHistoryPointer = 0;
@@ -431,10 +334,6 @@ class GenesisOrchestrator {
                 this.animationFrameId = requestAnimationFrame(this.loop);
             }
             return;
-        }
-
-        if (this.audioCtx && this.audioCtx.state === 'suspended') {
-            this.audioCtx.resume().catch(() => {});
         }
 
         // Handle Active Rewinding
@@ -520,16 +419,7 @@ class GenesisOrchestrator {
         const masterClockSpeed = this.tvStandard === 1 ? 53203424 : 53693175;
         
         const m68kClockSpeed = Math.floor(masterClockSpeed / 7);
-        
-        let targetCycles = Math.floor(m68kClockSpeed / targetFps);
-        if (this.psg && this.audioCtx && !this.fastForward) {
-            const drift = this.audioCtx.currentTime * this.audioCtx.sampleRate - this.framesRendered * (this.audioCtx.sampleRate / targetFps);
-            if (Math.abs(drift) > 500) {
-                targetCycles += Math.floor((500 - drift) * 0.05);
-            }
-        }
-
-        const m68kCyclesPerScanline = Math.floor(targetCycles / totalScanlines);
+        const m68kCyclesPerScanline = Math.floor((m68kClockSpeed / targetFps) / totalScanlines);
 
         const dummyCallback = () => {};
         const renderCallback = skipRendering ? dummyCallback : (user_data, line, pixels, shadowMap, w, h) => {
@@ -567,6 +457,21 @@ class GenesisOrchestrator {
                     if (this.vdp.hIntEnabled) this.m68k.irqPending = 4;
                 }
             }
+        }
+        
+        // Push-Based Audio Optimization: Synthesize and push frames to UniversalAudioProcessor
+        if (!this.isPaused) {
+            this.tempPsg.fill(0); // CRITICAL Fix: Zero-out PSG additive buffer to prevent "piiiii" tone saturation
+
+            this.psg.update(this.tempPsg, this.samplesPerFrame);
+            this.fm.outputSamples(this.tempFm, this.samplesPerFrame);
+
+            for (let i = 0; i < this.samplesPerFrame; i++) {
+                const fmIdx = i * 2;
+                this.transferBufferL[i] = (this.tempFm[fmIdx] / 32768.0) + (this.tempPsg[i] / 32768.0);
+                this.transferBufferR[i] = (this.tempFm[fmIdx + 1] / 32768.0) + (this.tempPsg[i] / 32768.0);
+            }
+            this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
         }
         
         if (!skipRendering) {
@@ -616,6 +521,7 @@ class GenesisOrchestrator {
             }
         }
         
+        // Sound Synchronization Fix: Tick internal FM timers cycle-by-cycle (Crucial)
         this.fm.update(m68kCycles);
     }
 
@@ -631,6 +537,8 @@ class GenesisOrchestrator {
                 elapsed += this.z80.executeOne();
             }
         }
+        
+        // Sound Synchronization Fix: Tick internal FM timers
         this.fm.update(4);
     }
 

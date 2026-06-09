@@ -11,19 +11,19 @@
  * resolution accuracy across all 12 native hardware addressing modes.
  * 
  * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Exclusively responsible for register 
- *    state preservation, program counter tracking, and instruction dispatch 
- *    table lookups. It contains no knowledge of custom system buses or video layouts.
- * 2. Open/Closed Principle (OCP): Instruction modules are loaded dynamically into 
- *    the 65,536-size dispatch table snychronously during startup via external 
- *    registration callbacks, allowing new instruction definitions to be appended 
- *    without modifying the core CPU class file.
- * 3. Interface Segregation Principle (ISP): Exposes a clean, targeted execution 
- *    interface (execute(), reset(), triggerException()) rather than forcing 
- *    system buses to manage internal stack frames or status registers directly.
- * 4. Dependency Inversion Principle (DIP): Decoupled from concrete system buses; 
- *    communicates with system memory through an abstract bus interface (the bus 
- *    delegate passed in the constructor).
+ * - Single Responsibility Principle (SRP): Exclusively responsible for register 
+ *   state preservation, program counter tracking, and instruction dispatch 
+ *   table lookups. It contains no knowledge of custom system buses or video layouts.
+ * - Open/Closed Principle (OCP): Instruction modules are loaded dynamically into 
+ *   the 65,536-size dispatch table synchronously during startup via external 
+ *   registration callbacks, allowing new instruction definitions to be appended 
+ *   without modifying the core CPU class file.
+ * - Interface Segregation Principle (ISP): Exposes a clean, targeted execution 
+ *   interface (execute(), reset(), triggerException()) rather than forcing 
+ *   system buses to manage internal stack frames or status registers directly.
+ * - Dependency Inversion Principle (DIP): Decoupled from concrete system buses; 
+ *   communicates with system memory through an abstract bus interface (the bus 
+ *   delegate passed in the constructor).
  */
 
 class M68000 {
@@ -258,7 +258,7 @@ class M68000 {
                         this.pc = (this.pc + 2) & 0xFFFFFF;
                         return (pcBase + d16) & 0xFFFFFF;
                     }
-                    case 3: { // Program Counter Indirect with Index (Aligned with MDTracer Case 10)
+                    case 3: { // Program Counter Indirect with Index
                         const extension = this.bus.readWord(this.pc, this.pc) & 0xFFFF;
                         const pcBase = this.pc;
                         this.pc = (this.pc + 2) & 0xFFFFFF;
@@ -321,12 +321,11 @@ class M68000 {
     }
 
     // ========================================================================
-    // HIGH-PERFORMANCE INSTRUCTION EXECUTION UNIT (WITH SMART TELEMETRY)
+    // HIGH-PERFORMANCE INSTRUCTION EXECUTION UNIT
     // ========================================================================
 
     execute(cycles) {
         if (this.isHalted) {
-            // If the CPU is waiting on a STOP instruction, just consume cycles
             this.cyclesRemaining = Math.max(0, this.cyclesRemaining - cycles);
             return;
         }
@@ -334,41 +333,29 @@ class M68000 {
         this.cyclesRemaining += cycles;
 
         while (this.cyclesRemaining > 0) {
-            // Process pending interrupts
             if (this.irqPending > 0) {
                 const mask = (this.sr >> 8) & 7;
-                // Aligned with physical hardware: Level 7 Interrupts (NMI) are Non-Maskable.
-                // An NMI must execute immediately even if the interrupt mask is set to 7.
                 if (this.irqPending === 7 || this.irqPending > mask) {
                     this.triggerException(24 + this.irqPending);
                     this.irqPending = 0;
-                    this.isHalted = false; // Interrupts wake up the CPU from STOP
+                    this.isHalted = false; 
                     continue;
                 }
             }
 
-            // Fetch the 16-bit instruction opcode synchronously
             const opcode = this.bus.readWord(this.pc, this.pc) & 0xFFFF;
             const currentInstructionAddress = this.pc;
 
             this.pc = (this.pc + 2) & 0xFFFFFF;
 
-            // Look up operation inside the unified modular dispatch table
             const executor = this.opcodeTable[opcode];
-            let cost = 4; // Fallback cycles
+            let cost = 4; 
 
             if (executor !== null && executor !== undefined) {
                 cost = executor() | 0;
             } else {
-                // If it is completely unhandled by registration, CRASH immediately with full info!
                 console.error(`%c[M68K FATAL] Unimplemented Opcode: 0x${opcode.toString(16).toUpperCase().padStart(4, '0')} at PC: 0x${currentInstructionAddress.toString(16).toUpperCase().padStart(6, '0')}`, "color: red; font-weight: bold; font-size: 1.2rem;");
-                console.log(`[M68K Dump] Registers State:`);
-                console.log(`D0-D3: ${this.d[0].toString(16)} | ${this.d[1].toString(16)} | ${this.d[2].toString(16)} | ${this.d[3].toString(16)}`);
-                console.log(`A0-A3: ${this.a[0].toString(16)} | ${this.a[1].toString(16)} | ${this.a[2].toString(16)} | ${this.a[3].toString(16)}`);
-                console.log(`A6: 0x${this.a[6].toString(16)} | USP: 0x${this.usp.toString(16)} | SSP: 0x${this.ssp.toString(16)}`);
-                console.log(`SR: 0x${this.sr.toString(16)} (Z:${this.fZ} N:${this.fN} C:${this.fC} V:${this.fV} X:${this.fX})`);
-                
-                this.cyclesRemaining = 0; // Terminate execution immediately
+                this.cyclesRemaining = 0; 
                 throw new Error(`Unhandled Motorola 68000 instruction exception.`);
             }
 
@@ -401,5 +388,46 @@ class M68000 {
             case 15: return this.fZ !== 0 || this.fN !== this.fV;             // BLE (Less or Equal)
         }
         return false;
+    }
+
+    // ========================================================================
+    // HARDWARE STATE SERIALIZATION FOR SAVESTATES / REWIND
+    // ========================================================================
+
+    serializeState() {
+        return {
+            d: Array.from(this.d),
+            a: Array.from(this.a),
+            pc: this.pc,
+            sr: this.sr,
+            usp: this.usp,
+            ssp: this.ssp,
+            irqPending: this.irqPending,
+            cyclesRemaining: this.cyclesRemaining,
+            flags: {
+                n: this.fN,
+                z: this.fZ,
+                v: this.fV,
+                c: this.fC,
+                x: this.fX
+            }
+        };
+    }
+
+    deserializeState(state) {
+        if (!state) return;
+        this.d.set(state.d);
+        this.a.set(state.a);
+        this.pc = state.pc;
+        this.sr = state.sr;
+        this.usp = state.usp;
+        this.ssp = state.ssp;
+        this.irqPending = state.irqPending;
+        this.cyclesRemaining = state.cyclesRemaining;
+        this.fN = state.flags.n;
+        this.fZ = state.flags.z;
+        this.fV = state.flags.v;
+        this.fC = state.flags.c;
+        this.fX = state.flags.x;
     }
 }

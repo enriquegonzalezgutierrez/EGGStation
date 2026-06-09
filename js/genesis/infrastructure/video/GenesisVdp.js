@@ -210,7 +210,7 @@ class GenesisVdp {
         if (decoded < 0x10000) {
             this.vRam[decoded] = value & 0xFF;
             
-            // SOLID Fix: Delegates pattern check to specialized Renderer subsystem
+            // Delegates pattern check to specialized Renderer subsystem
             GenesisVdpRenderer.patternCheck(this, address);
             
             this.spriteRowCacheNeedsUpdating = true; 
@@ -330,7 +330,7 @@ class GenesisVdp {
         if (this.dmaFillPending) {
             this.dmaFillPending = false;
             
-            // SOLID Fix: Delegates VRAM/CRAM Fill to specialized DMA controller
+            // Delegates VRAM/CRAM Fill to specialized DMA controller
             GenesisDmaController.runFill(this, value, colorUpdatedCallback, callbackUserData);
             return;
         }
@@ -385,13 +385,13 @@ class GenesisVdp {
                 if (this.dmaMode === 0 || this.dmaMode === 1) { 
                     dmaTransferBeginCallback(readCallbackUserData, this.dmaLength, targetCycle);
                     
-                    // SOLID Fix: Delegates Memory-to-VDP DMA to specialized DMA controller
+                    // Delegates Memory-to-VDP DMA to specialized DMA controller
                     GenesisDmaController.runMemory(this, readCallback, readCallbackUserData, colorUpdatedCallback, callbackUserData, targetCycle);
                 } else if (this.dmaMode === 2) { 
                     this.dmaFillPending = true;
                 } else if (this.dmaMode === 3) { 
                     
-                    // SOLID Fix: Delegates VRAM-to-VRAM Copy DMA to specialized DMA controller
+                    // Delegates VRAM-to-VRAM Copy DMA to specialized DMA controller
                     GenesisDmaController.runCopy(this);
                 }
             }
@@ -495,5 +495,27 @@ class GenesisVdp {
      */
     endScanline(scanline, scanlineRenderedCallback, callbackUserData) {
         GenesisVdpRenderer.renderScanline(this, scanline, scanlineRenderedCallback);
+    }
+
+    // ========================================================================
+    // ENCAPSULATED STATE SERIALIZATION (SOLID)
+    // ========================================================================
+
+    serializeState() {
+        return {
+            regs: Array.from(this.regs),
+            vram: Array.from(this.vRam),
+            cram: Array.from(this.cram),
+            vsram: Array.from(this.vsram)
+        };
+    }
+
+    deserializeState(state) {
+        if (!state) return;
+        this.regs.set(state.regs);
+        this.vRam.set(state.vram);
+        this.cram.set(state.cram);
+        this.vsram.set(state.vsram);
+        this.spriteRowCacheNeedsUpdating = true; // Invalidate cache immediately on state load
     }
 }

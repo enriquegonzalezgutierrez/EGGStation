@@ -9,9 +9,9 @@
  * lines to the universal shared UniversalInput Manager.
  * 
  * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Exclusively responsible for binding 
+ * - Single Responsibility Principle (SRP): Exclusively responsible for binding 
  *    Genesis UI elements and mapping emulator polling lines to UniversalInput.
- * 2. Dependency Inversion Principle (DIP): Depends on the shared service 
+ * - Dependency Inversion Principle (DIP): Depends on the shared service 
  *    window.UniversalInput instead of directly binding legacy gamepad polling 
  *    or raw document keyboard listeners.
  */
@@ -61,11 +61,9 @@ class GenesisUIController {
         
         if (loaderBtn && fileSelector) {
             loaderBtn.addEventListener('click', () => { 
-                if (this.orchestrator) {
-                    this.orchestrator.startAudio();
-                    if (this.orchestrator.audioCtx && this.orchestrator.audioCtx.state === 'suspended') {
-                        this.orchestrator.audioCtx.resume().catch(() => {});
-                    }
+                // SOLID Fix: Request the unified audio processor to resume on click
+                if (this.orchestrator && this.orchestrator.audioProcessor) {
+                    this.orchestrator.audioProcessor.resume();
                 }
                 fileSelector.click();
             });
