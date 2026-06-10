@@ -455,7 +455,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const crtWrapper = document.getElementById("crt-wrapper");
             if (crtWrapper) {
                 crtWrapper.classList.remove("crt-warm-up");
-                crtWrapper.classList.add("crt-power-off");
+                crtWrapper.classList.add("crt-power-off"); // Collapse CRT screen
             }
 
             setTimeout(() => {
@@ -476,10 +476,19 @@ document.addEventListener("DOMContentLoaded", () => {
                     videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
                 }
 
+                // Unhide the manual cart insert button overlay
                 document.getElementById("fileselector")?.classList.remove("hidden");
                 const fpsSpan = document.getElementById("fpsSpan");
                 if (fpsSpan) fpsSpan.textContent = "0.0 FPS";
                 
+                // UX FIX: Power the CRT TV back ON (Warm-up) to smoothly reveal the "INSERT CARTRIDGE" button!
+                if (crtWrapper) {
+                    crtWrapper.classList.remove("crt-power-off");
+                    // Force DOM reflow to restart CSS animation smoothly
+                    void crtWrapper.offsetWidth;
+                    crtWrapper.classList.add("crt-warm-up"); 
+                }
+
                 if (window.innerWidth <= 900) {
                     closeSettingsDrawer();
                 }
