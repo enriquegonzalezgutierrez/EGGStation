@@ -328,6 +328,60 @@ class SnesCpu {
             }
         }
     }
+
+    // ========================================================================
+    // ENCAPSULATED STATE SERIALIZATION (SOLID SRP / MEMENTO PATTERN)
+    // ========================================================================
+
+    /**
+     * Serializes the entire physical CPU core register state.
+     * Removes structural state-mapping burdens from the Orchestrator (SRP).
+     * 
+     * @returns {Object} Packed CPU state object.
+     */
+    serializeState() {
+        return {
+            r: Array.from(this.r),
+            br: Array.from(this.br),
+            flags: {
+                n: this.n,
+                v: this.v,
+                m: this.m,
+                x: this.x,
+                d: this.d,
+                i: this.i,
+                z: this.z,
+                c: this.c,
+                e: this.e
+            },
+            stopped: this.stopped,
+            waiting: this.waiting,
+            cyclesLeft: this.cyclesLeft
+        };
+    }
+
+    /**
+     * Restores the physical CPU core registers back to a saved state.
+     * 
+     * @param {Object} state - Saved CPU state.
+     */
+    deserializeState(state) {
+        if (!state) return;
+        this.r.set(state.r);
+        this.br.set(state.br);
+        this.n = state.flags.n;
+        this.v = state.flags.v;
+        this.m = state.flags.m;
+        this.x = state.flags.x;
+        this.d = state.flags.d;
+        this.i = state.flags.i;
+        this.z = state.flags.z;
+        this.c = state.flags.c;
+        this.e = state.flags.e;
+        this.stopped = state.stopped;
+        this.waiting = state.waiting;
+        this.cyclesLeft = state.cyclesLeft;
+    }
 }
 
 // Backward Compatibility Alias

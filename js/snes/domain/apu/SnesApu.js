@@ -81,15 +81,6 @@
                 const pc = this.spc.br[0]; // SPC700 PC Register
                 const sp = this.spc.r[3];  // SPC700 SP Register
                 const iplActive = this.dspRomReadable;
-                
-                // If PC remains within $FFC0-$FFFF, the game is stuck in the IPL Bootloader (Handshake failed)
-                // console.log(
-                //     `%c[EGGStation::APU-Diag] Cycles: ${this.cycles} | ` +
-                //     `SPC700 PC: $${getWordRep(pc)} | ` +
-                //     `SP: $${getByteRep(sp)} | ` +
-                //     `IPL ROM (Bootloader) Active: ${iplActive}`,
-                //     "color: #00d3ff; font-family: monospace;"
-                // );
             }
 
             this.cycles++;
@@ -219,6 +210,60 @@
                 total += add;
             }
             this.dsp.sampleOffset = 0;
+        }
+
+        // ========================================================================
+        // ENCAPSULATED STATE SERIALIZATION (SOLID SRP / MEMENTO PATTERN)
+        // ========================================================================
+
+        /**
+         * Serializes the entire physical APU, SPC700 registers, and DSP memory states.
+         * Removes structural state-mapping burdens from the Orchestrator (SRP).
+         * 
+         * @returns {Object} Packed APU state object.
+         */
+        serializeState() {
+            return {
+                ram: Array.from(this.ram),
+                spc_r: Array.from(this.spc.r),
+                spc_br: Array.from(this.spc.br),
+                spc_flags: {
+                    n: this.spc.n,
+                    v: this.spc.v,
+                    p: this.spc.p,
+                    b: this.spc.b,
+                    h: this.spc.h,
+                    i: this.spc.i,
+                    z: this.spc.z,
+                    c: this.spc.c
+                },
+                dsp_ram: Array.from(this.dsp.ram)
+            };
+        }
+
+        /**
+         * Restores the physical APU sound states back to a saved state.
+         * 
+         * @param {Object} state - Saved APU state.
+         */
+        deserializeState(state) {
+            if (!state) return;
+            this.ram.set(state.ram);
+            
+            // Restore SPC700 Registers
+            this.spc.r.set(state.spc_r);
+            this.spc.br.set(state.spc_br);
+            this.spc.n = state.spc_flags.n;
+            this.spc.v = state.spc_flags.v;
+            this.spc.p = state.spc_flags.p;
+            this.spc.b = state.spc_flags.b;
+            this.spc.h = state.spc_flags.h;
+            this.spc.i = state.spc_flags.i;
+            this.spc.z = state.spc_flags.z;
+            this.spc.c = state.spc_flags.c;
+
+            // Restore WASM DSP Registers
+            this.dsp.ram.set(state.dsp_ram);
         }
     }
 

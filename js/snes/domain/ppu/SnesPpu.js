@@ -452,7 +452,7 @@ class SnesPpu {
                 this.oamInHigh = (value & 0x1) > 0;
                 this.objPriority = (value & 0x80) > 0;
                 this.oamAdr = this.oamRegAdr;
-                this.oamRegInHigh = this.oamInHigh;
+                this.oamInHigh = this.oamInHigh;
                 this.oamSecond = false;
                 return;
             }
@@ -735,6 +735,62 @@ class SnesPpu {
                 return;
             }
         }
+    }
+
+    // ========================================================================
+    // ENCAPSULATED STATE SERIALIZATION (SOLID SRP / MEMENTO PATTERN)
+    // ========================================================================
+
+    /**
+     * Serializes the entire physical PPU core registers and memory.
+     * Removes structural state-mapping burdens from the Orchestrator (SRP).
+     * 
+     * @returns {Object} Packed PPU state object.
+     */
+    serializeState() {
+        return {
+            vram: Array.from(this.vram),
+            cgram: Array.from(this.cgram),
+            oam: Array.from(this.oam),
+            highOam: Array.from(this.highOam),
+            cgramAdr: this.cgramAdr,
+            vramAdr: this.vramAdr,
+            mode: this.mode,
+            forcedBlank: this.forcedBlank,
+            brightness: this.brightness,
+            tilemapWider: Array.from(this.tilemapWider),
+            tilemapHigher: Array.from(this.tilemapHigher),
+            tilemapAdr: Array.from(this.tilemapAdr),
+            tileAdr: Array.from(this.tileAdr),
+            bgHoff: Array.from(this.bgHoff),
+            bgVoff: Array.from(this.bgVoff)
+        };
+    }
+
+    /**
+     * Restores the physical PPU core states back to a saved state.
+     * Automatically triggers core cache rebuilds.
+     * 
+     * @param {Object} state - Saved PPU state.
+     */
+    deserializeState(state) {
+        if (!state) return;
+        this.vram.set(state.vram);
+        this.rebuildVramCache(); // Synchronize the 4bpp fast patterns cache instantly
+        this.cgram.set(state.cgram);
+        this.oam.set(state.oam);
+        this.highOam.set(state.highOam);
+        this.cgramAdr = state.cgramAdr;
+        this.vramAdr = state.vramAdr;
+        this.mode = state.mode;
+        this.forcedBlank = state.forcedBlank;
+        this.brightness = state.brightness;
+        this.tilemapWider = state.tilemapWider;
+        this.tilemapHigher = state.tilemapHigher;
+        this.tilemapAdr = state.tilemapAdr;
+        this.tileAdr = state.tileAdr;
+        this.bgHoff = state.bgHoff;
+        this.bgVoff = state.bgVoff;
     }
 }
 
