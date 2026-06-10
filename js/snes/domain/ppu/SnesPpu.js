@@ -6,7 +6,7 @@
  * Domain Layer: Super Nintendo (SNES) Picture Processing Unit (PPU)
  * 
  * Role:
- * Emulates the physical registers, memories (VRAM, CRAM, OAM), and I/O registers 
+ * Emulates the physical registers, memories (VRAM, CGRAM, OAM), and I/O registers 
  * mapping ($2100-$213F) of the custom SNES PPU.
  * 
  * SOLID Principles Applied:
@@ -24,7 +24,7 @@ class SnesPpu {
 
         // Video Memory Buffers (GC Free)
         this.vram = new Uint16Array(0x8000);
-        this.cgram = new Uint16Array(0x100); // FIXED: Restored 'g' to match original hardware CGRAM spelling
+        this.cgram = new Uint16Array(0x100); // FIXED: Named cgram to match original hardware and compositor references
 
         // High-Speed VRAM Cache (32768 words * 8 pixels * 2 states = 524,288 bytes)
         this.vramCache = new Uint8Array(524288);
@@ -66,7 +66,7 @@ class SnesPpu {
     reset() {
         this.isPal = false;
         this.vram.fill(0);
-        this.cgram.fill(0);
+        this.cgram.fill(0); // FIXED: Clears CGRAM correctly
         this.oam.fill(0);
         this.highOam.fill(0);
         this.vramCache.fill(0); 

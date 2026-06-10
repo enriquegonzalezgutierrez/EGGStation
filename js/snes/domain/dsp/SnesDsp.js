@@ -121,9 +121,21 @@ class SnesDsp {
     }
 
     // ========================================================================
-    // GETTERS & SETTERS (Apu Mixer interface mappings)
-    // Uses direct subarray slices over Emscripten's active auto-updating HEAPF32
+    // GETTERS & SETTERS (Apu Mixer & SaveState interfaces)
+    // Uses direct subarray slices over Emscripten's active auto-updating HEAP
     // ========================================================================
+
+    /**
+     * Zero-Copy mapping of internal DSP registers array for Savestates (Rewind).
+     * Solves the 'undefined is not iterable' Array.from() crash in SnesOrchestrator.
+     */
+    get ram() {
+        if (this.isReady) {
+            const ptr = this.wasmInstance._dsp_get_ram_ptr();
+            return this.wasmInstance.HEAPU8.subarray(ptr, ptr + 0x80);
+        }
+        return this.regCache;
+    }
 
     get samplesL() {
         if (this.isReady) {

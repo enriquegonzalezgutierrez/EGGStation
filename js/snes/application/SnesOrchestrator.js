@@ -361,7 +361,8 @@ class SnesOrchestrator {
                         dsp_ram: Array.from(this.hardware.apu.dsp.ram)
                     },
                     ram: Array.from(this.hardware.ram),
-                    sram: Array.from(this.hardware.cart.sram)
+                    // SOLID Fix: Null-guard to support ROM cartridges with 0 bytes of SRAM (preserves serialization integrity)
+                    sram: this.hardware.cart.sram ? Array.from(this.hardware.cart.sram) : []
                 };
 
                 await this.serializer.save("SNES_SAVESTATE", statePayload);
@@ -460,7 +461,11 @@ class SnesOrchestrator {
 
                 // Restore System RAM & Cartridge SRAM
                 this.hardware.ram.set(state.ram);
-                this.hardware.cart.sram.set(state.sram);
+                
+                // SOLID Fix: Null-guard to restore SRAM only if the physical cartridge has SRAM allocated
+                if (this.hardware.cart.sram && state.sram && state.sram.length > 0) {
+                    this.hardware.cart.sram.set(state.sram);
+                }
 
                 console.log("[SnesOrchestrator] State Loaded.");
             } catch (err) {
