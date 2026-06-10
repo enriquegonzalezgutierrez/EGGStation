@@ -376,33 +376,7 @@ function runRomFromBuffer(system, name, buffer) {
     if (typeof triggerCrtWarmUp === 'function') triggerCrtWarmUp();
     document.getElementById('fileselector')?.classList.add('hidden');
 }
-
-/**
- * Helper to generate gorgeous minimal console-themed covers dynamically
- * depending on the target emulation system.
- */
-function generateDynamicSvgCover(system, title) {
-    let themeColor = "#7f00ff"; // default
-    let consoleLabel = "CONSOLE";
-    if (system === "SMS") { themeColor = "#04d361"; consoleLabel = "SEGA SYSTEM"; }
-    if (system === "GEN") { themeColor = "#ff007f"; consoleLabel = "MEGA DRIVE"; }
-    if (system === "SNES") { themeColor = "#5e5189"; consoleLabel = "SUPER Nintendo"; }
-
-    // Strip extension and truncate to prevent SVG text overflows
-    let displayTitle = title.replace(/\.[^/.]+$/, "");
-    if (displayTitle.length > 25) {
-        displayTitle = displayTitle.substring(0, 22) + "...";
-    }
-
-    return `<svg viewBox="0 0 60 80" width="100%" height="100%">
-        <rect width="60" height="80" fill="#0d1117"/>
-        <rect x="5" y="5" width="50" height="40" fill="${themeColor}" rx="3"/>
-        <text x="30" y="22" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">${system}</text>
-        <text x="30" y="32" fill="#fff" font-family="sans-serif" font-size="2" text-anchor="middle">${displayTitle}</text>
-        <rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/>
-        <text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="3" text-anchor="middle">${consoleLabel}</text>
-    </svg>`;
-}
+window.runRomFromBuffer = runRomFromBuffer; // Expose globally for decoupled presentation layers
 
 // ========================================================================
 // GLOBAL EVENT LISTENERS & MOBILE UI HANDLERS
@@ -412,6 +386,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const devToggle = document.getElementById('dev-toggle-btn');
     const ejectBtn = document.getElementById('ejectBtn');
     const audioToggleSelector = document.getElementById('audioToggleSelector');
+    const fileSelectorInput = document.getElementById('cartridgeSelector');
     
     const saveBtn = document.getElementById('btn-save');
     const loadBtn = document.getElementById('btn-load');
@@ -522,6 +497,32 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // Intercept manual file uploads to cache ROMs dynamically in the library
+    if (fileSelectorInput) {
+        fileSelectorInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                const arrayBuffer = event.target.result;
+                let targetSystem = "SMS";
+                const name = file.name.toLowerCase();
+                
+                if (name.endsWith('.md') || name.endsWith('.gen') || name.endsWith('.bin') || name.endsWith('.smd')) {
+                    targetSystem = "GEN";
+                } else if (name.endsWith('.sfc') || name.endsWith('.smc')) {
+                    targetSystem = "SNES";
+                }
+                
+                // Unify loading and dynamic registration path
+                runRomFromBuffer(targetSystem, file.name, arrayBuffer);
+                renderLibrary();
+            };
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
     // ====================================================================
     // MOBILE RESPONSIVE UI HANDLERS & JUEGOTECA ACTIONS
     // ====================================================================
@@ -575,6 +576,7 @@ document.addEventListener("DOMContentLoaded", () => {
             overlay.classList.add('hidden');
         }
     };
+    window.closeLibraryDrawer = closeLibraryDrawer; // Expose globally for decoupled presentation layers
 
     if (mobileMenuBtn) mobileMenuBtn.addEventListener('click', openSettingsDrawer);
     if (landscapeMenuBtn) landscapeMenuBtn.addEventListener('click', openSettingsDrawer);
@@ -592,91 +594,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // ====================================================================
-    // RENDER JUEGOTECA (100% DYNAMIC & PERSISTENT LIBRARY)
+    // RENDER JUEGOTECA (DELEGATE TO SRP LIBRARY MANAGER SINGLETON)
     // ====================================================================
-    const renderLibrary = async () => {
-        const grid = document.getElementById('library-grid');
-        if (!grid) return;
-
-        grid.innerHTML = ""; // Clear grid
-
-        const dbManager = new IndexedDbManager("EGGStationDB", "savestates");
-        
-        try {
-            // Retrieve all saved items from the db
-            const allItems = await dbManager.getAll();
-            
-            // Filter keys starting with "ROM_" (indicating imported games)
-            const romItems = allItems.filter(item => item.key && item.key.indexOf("ROM_") === 0);
-
-            if (romItems.length === 0) {
-                // Beautiful empty-state warning inside the library panel
-                grid.innerHTML = `
-                    <div style="text-align: center; color: var(--text-muted); padding: 40px 10px; font-size: 0.85rem; line-height: 1.6;">
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 12px; color: var(--neon-pink); opacity: 0.6;">
-                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                        </svg>
-                        <p>Your library is empty.</p>
-                        <p style="font-size: 0.75rem; margin-top: 8px;">Drag & Drop ROMs or select them via the Carousel to build your offline collection.</p>
-                    </div>
-                `;
-                return;
-            }
-
-            // Loop and build cards dynamically
-            for (const item of romItems) {
-                const romData = item.payload; // contains { name, system, buffer }
-                const cleanKey = item.key;
-                
-                const card = document.createElement('div');
-                card.className = "game-card";
-                card.style.position = "relative";
-
-                const svgCover = generateDynamicSvgCover(romData.system, romData.name);
-
-                card.innerHTML = `
-                    <div class="game-cover">${svgCover}</div>
-                    <div class="game-details">
-                        <span class="game-title" style="word-break: break-all; padding-right: 15px;">${romData.name}</span>
-                        <span class="game-badge badge-${romData.system.toLowerCase()}">${romData.system}</span>
-                    </div>
-                    <!-- Close button to remove from Library -->
-                    <button class="delete-rom-btn" aria-label="Delete ROM" style="
-                        position: absolute;
-                        top: 8px; right: 8px;
-                        background: none; border: none;
-                        color: var(--text-muted); cursor: pointer;
-                        font-size: 0.8rem; padding: 4px;
-                        transition: color 0.2s ease;
-                    ">✖</button>
-                `;
-
-                // Handle Delete ROM from collection
-                const deleteBtn = card.querySelector('.delete-rom-btn');
-                deleteBtn.addEventListener('click', async (e) => {
-                    e.stopPropagation(); // Avoid triggering card boot click
-                    if (confirm(`Are you sure you want to remove "${romData.name}" from your dynamic Library?`)) {
-                        await dbManager.delete(cleanKey);
-                        renderLibrary(); // Re-render instantly
-                    }
-                });
-
-                // Hover style for the delete button
-                deleteBtn.addEventListener('mouseenter', () => deleteBtn.style.color = "var(--neon-pink)");
-                deleteBtn.addEventListener('mouseleave', () => deleteBtn.style.color = "var(--text-muted)");
-
-                // Click to boot game from database (Lightning fast & fully offline!)
-                card.addEventListener('click', () => {
-                    console.log(`[EGGStation::Library] Launching "${romData.name}" from IndexedDB...`);
-                    runRomFromBuffer(romData.system, romData.name, romData.buffer);
-                    closeLibraryDrawer();
-                });
-
-                grid.appendChild(card);
-            }
-        } catch (err) {
-            console.error("[EGGStation::Library] Failed to query dynamic library:", err);
+    const renderLibrary = () => {
+        if (window.LibraryManagerInstance) {
+            window.LibraryManagerInstance.render();
         }
     };
 
