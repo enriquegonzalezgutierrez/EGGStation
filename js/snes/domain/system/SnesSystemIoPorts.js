@@ -1,62 +1,82 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Emulator
- * Component: SnesSystemIoPorts (Hardware Register Mapping Extension)
+ * Author: Enrique González Gutiérrez
+ * File: js/snes/domain/system/SnesSystemIoPorts.js
  * 
- * ROLE:
- * Handles reads and writes of the physical control registers of the CPU
- * ($4200-$421F) and the DMA config slots ($4300-$437F).
+ * Domain Layer: Super Nintendo (SNES) Hardware I/O Registers Decoder
+ * 
+ * Role:
+ * Emulates the memory-mapped CPU I/O control registers ($4200-$421F) and the 
+ * DMA/HDMA configuration registers ($4300-$437F) of the Super Nintendo.
+ * 
+ * SOLID Principles Applied:
+ * - Single Responsibility Principle (SRP): Exclusively responsible for parsing, 
+ *   routing, and mutating CPU I/O register ports, delegating channel updates 
+ *   directly to the sibling SnesSystemDma controller.
  */
 
-{
-    SnesSystem.prototype.readReg = function(adr) {
+class SnesSystemIoPorts {
+    /**
+     * @param {SnesSystem} snesSystem - Master system coordinator context (DIP).
+     */
+    constructor(snesSystem) {
+        this.sys = snesSystem;
+    }
+
+    /**
+     * Decodes and reads an 8-bit hardware control register.
+     * @param {number} adr - 16-bit register address.
+     * @returns {number} 8-bit register data.
+     */
+    readReg(adr) {
         switch (adr) {
             case 0x4210: {
                 let val = 0x2;
-                val |= this.inNmi ? 0x80 : 0;
-                val |= this.openBus & 0x70;
-                this.inNmi = false;
+                val |= this.sys.inNmi ? 0x80 : 0;
+                val |= this.sys.openBus & 0x70;
+                this.sys.inNmi = false;
                 return val;
             }
             case 0x4211: {
-                let val = this.inIrq ? 0x80 : 0;
-                val |= this.openBus & 0x7f;
-                this.inIrq = false;
-                this.cpu.irqWanted = false;
+                let val = this.sys.inIrq ? 0x80 : 0;
+                val |= this.sys.openBus & 0x7f;
+                this.sys.inIrq = false;
+                this.sys.cpu.irqWanted = false;
                 return val;
             }
             case 0x4212: {
-                let val = (this.autoJoyTimer > 0) ? 0x1 : 0;
-                val |= this.inHblank ? 0x40 : 0;
-                val |= this.inVblank ? 0x80 : 0;
-                val |= this.openBus & 0x3e;
+                let val = (this.sys.autoJoyTimer > 0) ? 0x1 : 0;
+                val |= this.sys.inHblank ? 0x40 : 0;
+                val |= this.sys.inVblank ? 0x80 : 0;
+                val |= this.sys.openBus & 0x3e;
                 return val;
             }
             case 0x4213: {
-                return this.ppuLatch ? 0x80 : 0;
+                return this.sys.ppuLatch ? 0x80 : 0;
             }
             case 0x4214: {
-                return this.divResult & 0xff;
+                return this.sys.divResult & 0xff;
             }
             case 0x4215: {
-                return (this.divResult & 0xff00) >> 8;
+                return (this.sys.divResult & 0xff00) >> 8;
             }
             case 0x4216: {
-                return this.mulResult & 0xff;
+                return this.sys.mulResult & 0xff;
             }
             case 0x4217: {
-                return (this.mulResult & 0xff00) >> 8;
+                return (this.sys.mulResult & 0xff00) >> 8;
             }
             case 0x4218: {
-                return this.joypad1AutoRead & 0xff;
+                return this.sys.joypad1AutoRead & 0xff;
             }
             case 0x4219: {
-                return (this.joypad1AutoRead & 0xff00) >> 8;
+                return (this.sys.joypad1AutoRead & 0xff00) >> 8;
             }
             case 0x421a: {
-                return this.joypad2AutoRead & 0xff;
+                return this.sys.joypad2AutoRead & 0xff;
             }
             case 0x421b: {
-                return (this.joypad2AutoRead & 0xff00) >> 8;
+                return (this.sys.joypad2AutoRead & 0xff00) >> 8;
             }
             case 0x421c:
             case 0x421d:
@@ -66,211 +86,232 @@
             }
         }
 
+        // --- DMA / HDMA Channel Registers ($4300 - $437F) ---
         if (adr >= 0x4300 && adr < 0x4380) {
-            let channel = (adr & 0xf0) >> 4;
+            const channel = (adr & 0xf0) >> 4;
+            const dma = this.sys.dma; // Mapped directly to the encapsulated DMA controller (DIP)
+
+            if (!dma) return this.sys.openBus;
+
             switch (adr & 0xff0f) {
                 case 0x4300: {
-                    let val = this.dmaMode[channel];
-                    val |= this.dmaFixed[channel] ? 0x8 : 0;
-                    val |= this.dmaDec[channel] ? 0x10 : 0;
-                    val |= this.dmaUnusedBit[channel] ? 0x20 : 0;
-                    val |= this.hdmaInd[channel] ? 0x40 : 0;
-                    val |= this.dmaFromB[channel] ? 0x80 : 0;
+                    let val = dma.dmaMode[channel];
+                    val |= dma.dmaFixed[channel] ? 0x8 : 0;
+                    val |= dma.dmaDec[channel] ? 0x10 : 0;
+                    val |= dma.dmaUnusedBit[channel] ? 0x20 : 0;
+                    val |= dma.hdmaInd[channel] ? 0x40 : 0;
+                    val |= dma.dmaFromB[channel] ? 0x80 : 0;
                     return val;
                 }
                 case 0x4301: {
-                    return this.dmaBadr[channel];
+                    return dma.dmaBadr[channel];
                 }
                 case 0x4302: {
-                    return this.dmaAadr[channel] & 0xff;
+                    return dma.dmaAadr[channel] & 0xff;
                 }
                 case 0x4303: {
-                    return (this.dmaAadr[channel] & 0xff00) >> 8;
+                    return (dma.dmaAadr[channel] & 0xff00) >> 8;
                 }
                 case 0x4304: {
-                    return this.dmaAadrBank[channel];
+                    return dma.dmaAadrBank[channel];
                 }
                 case 0x4305: {
-                    return this.dmaSize[channel] & 0xff;
+                    return dma.dmaSize[channel] & 0xff;
                 }
                 case 0x4306: {
-                    return (this.dmaSize[channel] & 0xff00) >> 8;
+                    return (dma.dmaSize[channel] & 0xff00) >> 8;
                 }
                 case 0x4307: {
-                    return this.hdmaIndBank[channel];
+                    return dma.hdmaIndBank[channel];
                 }
                 case 0x4308: {
-                    return this.hdmaTableAdr[channel] & 0xff;
+                    return dma.hdmaTableAdr[channel] & 0xff;
                 }
                 case 0x4309: {
-                    return (this.hdmaTableAdr[channel] & 0xff00) >> 8;
+                    return (dma.hdmaTableAdr[channel] & 0xff00) >> 8;
                 }
                 case 0x430a: {
-                    return this.hdmaRepCount[channel];
+                    return dma.hdmaRepCount[channel];
                 }
                 case 0x430b:
                 case 0x430f: {
-                    return this.dmaUnusedByte[channel];
+                    return dma.dmaUnusedByte[channel];
                 }
             }
         }
-        return this.openBus;
-    };
+        return this.sys.openBus;
+    }
 
-    SnesSystem.prototype.writeReg = function(adr, value) {
+    /**
+     * Decodes and writes an 8-bit payload to a hardware control register.
+     * @param {number} adr - 16-bit register address.
+     * @param {number} value - 8-bit data payload.
+     */
+    writeReg(adr, value) {
         switch (adr) {
             case 0x4200: {
-                this.autoJoyRead = (value & 0x1) > 0;
-                if (!this.autoJoyRead) {
-                    this.autoJoyTimer = 0;
+                this.sys.autoJoyRead = (value & 0x1) > 0;
+                if (!this.sys.autoJoyRead) {
+                    this.sys.autoJoyTimer = 0;
                 }
-                this.hIrqEnabled = (value & 0x10) > 0;
-                this.vIrqEnabled = (value & 0x20) > 0;
-                this.nmiEnabled = (value & 0x80) > 0;
-                if (!this.hIrqEnabled && !this.vIrqEnabled) {
-                    this.cpu.irqWanted = false;
-                    this.inIrq = false;
+                this.sys.hIrqEnabled = (value & 0x10) > 0;
+                this.sys.vIrqEnabled = (value & 0x20) > 0;
+                this.sys.nmiEnabled = (value & 0x80) > 0;
+                if (!this.sys.hIrqEnabled && !this.sys.vIrqEnabled) {
+                    this.sys.cpu.irqWanted = false;
+                    this.sys.inIrq = false;
                 }
                 return;
             }
             case 0x4201: {
-                if (this.ppuLatch && (value & 0x80) === 0) {
-                    this.ppu.latchedHpos = this.xPos >> 2;
-                    this.ppu.latchedVpos = this.yPos;
-                    this.ppu.countersLatched = true;
+                if (this.sys.ppuLatch && (value & 0x80) === 0) {
+                    this.sys.ppu.latchedHpos = this.sys.xPos >> 2;
+                    this.sys.ppu.latchedVpos = this.sys.yPos;
+                    this.sys.ppu.countersLatched = true;
                 }
-                this.ppuLatch = (value & 0x80) > 0;
+                this.sys.ppuLatch = (value & 0x80) > 0;
                 return;
             }
             case 0x4202: {
-                this.multiplyA = value;
+                this.sys.multiplyA = value;
                 return;
             }
             case 0x4203: {
-                this.mulResult = this.multiplyA * value;
+                this.sys.mulResult = this.sys.multiplyA * value;
                 return;
             }
             case 0x4204: {
-                this.divA = (this.divA & 0xff00) | value;
+                this.sys.divA = (this.sys.divA & 0xff00) | value;
                 return;
             }
             case 0x4205: {
-                this.divA = (this.divA & 0xff) | (value << 8);
+                this.sys.divA = (this.sys.divA & 0xff) | (value << 8);
                 return;
             }
             case 0x4206: {
-                this.divResult = 0xffff;
-                this.mulResult = this.divA;
+                this.sys.divResult = 0xffff;
+                this.sys.mulResult = this.sys.divA;
                 if (value !== 0) {
-                    this.divResult = (this.divA / value) & 0xffff;
-                    this.mulResult = this.divA % value;
+                    this.sys.divResult = (this.sys.divA / value) & 0xffff;
+                    this.sys.mulResult = this.sys.divA % value;
                 }
                 return;
             }
             case 0x4207: {
-                this.hTimer = (this.hTimer & 0x100) | value;
+                this.sys.hTimer = (this.sys.hTimer & 0x100) | value;
                 return;
             }
             case 0x4208: {
-                this.hTimer = (this.hTimer & 0xff) | ((value & 0x1) << 8);
+                this.sys.hTimer = (this.sys.hTimer & 0xff) | ((value & 0x1) << 8);
                 return;
             }
             case 0x4209: {
-                this.vTimer = (this.vTimer & 0x100) | value;
+                this.sys.vTimer = (this.sys.vTimer & 0x100) | value;
                 return;
             }
             case 0x420a: {
-                this.vTimer = (this.vTimer & 0xff) | ((value & 0x1) << 8);
+                this.sys.vTimer = (this.sys.vTimer & 0xff) | ((value & 0x1) << 8);
                 return;
             }
             case 0x420b: {
-                this.dmaActive[0] = (value & 0x1) > 0;
-                this.dmaActive[1] = (value & 0x2) > 0;
-                this.dmaActive[2] = (value & 0x4) > 0;
-                this.dmaActive[3] = (value & 0x8) > 0;
-                this.dmaActive[4] = (value & 0x10) > 0;
-                this.dmaActive[5] = (value & 0x20) > 0;
-                this.dmaActive[6] = (value & 0x40) > 0;
-                this.dmaActive[7] = (value & 0x80) > 0;
-                this.dmaBusy = value > 0;
-                this.dmaTimer += this.dmaBusy ? 8 : 0;
+                const dma = this.sys.dma;
+                if (dma) {
+                    dma.dmaActive[0] = (value & 0x1) > 0;
+                    dma.dmaActive[1] = (value & 0x2) > 0;
+                    dma.dmaActive[2] = (value & 0x4) > 0;
+                    dma.dmaActive[3] = (value & 0x8) > 0;
+                    dma.dmaActive[4] = (value & 0x10) > 0;
+                    dma.dmaActive[5] = (value & 0x20) > 0;
+                    dma.dmaActive[6] = (value & 0x40) > 0;
+                    dma.dmaActive[7] = (value & 0x80) > 0;
+                    dma.dmaBusy = value > 0;
+                    dma.dmaTimer += dma.dmaBusy ? 8 : 0;
+                }
                 return;
             }
             case 0x420c: {
-                this.hdmaActive[0] = (value & 0x1) > 0;
-                this.hdmaActive[1] = (value & 0x2) > 0;
-                this.hdmaActive[2] = (value & 0x4) > 0;
-                this.hdmaActive[3] = (value & 0x8) > 0;
-                this.hdmaActive[4] = (value & 0x10) > 0;
-                this.hdmaActive[5] = (value & 0x20) > 0;
-                this.hdmaActive[6] = (value & 0x40) > 0;
-                this.hdmaActive[7] = (value & 0x80) > 0;
+                const dma = this.sys.dma;
+                if (dma) {
+                    dma.hdmaActive[0] = (value & 0x1) > 0;
+                    dma.hdmaActive[1] = (value & 0x2) > 0;
+                    dma.hdmaActive[2] = (value & 0x4) > 0;
+                    dma.hdmaActive[3] = (value & 0x8) > 0;
+                    dma.hdmaActive[4] = (value & 0x10) > 0;
+                    dma.hdmaActive[5] = (value & 0x20) > 0;
+                    dma.hdmaActive[6] = (value & 0x40) > 0;
+                    dma.hdmaActive[7] = (value & 0x80) > 0;
+                }
                 return;
             }
             case 0x420d: {
-                this.fastMem = (value & 0x1) > 0;
+                this.sys.fastMem = (value & 0x1) > 0;
                 return;
             }
         }
 
+        // --- DMA / HDMA Channel Registers ($4300 - $437F) ---
         if (adr >= 0x4300 && adr < 0x4380) {
-            let channel = (adr & 0xf0) >> 4;
+            const channel = (adr & 0xf0) >> 4;
+            const dma = this.sys.dma; // Mapped directly to the encapsulated DMA controller (DIP)
+
+            if (!dma) return;
+
             switch (adr & 0xff0f) {
                 case 0x4300: {
-                    this.dmaMode[channel] = value & 0x7;
-                    this.dmaFixed[channel] = (value & 0x08) > 0;
-                    this.dmaDec[channel] = (value & 0x10) > 0;
-                    this.dmaUnusedBit[channel] = (value & 0x20) > 0;
-                    this.hdmaInd[channel] = (value & 0x40) > 0;
-                    this.dmaFromB[channel] = (value & 0x80) > 0;
+                    dma.dmaMode[channel] = value & 0x7;
+                    dma.dmaFixed[channel] = (value & 0x08) > 0;
+                    dma.dmaDec[channel] = (value & 0x10) > 0;
+                    dma.dmaUnusedBit[channel] = (value & 0x20) > 0;
+                    dma.hdmaInd[channel] = (value & 0x40) > 0;
+                    dma.dmaFromB[channel] = (value & 0x80) > 0;
                     return;
                 }
                 case 0x4301: {
-                    this.dmaBadr[channel] = value;
+                    dma.dmaBadr[channel] = value;
                     return;
                 }
                 case 0x4302: {
-                    this.dmaAadr[channel] = (this.dmaAadr[channel] & 0xff00) | value;
+                    dma.dmaAadr[channel] = (dma.dmaAadr[channel] & 0xff00) | value;
                     return;
                 }
                 case 0x4303: {
-                    this.dmaAadr[channel] = (this.dmaAadr[channel] & 0xff) | (value << 8);
+                    dma.dmaAadr[channel] = (dma.dmaAadr[channel] & 0xff) | (value << 8);
                     return;
                 }
                 case 0x4304: {
-                    this.dmaAadrBank[channel] = value;
+                    dma.dmaAadrBank[channel] = value;
                     return;
                 }
                 case 0x4305: {
-                    this.dmaSize[channel] = (this.dmaSize[channel] & 0xff00) | value;
+                    dma.dmaSize[channel] = (dma.dmaSize[channel] & 0xff00) | value;
                     return;
                 }
                 case 0x4306: {
-                    this.dmaSize[channel] = (this.dmaSize[channel] & 0xff) | (value << 8);
+                    dma.dmaSize[channel] = (dma.dmaSize[channel] & 0xff) | (value << 8);
                     return;
                 }
                 case 0x4307: {
-                    this.hdmaIndBank[channel] = value;
+                    dma.hdmaIndBank[channel] = value;
                     return;
                 }
                 case 0x4308: {
-                    this.hdmaTableAdr[channel] = (this.hdmaTableAdr[channel] & 0xff00) | value;
+                    dma.hdmaTableAdr[channel] = (dma.hdmaTableAdr[channel] & 0xff00) | value;
                     return;
                 }
                 case 0x4309: {
-                    this.hdmaTableAdr[channel] = (this.hdmaTableAdr[channel] & 0xff) | (value << 8);
+                    dma.hdmaTableAdr[channel] = (dma.hdmaTableAdr[channel] & 0xff) | (value << 8);
                     return;
                 }
                 case 0x430a: {
-                    this.hdmaRepCount[channel] = value;
+                    dma.hdmaRepCount[channel] = value;
                     return;
                 }
                 case 0x430b:
                 case 0x430f: {
-                    this.dmaUnusedByte[channel] = value;
+                    dma.dmaUnusedByte[channel] = value;
                     return;
                 }
             }
         }
-    };
+    }
 }
