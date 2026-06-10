@@ -168,27 +168,16 @@ function bootConsole(consoleType) {
         if (fpsSpan) fpsSpan.textContent = `${fps} FPS`;
     };
 
-    // Instantiate and Boot the Selected Console Engine
+    // Instantiate and Boot the Selected Console Engine Polymorphically (SOLID OCP)
     try {
-        switch (consoleType) {
-            case "SMS":
-                activeOrchestrator = new SmsOrchestrator(videoContext, glContext, updateFpsUI);
-                activeController = new SmsUIController(activeOrchestrator);
-                break;
-                
-            case "GEN":
-                activeOrchestrator = new GenesisOrchestrator(videoContext, glContext, updateFpsUI);
-                activeController = new GenesisUIController(activeOrchestrator);
-                break;
-                
-            case "SNES":
-                activeOrchestrator = new SnesOrchestrator(videoContext, glContext, updateFpsUI);
-                activeController = new SnesUIController(activeOrchestrator);
-                break;
-                
-            default:
-                throw new Error(`Unknown console type: ${consoleType}`);
+        if (!window.ConsoleRegistry) {
+            throw new Error("ConsoleRegistry is not defined. Ensure emulator cores are properly registered.");
         }
+        
+        // Dynamic construction via ConsoleRegistry, removing switch/case code smell
+        const core = window.ConsoleRegistry.boot(consoleType, videoContext, glContext, updateFpsUI);
+        activeOrchestrator = core.orchestrator;
+        activeController = core.controller;
         
         // Expose active orchestrator instances on the global window scope synchronously
         window.activeOrchestrator = activeOrchestrator;
@@ -197,7 +186,7 @@ function bootConsole(consoleType) {
         // Dynamically draw the correct active system preview thumbnail on boot
         updateSaveStatePreview();
         
-        console.log(`%c[EGGStation::Swapper] ${consoleType} Engine instantiated successfully.`, "color: #04d361; font-weight: bold;");
+        console.log(`%c[EGGStation::Swapper] ${consoleType} Engine instantiated successfully via ConsoleRegistry.`, "color: #04d361; font-weight: bold;");
     } catch (err) {
         console.error(`[EGGStation::Swapper] Fatal exception during ${consoleType} engine boot:`, err);
         return;
@@ -241,6 +230,7 @@ function bootConsole(consoleType) {
         }
     }
 }
+window.bootConsole = bootConsole; // Expose globally for decoupled presentation layers
 
 // ========================================================================
 // GLOBAL PERSISTENT SAVE/LOAD HOTKEYS & BUTTON BINDINGS

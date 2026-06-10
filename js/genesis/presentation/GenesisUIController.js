@@ -383,3 +383,26 @@ class GenesisUIController {
         if (fileSelector) fileSelector.classList.add("hidden");
     }
 }
+
+// ========================================================================
+// POLYMORPHIC CORE AUTO-REGISTRATION (SOLID OCP Compliant)
+// Self-initializing global Registry to prevent script load-order issues (KISS)
+// ========================================================================
+window.ConsoleRegistry = window.ConsoleRegistry || {
+    cores: {},
+    register(type, factoryFn) {
+        this.cores[type] = factoryFn;
+    },
+    boot(type, videoCtx, glCtx, updateFps) {
+        if (this.cores[type]) {
+            return this.cores[type](videoCtx, glCtx, updateFps);
+        }
+        throw new Error(`[ConsoleRegistry] No core registered under the key: "${type}"`);
+    }
+};
+
+window.ConsoleRegistry.register("GEN", (videoCtx, glCtx, updateFps) => {
+    const orchestrator = new GenesisOrchestrator(videoCtx, glCtx, updateFps);
+    const controller = new GenesisUIController(orchestrator);
+    return { orchestrator, controller };
+});
