@@ -230,7 +230,11 @@
     </div>
 
     <!-- SYSTEM INFRASTRUCTURE & PRESENTATION -->
+    <!-- Mapped Shared Video Pipeline Filters and Shader Compilers (SOLID SRP/OCP) -->
+    <script src="js/shared/video/WebGLShaderPipeline.js"></script>
+    <script src="js/shared/video/CpuScalingFilters.js"></script>
     <script src="js/shared/video/UniversalPostProcessor.js"></script>
+    
     <script src="js/shared/storage/IndexedDbManager.js"></script>
     <script src="js/shared/storage/RomDecompressor.js"></script>
     <script src="js/shared/presentation/UniversalInputManager.js"></script>
@@ -328,10 +332,12 @@
     <script src="js/snes/domain/ppu/SnesPpuMode7.js"></script>
     <script src="js/snes/domain/ppu/SnesPpuCompositor.js"></script>
     <script src="js/snes/domain/bus/SnesMemoryMap.js"></script>
-    <script src="js/snes/domain/system/SnesSystem.js"></script>
+    
+    <!-- SOLID Subsystems (Refactored) -->
     <script src="js/snes/domain/system/SnesSystemDma.js"></script>
     <script src="js/snes/domain/system/SnesSystemIoPorts.js"></script>
     <script src="js/snes/domain/system/SnesSystemBus.js"></script>
+    <script src="js/snes/domain/system/SnesSystem.js"></script>
     
     <script src="js/snes/application/SnesOrchestrator.js"></script>
     <script src="js/snes/presentation/SnesUIController.js"></script>
