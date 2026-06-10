@@ -14,17 +14,20 @@
    Design System Variables
    ========================================================================== */
 :root {
-    --bg-dark: #09090e;
-    --bg-surface: #15151e;
-    --glass-bg: rgba(21, 21, 30, 0.75);
-    --glass-border: rgba(255, 255, 255, 0.08);
+    --bg-dark: #050508;
+    --bg-surface: #0d0d15;
+    --glass-bg: rgba(13, 13, 21, 0.75);
+    --glass-border: rgba(255, 255, 255, 0.06);
     --text-main: #f1f1f4;
-    --text-muted: #8e8e9f;
-    --neon-pink: #ff007f;
-    --neon-purple: #7f00ff;
-    --success: #04d361;
-    --snes-purple: #b3a6db;
+    --text-muted: #83839c;
+    
+    /* Console Theming Colors */
+    --neon-pink: #ff007f;     /* Sega Genesis & Accent */
+    --neon-purple: #7f00ff;   /* Core Brand & SNES Dark */
+    --success: #04d361;       /* Sega Master System */
+    --snes-purple: #b3a6db;   /* SNES Accent */
     --snes-purple-dark: #5e5189;
+    
     --drawer-width: 320px;
 }
 
@@ -53,7 +56,454 @@ body {
 .show-on-mobile { display: none !important; }
 
 /* ==========================================================================
-   App Layout (Desktop First)
+   PHASE 1: SYSTEM SELECTION CAROUSEL (HOME DASHBOARD v3)
+   ========================================================================== */
+#system-carousel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: radial-gradient(circle at center, #0f0f1b 0%, #030306 100%);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    padding: 40px 20px;
+    z-index: 200;
+    opacity: 0;
+    transition: opacity 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+#system-carousel.active {
+    display: flex;
+    opacity: 1;
+}
+
+/* Header Logo & Brand styling */
+.carousel-header {
+    text-align: center;
+    margin-top: 20px;
+    animation: slideDown 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.carousel-logo {
+    height: 48px;
+    margin-bottom: 12px;
+    border-radius: 6px;
+    box-shadow: 0 0 20px rgba(127, 0, 255, 0.3);
+}
+
+.carousel-header h2 {
+    font-size: 2.2rem;
+    font-weight: 900;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.carousel-header h2 span {
+    background: linear-gradient(90deg, var(--neon-pink), var(--neon-purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.carousel-header p {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    font-family: monospace;
+    letter-spacing: 0.5px;
+}
+
+/* Central Carousel Cards Track */
+.carousel-track {
+    display: flex;
+    gap: 30px;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    max-width: 1200px;
+    perspective: 1200px;
+}
+
+.console-card {
+    position: relative;
+    width: 280px;
+    height: 380px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    padding: 30px 20px;
+    cursor: pointer;
+    transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+    transform-style: preserve-3d;
+    opacity: 0.55;
+    transform: scale(0.9) translateZ(-40px);
+}
+
+.console-img {
+    width: 100%;
+    height: auto;
+    object-fit: contain;
+    filter: drop-shadow(0 10px 25px rgba(0,0,0,0.6));
+    transition: transform 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+    z-index: 2;
+}
+
+.console-info {
+    text-align: center;
+    z-index: 2;
+}
+
+.console-info h3 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--text-main);
+    letter-spacing: 0.5px;
+}
+
+.console-bits {
+    font-family: monospace;
+    font-size: 0.75rem;
+    font-weight: bold;
+    padding: 3px 10px;
+    border-radius: 20px;
+}
+
+/* Specific Console Badges */
+.sms-bits { background: rgba(4, 211, 97, 0.12); color: var(--success); }
+.gen-bits { background: rgba(255, 0, 127, 0.12); color: var(--neon-pink); }
+.snes-bits { background: rgba(127, 0, 255, 0.12); color: #a87fff; }
+
+.card-glow {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    filter: blur(60px);
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    z-index: 0;
+    pointer-events: none;
+}
+
+/* Active Hover / Navigation Focus States */
+.console-card:hover, .console-card.focused {
+    opacity: 1;
+    transform: scale(1.05) translateZ(0);
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: 0 20px 45px rgba(0, 0, 0, 0.7);
+}
+
+.console-card:hover .console-img, .console-card.focused .console-img {
+    transform: translateY(-8px) scale(1.04);
+}
+
+.console-card[data-system="SMS"]:hover .card-glow, .console-card[data-system="SMS"].focused .card-glow { background: var(--success); opacity: 0.35; }
+.console-card[data-system="GEN"]:hover .card-glow, .console-card[data-system="GEN"].focused .card-glow { background: var(--neon-pink); opacity: 0.35; }
+.console-card[data-system="SNES"]:hover .card-glow, .console-card[data-system="SNES"].focused .card-glow { background: var(--neon-purple); opacity: 0.45; }
+
+/* Active Click/Touch press effect */
+.console-card.active-press {
+    transform: scale(0.98) translateZ(-10px);
+    transition: all 0.1s ease;
+}
+
+/* Dashboard Footer styling */
+.carousel-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    max-width: 1200px;
+    border-top: 1px solid var(--glass-border);
+    padding-top: 24px;
+    margin-bottom: 10px;
+    animation: slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.footer-btn {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--glass-border);
+    color: var(--text-muted);
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    transition: all 0.2s ease;
+}
+
+.footer-btn:hover, .footer-btn.focused {
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: 0 0 15px rgba(255, 255, 255, 0.05);
+}
+
+.footer-help {
+    font-family: monospace;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.footer-help span {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+/* ==========================================================================
+   PAGES OVERLAYS: FULL-SCREEN GLASSMOPHISM MODALS
+   ========================================================================== */
+.fullscreen-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(5, 5, 8, 0.85);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.fullscreen-modal.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.modal-content {
+    width: 90%;
+    max-width: 960px;
+    max-height: 85vh;
+    overflow-y: auto;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    padding: 40px;
+    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.6);
+    transform: translateY(30px);
+    transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.fullscreen-modal.active .modal-content {
+    transform: translateY(0);
+}
+
+.modal-close-btn {
+    position: absolute;
+    top: 40px;
+    right: 40px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    color: var(--text-muted);
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    font-size: 1.2rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.modal-close-btn:hover {
+    color: #fff;
+    border-color: var(--neon-pink);
+    background: rgba(255, 0, 127, 0.1);
+    box-shadow: 0 0 15px rgba(255, 0, 127, 0.4);
+}
+
+/* Dossier Grid Layout */
+.dossier-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 40px;
+}
+
+/* Dossier Sidebar Info Card */
+.dossier-sidebar {
+    border-right: 1px solid var(--glass-border);
+    padding-right: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.dossier-avatar-wrapper {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    border: 2px solid var(--neon-purple);
+    padding: 4px;
+    margin-bottom: 20px;
+    box-shadow: 0 0 20px rgba(127, 0, 255, 0.4);
+}
+
+.dossier-avatar {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.dossier-sidebar h3 {
+    font-size: 1.25rem;
+    font-weight: 800;
+    margin-bottom: 8px;
+    color: #fff;
+}
+
+.dossier-title {
+    font-size: 0.82rem;
+    color: var(--neon-pink);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 24px;
+}
+
+.dossier-contact {
+    width: 100%;
+    list-style: none;
+    text-align: left;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.dossier-contact li {
+    margin-bottom: 12px;
+    line-height: 1.5;
+}
+
+.dossier-contact strong {
+    color: var(--text-main);
+    display: block;
+    margin-bottom: 2px;
+}
+
+.dossier-contact a {
+    color: var(--snes-purple);
+    text-decoration: none;
+}
+
+.dossier-contact a:hover {
+    text-decoration: underline;
+}
+
+/* Dossier Main Content Column */
+.dossier-main {
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+}
+
+.dossier-section h4 {
+    font-size: 0.8rem;
+    font-weight: 800;
+    color: var(--text-muted);
+    letter-spacing: 1.5px;
+    border-bottom: 1px solid var(--glass-border);
+    padding-bottom: 6px;
+    margin-bottom: 12px;
+}
+
+.dossier-section p {
+    font-size: 0.88rem;
+    line-height: 1.6;
+    color: #c1c1cb;
+}
+
+.record-item {
+    margin-bottom: 16px;
+}
+
+.record-item h5 {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 4px;
+}
+
+.record-item p {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+/* Skills Chip Tags */
+.skills-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.skill-tag {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-family: monospace;
+    color: var(--snes-purple);
+}
+
+/* Legal notice styling */
+.legal-container {
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+}
+
+.legal-section h4 {
+    font-size: 0.85rem;
+    font-weight: 800;
+    color: var(--neon-pink);
+    letter-spacing: 1.5px;
+    border-bottom: 1px solid var(--glass-border);
+    padding-bottom: 8px;
+    margin-bottom: 12px;
+}
+
+.legal-section p {
+    font-size: 0.88rem;
+    line-height: 1.6;
+    color: #c1c1cb;
+}
+
+.legal-footer {
+    text-align: center;
+    font-family: monospace;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 10px;
+    border-top: 1px solid var(--glass-border);
+    padding-top: 20px;
+}
+
+/* ==========================================================================
+   PHASE 2: APP LAYOUT (Desktop First - Emulator Stage)
    ========================================================================== */
 #app-container {
     display: grid;
@@ -66,7 +516,8 @@ body {
     width: 100%;
     max-width: 1600px;
     margin: 0 auto;
-    transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.5s ease;
+    opacity: 1;
 }
 
 #app-container.dev-mode {
@@ -579,6 +1030,67 @@ select:hover, .btn:hover { background: rgba(255, 255, 255, 0.1); }
         align-items: center;
     }
 
+    /* System Selection Carousel - Responsive Single Column layout */
+    .carousel-track {
+        flex-direction: column;
+        gap: 20px;
+        padding: 0 10px;
+    }
+    
+    .console-card {
+        width: 100%;
+        max-width: 320px;
+        height: 140px;
+        flex-direction: row;
+        padding: 15px 20px;
+    }
+    
+    .console-img {
+        width: 45%;
+        height: 100%;
+        object-fit: contain;
+    }
+    
+    .console-info {
+        width: 55%;
+        text-align: right;
+    }
+    
+    .console-card:hover .console-img, .console-card.focused .console-img {
+        transform: scale(1.05); /* Avoid vertical translation shifts on mobile */
+    }
+
+    .carousel-footer {
+        flex-direction: column;
+        gap: 15px;
+        text-align: center;
+    }
+
+    /* Creator Dossier Page - Responsive Single Column stacks */
+    .modal-content {
+        padding: 24px 16px;
+        max-height: 90vh;
+    }
+
+    .modal-close-btn {
+        top: 20px;
+        right: 20px;
+        width: 38px;
+        height: 38px;
+    }
+
+    .dossier-grid {
+        grid-template-columns: 1fr;
+        gap: 30px;
+    }
+
+    .dossier-sidebar {
+        border-right: none;
+        border-bottom: 1px solid var(--glass-border);
+        padding-right: 0;
+        padding-bottom: 30px;
+    }
+
     /* Developer Mode blocked on mobile */
     #developer-suite { display: none !important; }
     #app-container.dev-mode { grid-template-rows: 55px 1fr; }
@@ -605,7 +1117,7 @@ select:hover, .btn:hover { background: rgba(255, 255, 255, 0.1); }
         max-height: 45vh; 
     }
 
-    /* Cajones deslizantes móviles */
+    /* Sliding drawers */
     #settings-panel {
         position: fixed;
         top: 0;

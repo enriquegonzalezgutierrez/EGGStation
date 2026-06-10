@@ -48,68 +48,6 @@ console.log(
 );
 console.log("%c=============================", infoHeaderStyle);
 
-// ========================================================================
-// GAMES LIBRARY (GAMES CATALOG) CONFIGURATION
-// ========================================================================
-// Covers designed using pure inline SVG vector blocks to prevent CORS breaks offline
-const ROM_CATALOG = [
-    {
-        id: "alex_kidd",
-        title: "Alex Kidd in Miracle World",
-        system: "SMS",
-        filename: "Alex Kidd in Miracle World (USA, Europe) (Rev 1).sms",
-        year: "1986",
-        developer: "Sega",
-        genre: "Platform",
-        theme: "#04d361",
-        svgCover: `<svg viewBox="0 0 60 80" width="100%" height="100%"><rect width="60" height="80" fill="#0d1117"/><rect x="5" y="5" width="50" height="40" fill="#04d361" rx="3"/><text x="30" y="25" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">ALEX KIDD</text><text x="30" y="32" fill="#fff" font-family="monospace" font-size="3" text-anchor="middle">Miracle World</text><rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/><text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="3" text-anchor="middle">SEGA SYSTEM</text></svg>`
-    },
-    {
-        id: "castle_illusion",
-        title: "Castle of Illusion",
-        system: "GEN",
-        filename: "Castle of Illusion Starring Mickey Mouse (USA, Europe).md",
-        year: "1990",
-        developer: "Sega",
-        genre: "Platform",
-        theme: "#ff007f",
-        svgCover: `<svg viewBox="0 0 60 80" width="100%" height="100%"><rect width="60" height="80" fill="#0d1117"/><rect x="5" y="5" width="50" height="40" fill="#ff007f" rx="3"/><text x="30" y="23" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">CASTLE OF</text><text x="30" y="30" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">ILLUSION</text><rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/><text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="3.5" text-anchor="middle">MEGA DRIVE</text></svg>`
-    },
-    {
-        id: "ghostbusters",
-        title: "Ghostbusters",
-        system: "GEN",
-        filename: "Ghostbusters (USA, Europe) (En,Ja) (Beta).md",
-        year: "1990",
-        developer: "Sega",
-        genre: "Action",
-        theme: "#7f00ff",
-        svgCover: `<svg viewBox="0 0 60 80" width="100%" height="100%"><rect width="60" height="80" fill="#0d1117"/><rect x="5" y="5" width="50" height="40" fill="#7f00ff" rx="3"/><text x="30" y="26" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">GHOST</text><text x="30" y="33" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">BUSTERS</text><rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/><text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="3.5" text-anchor="middle">MEGA DRIVE</text></svg>`
-    },
-    {
-        id: "final_fight",
-        title: "Final Fight",
-        system: "SNES",
-        filename: "Final Fight (Europe).sfc",
-        year: "1990",
-        developer: "Capcom",
-        genre: "Beat 'em up",
-        theme: "#b3a6db",
-        svgCover: `<svg viewBox="0 0 60 80" width="100%" height="100%"><rect width="60" height="80" fill="#0d1117"/><rect x="5" y="5" width="50" height="40" fill="#5e5189" rx="3"/><text x="30" y="23" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">FINAL</text><text x="30" y="30" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">FIGHT</text><rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/><text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="4" text-anchor="middle">SUPER Nintendo</text></svg>`
-    },
-    {
-        id: "super_gn_ghosts",
-        title: "Super Ghouls 'N Ghosts",
-        system: "SNES",
-        filename: "Super Ghouls 'N Ghosts (Europe).sfc",
-        year: "1991",
-        developer: "Capcom",
-        genre: "Action",
-        theme: "#3c3c4e",
-        svgCover: `<svg viewBox="0 0 60 80" width="100%" height="100%"><rect width="60" height="80" fill="#0d1117"/><rect x="5" y="5" width="50" height="40" fill="#3c3c4e" rx="3"/><text x="30" y="21" fill="#fff" font-family="monospace" font-size="4.5" font-weight="bold" text-anchor="middle">SUPER</text><text x="30" y="27" fill="#fff" font-family="monospace" font-size="4.5" font-weight="bold" text-anchor="middle">GHOULS 'N</text><text x="30" y="33" fill="#fff" font-family="monospace" font-size="4.5" font-weight="bold" text-anchor="middle">GHOSTS</text><rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/><text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="4" text-anchor="middle">SUPER Nintendo</text></svg>`
-    }
-];
-
 // Pointer used to identify the target game being configured during the manual local selection phase
 window.pendingLibraryGame = null;
 
@@ -387,10 +325,39 @@ window.triggerCrtWarmUp = triggerCrtWarmUp;
 // ========================================================================
 // OFFLINE HIGH-SPEED CACHING ROM BOOTSTRAP PIPELINE (DIP)
 // ========================================================================
+
+/**
+ * Dynamic ROM registrator. Copies any booted ROM inside the persistent
+ * IndexedDB storage dynamically, allowing the Library to auto-update itself.
+ * 
+ * @param {string} name - The file name of the ROM.
+ * @param {ArrayBuffer} buffer - The binary buffer.
+ * @param {string} system - Core identifier (SMS, GEN, SNES).
+ */
+async function saveRomToLibrary(name, buffer, system) {
+    try {
+        const dbManager = new IndexedDbManager("EGGStationDB", "savestates");
+        const existing = await dbManager.load("ROM_" + name);
+        if (!existing) {
+            console.log(`[EGGStation::Library] Auto-registering "${name}" in local database...`);
+            await dbManager.save("ROM_" + name, {
+                name: name,
+                system: system,
+                buffer: buffer
+            });
+        }
+    } catch(err) {
+        console.error("[EGGStation::Library] Auto-registration failed:", err);
+    }
+}
+
 /**
  * Direct hardware injection handler to bind ROM buffers dynamically.
  */
 function runRomFromBuffer(system, name, buffer) {
+    // Auto-save game in library database
+    saveRomToLibrary(name, buffer, system);
+
     bootConsole(system);
     
     if (system === "SNES") {
@@ -410,6 +377,33 @@ function runRomFromBuffer(system, name, buffer) {
     document.getElementById('fileselector')?.classList.add('hidden');
 }
 
+/**
+ * Helper to generate gorgeous minimal console-themed covers dynamically
+ * depending on the target emulation system.
+ */
+function generateDynamicSvgCover(system, title) {
+    let themeColor = "#7f00ff"; // default
+    let consoleLabel = "CONSOLE";
+    if (system === "SMS") { themeColor = "#04d361"; consoleLabel = "SEGA SYSTEM"; }
+    if (system === "GEN") { themeColor = "#ff007f"; consoleLabel = "MEGA DRIVE"; }
+    if (system === "SNES") { themeColor = "#5e5189"; consoleLabel = "SUPER Nintendo"; }
+
+    // Strip extension and truncate to prevent SVG text overflows
+    let displayTitle = title.replace(/\.[^/.]+$/, "");
+    if (displayTitle.length > 25) {
+        displayTitle = displayTitle.substring(0, 22) + "...";
+    }
+
+    return `<svg viewBox="0 0 60 80" width="100%" height="100%">
+        <rect width="60" height="80" fill="#0d1117"/>
+        <rect x="5" y="5" width="50" height="40" fill="${themeColor}" rx="3"/>
+        <text x="30" y="22" fill="#fff" font-family="monospace" font-size="5" font-weight="bold" text-anchor="middle">${system}</text>
+        <text x="30" y="32" fill="#fff" font-family="sans-serif" font-size="2" text-anchor="middle">${displayTitle}</text>
+        <rect x="5" y="55" width="50" height="20" fill="#1f2937" rx="2"/>
+        <text x="30" y="67" fill="#8e8e9f" font-family="sans-serif" font-size="3" text-anchor="middle">${consoleLabel}</text>
+    </svg>`;
+}
+
 // ========================================================================
 // GLOBAL EVENT LISTENERS & MOBILE UI HANDLERS
 // ========================================================================
@@ -418,17 +412,57 @@ document.addEventListener("DOMContentLoaded", () => {
     const devToggle = document.getElementById('dev-toggle-btn');
     const ejectBtn = document.getElementById('ejectBtn');
     const audioToggleSelector = document.getElementById('audioToggleSelector');
-    const fileSelectorInput = document.getElementById('cartridgeSelector');
     
     const saveBtn = document.getElementById('btn-save');
     const loadBtn = document.getElementById('btn-load');
 
+    // Home Navigation Elements
+    const btnReturnHome = document.getElementById('btn-return-home');
+    const mobileHomeBtn = document.getElementById('mobile-home-btn');
+
     if (saveBtn) saveBtn.addEventListener('click', triggerSaveAction);
     if (loadBtn) loadBtn.addEventListener('click', triggerLoadAction);
 
-    // Initial system boot
-    console.log(`[EGGStation::Bootstrapper] Initializing default system configuration...`);
-    bootConsole("SMS");
+    // Initial system boot is now halted; the application remains in the System Selection Carousel on startup
+    console.log(`[EGGStation::Bootstrapper] System Halted. Awaiting Carousel Selection...`);
+
+    // ====================================================================
+    // RETURN TO CAROUSEL (HOME) LOGIC
+    // ====================================================================
+    const returnToHome = () => {
+        console.log("[EGGStation::Swapper] Exiting emulator stage. Returning to Home Dashboard...");
+        
+        // 1. Power off CRT Effect
+        const crtWrapper = document.getElementById("crt-wrapper");
+        if (crtWrapper) {
+            crtWrapper.classList.remove("crt-warm-up");
+            crtWrapper.classList.add("crt-power-off");
+        }
+
+        // 2. Teardown active emulation loops after power-off animation
+        setTimeout(() => {
+            teardownActiveConsole();
+            
+            // 3. Clear canvas buffer
+            const videoCanvas = document.getElementById("smsdisplay");
+            const videoContext = videoCanvas?.getContext("2d");
+            if (videoContext) {
+                videoContext.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
+            }
+
+            // 4. Close any open mobile drawers
+            closeSettingsDrawer();
+            closeLibraryDrawer();
+
+            // 5. Unhide and wake up the System Selection Carousel
+            if (window.SystemCarouselManager) {
+                window.SystemCarouselManager.show();
+            }
+        }, 500);
+    };
+
+    if (btnReturnHome) btnReturnHome.addEventListener('click', returnToHome);
+    if (mobileHomeBtn) mobileHomeBtn.addEventListener('click', returnToHome);
 
     if (consoleSelector) {
         consoleSelector.addEventListener('change', (e) => bootConsole(e.target.value));
@@ -488,41 +522,6 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    // Intercept manual file uploads to cache ROMs if they belong to library selections
-    if (fileSelectorInput) {
-        fileSelectorInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (!file || !window.pendingLibraryGame) return;
-
-            const targetGame = window.pendingLibraryGame;
-            window.pendingLibraryGame = null; // Clean up immediately
-
-            const reader = new FileReader();
-            reader.onload = async (event) => {
-                const arrayBuffer = event.target.result;
-                try {
-                    // FIXED: Reusing "savestates" store to avoid IndexedDB schema upgrades
-                    console.log(`[EGGStation::Vault] Archiving "${file.name}" to IndexedDB ROM storage...`);
-                    const dbManager = new IndexedDbManager("EGGStationDB", "savestates");
-                    await dbManager.save("ROM_" + targetGame.id, { 
-                        name: file.name, 
-                        buffer: arrayBuffer 
-                    });
-                    
-                    // Boot ROM directly from memory and update UI state
-                    runRomFromBuffer(targetGame.system, file.name, arrayBuffer);
-                    
-                    // Re-render library list to reflect the cached status immediately
-                    renderLibrary();
-                } catch (err) {
-                    console.error("[EGGStation::Vault] Write transaction failed: ", err);
-                    runRomFromBuffer(targetGame.system, file.name, arrayBuffer); // Run without caching
-                }
-            };
-            reader.readAsArrayBuffer(file);
-        });
-    }
-
     // ====================================================================
     // MOBILE RESPONSIVE UI HANDLERS & JUEGOTECA ACTIONS
     // ====================================================================
@@ -564,6 +563,7 @@ document.addEventListener("DOMContentLoaded", () => {
             libraryPanel.classList.add('library-open');
         }
         if (overlay) overlay.classList.remove('hidden');
+        renderLibrary(); // Re-render the library dynamically every time the drawer opens
     };
 
     const closeLibraryDrawer = () => {
@@ -592,86 +592,91 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // ====================================================================
-    // RENDER JUEGOTECA (FIXED: Direct Synchronous click dispatch)
+    // RENDER JUEGOTECA (100% DYNAMIC & PERSISTENT LIBRARY)
     // ====================================================================
     const renderLibrary = async () => {
         const grid = document.getElementById('library-grid');
         if (!grid) return;
 
-        grid.innerHTML = ""; 
+        grid.innerHTML = ""; // Clear grid
 
-        // Instantiating DB client on pre-approved "savestates" store synchronously
         const dbManager = new IndexedDbManager("EGGStationDB", "savestates");
-
-        // Loop and build cards
-        for (const game of ROM_CATALOG) {
-            const card = document.createElement('div');
-            card.className = "game-card";
+        
+        try {
+            // Retrieve all saved items from the db
+            const allItems = await dbManager.getAll();
             
-            // Check in background if this ROM is already cached synchronously
-            let isCached = false;
-            let cachedRomName = "";
-            try {
-                const cachedRom = await dbManager.load("ROM_" + game.id);
-                if (cachedRom) {
-                    isCached = true;
-                    cachedRomName = cachedRom.name;
-                }
-            } catch(e) {
-                // If IDB fails, default to uncached gracefully
-                isCached = false;
+            // Filter keys starting with "ROM_" (indicating imported games)
+            const romItems = allItems.filter(item => item.key && item.key.indexOf("ROM_") === 0);
+
+            if (romItems.length === 0) {
+                // Beautiful empty-state warning inside the library panel
+                grid.innerHTML = `
+                    <div style="text-align: center; color: var(--text-muted); padding: 40px 10px; font-size: 0.85rem; line-height: 1.6;">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom: 12px; color: var(--neon-pink); opacity: 0.6;">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                        </svg>
+                        <p>Your library is empty.</p>
+                        <p style="font-size: 0.75rem; margin-top: 8px;">Drag & Drop ROMs or select them via the Carousel to build your offline collection.</p>
+                    </div>
+                `;
+                return;
             }
 
-            // Set badge text based on cached status
-            const badgeText = isCached ? "PLAY" : "GET";
-            const badgeClass = isCached ? "badge-sms" : `badge-${game.system.toLowerCase()}`;
-
-            card.innerHTML = `
-                <div class="game-cover">${game.svgCover}</div>
-                <div class="game-details">
-                    <span class="game-title">${game.title}</span>
-                    <span class="game-meta">${game.developer} (${game.year})</span>
-                    <span id="badge-${game.id}" class="game-badge ${badgeClass}">${badgeText}</span>
-                </div>
-            `;
-
-            if (isCached) {
-                card.classList.add('is-cached');
-            }
-
-            // FIXED: Synchronous click dispatch bypassing browser popup blocks
-            card.addEventListener('click', async () => {
-                const badgeElement = document.getElementById(`badge-${game.id}`);
+            // Loop and build cards dynamically
+            for (const item of romItems) {
+                const romData = item.payload; // contains { name, system, buffer }
+                const cleanKey = item.key;
                 
-                if (card.classList.contains('is-cached')) {
-                    // Game is cached locally: load asynchronously from IndexedDB.
-                    // Since it does not require opening file selectors, the browser allows this async flow.
-                    try {
-                        if (badgeElement) badgeElement.textContent = "BOOTING...";
-                        const cachedData = await dbManager.load("ROM_" + game.id);
-                        if (cachedData) {
-                            runRomFromBuffer(game.system, cachedData.name, cachedData.buffer);
-                            closeLibraryDrawer();
-                        }
-                    } catch(err) {
-                        console.error("[EGGStation::Vault] Memory load crash: ", err);
-                    } finally {
-                        if (badgeElement) badgeElement.textContent = "PLAY";
-                    }
-                } else {
-                    // Game is not cached: open file selector synchronously.
-                    // Since it is directly inside the user's click stack, the browser allows file selector popups.
-                    window.pendingLibraryGame = game;
-                    
-                    alert(`Offline Setup Required:\n\nLocate and select the ROM on your disk.\n\nFile expected: "${game.filename}"\n\n(EGGStation will copy it locally so you never have to locate it again!)`);
-                    
-                    if (fileSelectorInput) {
-                        fileSelectorInput.click(); // Spawns file selector instantly
-                    }
-                }
-            });
+                const card = document.createElement('div');
+                card.className = "game-card";
+                card.style.position = "relative";
 
-            grid.appendChild(card);
+                const svgCover = generateDynamicSvgCover(romData.system, romData.name);
+
+                card.innerHTML = `
+                    <div class="game-cover">${svgCover}</div>
+                    <div class="game-details">
+                        <span class="game-title" style="word-break: break-all; padding-right: 15px;">${romData.name}</span>
+                        <span class="game-badge badge-${romData.system.toLowerCase()}">${romData.system}</span>
+                    </div>
+                    <!-- Close button to remove from Library -->
+                    <button class="delete-rom-btn" aria-label="Delete ROM" style="
+                        position: absolute;
+                        top: 8px; right: 8px;
+                        background: none; border: none;
+                        color: var(--text-muted); cursor: pointer;
+                        font-size: 0.8rem; padding: 4px;
+                        transition: color 0.2s ease;
+                    ">✖</button>
+                `;
+
+                // Handle Delete ROM from collection
+                const deleteBtn = card.querySelector('.delete-rom-btn');
+                deleteBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation(); // Avoid triggering card boot click
+                    if (confirm(`Are you sure you want to remove "${romData.name}" from your dynamic Library?`)) {
+                        await dbManager.delete(cleanKey);
+                        renderLibrary(); // Re-render instantly
+                    }
+                });
+
+                // Hover style for the delete button
+                deleteBtn.addEventListener('mouseenter', () => deleteBtn.style.color = "var(--neon-pink)");
+                deleteBtn.addEventListener('mouseleave', () => deleteBtn.style.color = "var(--text-muted)");
+
+                // Click to boot game from database (Lightning fast & fully offline!)
+                card.addEventListener('click', () => {
+                    console.log(`[EGGStation::Library] Launching "${romData.name}" from IndexedDB...`);
+                    runRomFromBuffer(romData.system, romData.name, romData.buffer);
+                    closeLibraryDrawer();
+                });
+
+                grid.appendChild(card);
+            }
+        } catch (err) {
+            console.error("[EGGStation::Library] Failed to query dynamic library:", err);
         }
     };
 

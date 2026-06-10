@@ -6,18 +6,18 @@
  * Role:
  * Infrastructure Layer: Universal IndexedDB Persistence Client (Retrocompatible Edition).
  * Manages low-level database transactions, store initialization, and 
- * high-performance read/write cycles of raw binary state buffers.
+ * high-performance read/write/query cycles of raw binary state buffers.
  * 
  * SOLID Principles Applied:
  * 1. Single Responsibility Principle (SRP): Exclusively responsible for IndexedDB 
- *    connections, transactions, and raw binary reads/writes. It contains no knowledge 
+ *    connections, transactions, and raw binary reads/writes/queries. It contains no knowledge 
  *    of CPU registers or game configurations.
  * 2. Open/Closed Principle (OCP): New databases or target stores can be opened 
  *    without modifying the transaction handling methods.
  * 3. Liskov Substitution Principle (LSP): Offers a uniform storage contract 
  *    that can be substituted or mocked easily for unit testing.
  * 4. Interface Segregation Principle (ISP): Exposes only high-level actions (`save()`, 
- *    `load()`, `delete()`), shielding client emulators from low-level transaction events.
+ *    `load()`, `delete()`, `getAll()`), shielding client emulators from low-level transaction events.
  * 5. Dependency Inversion Principle (DIP): Client emulators rely on this generic database 
  *    contract, decoupling them from direct browser-specific API implementations.
  */
@@ -63,7 +63,7 @@ class IndexedDbManager {
 
     /**
      * Saves a serialized payload to the database.
-     * Supports both "key" and "cartName" schemas snychronously for backward compatibility.
+     * Supports both "key" and "cartName" schemas synchronously for backward compatibility.
      * 
      * @param {string} key - Unique key identifier (e.g., Cartridge Name).
      * @param {Object} data - State payload to serialize.
@@ -75,7 +75,7 @@ class IndexedDbManager {
             const transaction = db.transaction([this.storeName], "readwrite");
             const store = transaction.objectStore(this.storeName);
             
-            // PHASE 4: Hybrid Record supports both old {keyPath: "cartName"} and new {keyPath: "key"} schemas
+            // Hybrid Record supports both old {keyPath: "cartName"} and new {keyPath: "key"} schemas
             const record = { 
                 key: key, 
                 cartName: key, // Legacy schema fallback
@@ -104,6 +104,26 @@ class IndexedDbManager {
             request.onsuccess = (event) => {
                 const record = event.target.result;
                 resolve(record ? record.payload : null);
+            };
+            request.onerror = (event) => reject(event.target.error);
+        });
+    }
+
+    /**
+     * Retrieves all saved records from the active object store.
+     * Essential for dynamic, non-hardcoded library queries.
+     * 
+     * @returns {Promise<Array>} List of all stored items.
+     */
+    async getAll() {
+        const db = await this.init();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction([this.storeName], "readonly");
+            const store = transaction.objectStore(this.storeName);
+            const request = store.getAll();
+
+            request.onsuccess = (event) => {
+                resolve(event.target.result || []);
             };
             request.onerror = (event) => reject(event.target.error);
         });
