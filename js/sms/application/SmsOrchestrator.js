@@ -54,7 +54,7 @@ class SmsOrchestrator {
         this.psg = null;
         this.cartridge = null;
         
-        // The I/O Controller is now a Wasm-backed Proxy
+        // The I/O Controller is a Wasm-backed Proxy
         this.ioController = new Sega315_5297();
         
         this.serializer = new IndexedDbManager(); 
@@ -91,7 +91,6 @@ class SmsOrchestrator {
 
     /**
      * Primary entry point to boot a game.
-     * NOW ASYNC to handle WebAssembly module readiness.
      */
     async loadRom(filename, arrayBuffer) {
         if (this.animationFrameId) {
@@ -260,6 +259,136 @@ class SmsOrchestrator {
         }
     }
 
+    // ========================================================================
+    // ENCAPSULATED STATE SERIALIZATION FOR SAVESTATES (SOLID)
+    // ========================================================================
+
+    async saveState() {
+        if (!this.isRunning || !this.cpu) return;
+
+        try {
+            const statePayload = {
+                cpu: {
+                    pc: this.cpu.registers.pc,
+                    sp: this.cpu.registers.sp,
+                    af: this.cpu.registers.af,
+                    bc: this.cpu.registers.bc,
+                    de: this.cpu.registers.de,
+                    hl: this.cpu.registers.hl,
+                    ix: this.cpu.registers.ix,
+                    iy: this.cpu.registers.iy
+                },
+                vdp: {
+                    vram: Array.from(this.vdp.vRam),
+                    cram: Array.from(this.vdp.colorRam),
+                    regs: Array.from(this.vdp.registers),
+                    // Internal state fields
+                    scanlineIdx: this.vdp.currentScanlineIndex,
+                    lineCnt: this.vdp.lineCounter,
+                    ctrlFlag: this.vdp.controlWordFlag,
+                    ctrlWord: this.vdp.controlWord,
+                    dataAddr: this.vdp.dataPortReadWriteAddress,
+                    writeMode: this.vdp.dataPortWriteMode,
+                    readBuf: this.vdp.readBufferByte,
+                    status: this.vdp.statusFlags
+                },
+                psg: this.psg ? this.psg.serializeState() : null,
+                io: {
+                    dc: this.ioController.readRegisterDC(),
+                    dd: this.ioController.readRegisterDD()
+                },
+                mmu: {
+                    workRam: Array.from(this.mmu.systemWorkRam)
+                }
+            };
+
+            await this.serializer.save("SMS_SAVESTATE", statePayload);
+
+            // Generate downsampled screenshot for the save state preview
+            if (this.vdp && this.vdp.glbFrameBuffer) {
+                const src = this.vdp.glbFrameBuffer;
+                const dstWidth = 128;
+                const dstHeight = 120;
+                const smallArray = new Uint8Array(dstWidth * dstHeight * 4);
+                const activeHeight = this.vdp.yScreenLines;
+                
+                for (let y = 0; y < dstHeight; y++) {
+                    const srcY = Math.floor(y * (activeHeight / dstHeight)) * 256 * 4; 
+                    const dstY = y * dstWidth * 4;
+                    for (let x = 0; x < dstWidth; x++) {
+                        const srcX = Math.floor(x * (256 / dstWidth)) * 4; 
+                        const srcIdx = srcY + srcX;
+                        const dstIdx = dstY + (x * 4);
+                        
+                        smallArray[dstIdx] = src[srcIdx];
+                        smallArray[dstIdx + 1] = src[srcIdx + 1];
+                        smallArray[dstIdx + 2] = src[srcIdx + 2];
+                        smallArray[dstIdx + 3] = 255;
+                    }
+                }
+
+                localStorage.setItem('savestateScreenshot', JSON.stringify(Array.from(smallArray)));
+                localStorage.setItem('cartName', "SMS_SAVESTATE");
+            }
+
+            console.log("[SmsOrchestrator] SMS State Saved Successfully.");
+        } catch (err) {
+            console.error("[SmsOrchestrator] Save State failed:", err);
+        }
+    }
+
+    async loadState() {
+        if (!this.isRunning || !this.cpu) return;
+
+        try {
+            const state = await this.serializer.load("SMS_SAVESTATE");
+            if (!state) {
+                console.warn("[SmsOrchestrator] No save state found to load.");
+                return;
+            }
+
+            // 1. Restore CPU Registers
+            this.cpu.registers.pc = state.cpu.pc;
+            this.cpu.registers.sp = state.cpu.sp;
+            this.cpu.registers.af = state.cpu.af;
+            this.cpu.registers.bc = state.cpu.bc;
+            this.cpu.registers.de = state.cpu.de;
+            this.cpu.registers.hl = state.cpu.hl;
+            this.cpu.registers.ix = state.cpu.ix;
+            this.cpu.registers.iy = state.cpu.iy;
+
+            // 2. Restore VDP memory and registers
+            this.vdp.vRam.set(state.vdp.vram);
+            this.vdp.colorRam.set(state.vdp.cram);
+            this.vdp.registers.set(state.vdp.regs);
+            
+            // Restore VDP Internal state fields
+            this.vdp.currentScanlineIndex = state.vdp.scanlineIdx;
+            this.vdp.lineCounter = state.vdp.lineCnt;
+            this.vdp.controlWordFlag = state.vdp.ctrlFlag;
+            this.vdp.controlWord = state.vdp.ctrlWord;
+            this.vdp.dataPortReadWriteAddress = state.vdp.dataAddr;
+            this.vdp.dataPortWriteMode = state.vdp.writeMode;
+            this.vdp.readBufferByte = state.vdp.readBuf;
+            this.vdp.statusFlags = state.vdp.status;
+
+            // 3. Restore PSG state
+            if (this.psg && state.psg) {
+                this.psg.deserializeState(state.psg);
+            }
+
+            // 4. Restore I/O state
+            this.ioController.syncFromRewind(state.io.dc, state.io.dd);
+
+            // 5. Restore MMU RAM
+            this.mmu.systemWorkRam.set(state.mmu.workRam);
+
+            console.log("[SmsOrchestrator] SMS State Loaded Successfully.");
+        } catch (err) {
+            console.error("[SmsOrchestrator] Load State failed:", err);
+        }
+    }
+
     // --- Developer Suite Hooks ---
     getRegisters() {
         if (!this.cpu) return {};
@@ -294,11 +423,9 @@ class SmsOrchestrator {
     rasterizeVramTiles(ctx) {
         if (!this.vdp || !this.vdp.isInitialized) return;
         
-        const imgData = ctx.createImageData(128, 192); // 16 columns * 8px x 24 rows * 8px
+        const imgData = ctx.createImageData(128, 192); 
         const vram = this.vdp.vRam; 
 
-        // FIXED: Changed standard declaration type from 'int' to 'let' 
-        // to comply with ECMAScript syntax and avoid Unexpected Identifier Exceptions.
         for (let tileIdx = 0; tileIdx < 384; tileIdx++) {
             const tileX = tileIdx % 16;
             const tileY = Math.floor(tileIdx / 16);
@@ -319,7 +446,6 @@ class SmsOrchestrator {
                                      (((byte2 >> shift) & 1) << 2) |
                                      (((byte3 >> shift) & 1) << 3)) & 0x0F;
 
-                    // Greyscale conversion (0-15 mapped into standard 0-255 luminance channels)
                     const rgb = colorIdx * 17; 
                     const destIdx = ((destBaseX + col) + ((destBaseY + row) * 128)) * 4;
 
