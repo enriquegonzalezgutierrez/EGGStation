@@ -1,49 +1,52 @@
 /**
- * Project: EGGStation - Super Nintendo (SNES) Emulator
- * Component: SnesPpuSprite (OAM & Sprites Pipeline)
+ * Project: EGGStation - Sega & SNES Multi-System Emulator
+ * Author: Enrique González Gutiérrez
+ * File: js/snes/domain/ppu/SnesPpuSprite.js
  * 
- * ROLE:
- * Handles Object Attribute Memory (OAM) scanning, sprites bounds, range checks,
- * and high-fidelity sprite blitting.
+ * Domain Layer: Super Nintendo (SNES) PPU Object/Sprites Engine
  * 
- * PHASE 4 OPTIMIZATION:
- * - Refactored `evaluateSprites` to utilize the high-speed pre-decoded `vramCache`.
- * - Leverages the X-Flipped cache partition (offset 262144) to entirely bypass 
- *   conditional coordinate flipping checks during the hot pixel rendering loop.
- * - Drastically accelerates active sprite rendering by removing all planar bit-shifting.
+ * Role:
+ * Handles high-performance OAM (Object Attribute Memory) parsing, vertical line 
+ * clipping buckets sorting, sprite hardware overflow flags, and rendering of 
+ * active prioritized sprite slivers.
+ * 
+ * SOLID Principles Applied:
+ * - Single Responsibility Principle (SRP): Exclusively responsible for sprite table 
+ *   sorting and sprite scanline rasterization, completely decoupled from Backgrounds 
+ *   or master compositor blending calculations.
  */
 
-{
+class SnesPpuSprite {
     /**
      * Pre-evaluates the OAM table once per frame.
      * Distributes active sprites into scanline buckets to eliminate 
      * redundant coordinate checking during the active rendering loop.
+     * @param {SnesPpu} ppu - The parent PPU instance context (DIP).
      */
-    SnesPpu.prototype.buildSpriteCache = function() {
+    static buildSpriteCache(ppu) {
         // Lazy initialize the GC-Free caches on the first frame
-        if (!this.scanlineSprites) {
+        if (!ppu.scanlineSprites) {
             // Maximum of 32 sprites allowed per scanline by SNES hardware
-            this.scanlineSprites = Array.from({ length: 240 }, () => new Int16Array(32));
-            this.scanlineSpriteCount = new Uint8Array(240);
-            this.scanlineRangeOver = new Uint8Array(240);
+            ppu.scanlineSprites = Array.from({ length: 240 }, () => new Int16Array(32));
+            ppu.scanlineSpriteCount = new Uint8Array(240);
+            ppu.scanlineRangeOver = new Uint8Array(240);
         }
 
-        // Clear previous frame data
-        this.scanlineSpriteCount.fill(0);
-        this.scanlineRangeOver.fill(0);
+        ppu.scanlineSpriteCount.fill(0);
+        ppu.scanlineRangeOver.fill(0);
 
         // SNES OAM Priority Rotation: Start index depends on objPriority flag
-        let index = this.objPriority ? ((this.oamAdr & 0xfe) - 2) & 0xff : 254;
+        let index = ppu.objPriority ? ((ppu.oamAdr & 0xfe) - 2) & 0xff : 254;
 
         for (let i = 0; i < 128; i++) {
-            let x = this.oam[index] & 0xff;
-            x |= (this.highOam[index >> 4] >> (index & 0xf) & 0x1) << 8;
+            let x = ppu.oam[index] & 0xff;
+            x |= (ppu.highOam[index >> 4] >> (index & 0xf) & 0x1) << 8;
             x = x > 255 ? -(512 - x) : x;
 
-            let y = (this.oam[index] & 0xff00) >> 8;
-            let big = (this.highOam[index >> 4] >> (index & 0xf) & 0x2) > 0;
-            let size = SnesPpu.spriteSizes[this.objSize + (big ? 8 : 0)];
-            let spriteHeight = size * (this.objInterlace ? 4 : 8);
+            let y = (ppu.oam[index] & 0xff00) >> 8;
+            let big = (ppu.highOam[index >> 4] >> (index & 0xf) & 0x2) > 0;
+            let size = SnesPpu.spriteSizes[ppu.objSize + (big ? 8 : 0)];
+            let spriteHeight = size * (ppu.objInterlace ? 4 : 8);
 
             // Only process if the sprite is horizontally within the screen bounds
             if (x > -(size * 8)) {
@@ -51,64 +54,66 @@
                     let screenY = (y + row) & 0xff; // SNES Sprites wrap vertically around the screen
                     
                     if (screenY < 240) {
-                        let count = this.scanlineSpriteCount[screenY];
+                        let count = ppu.scanlineSpriteCount[screenY];
                         if (count < 32) {
-                            this.scanlineSprites[screenY][count] = index;
-                            this.scanlineSpriteCount[screenY]++;
+                            ppu.scanlineSprites[screenY][count] = index;
+                            ppu.scanlineSpriteCount[screenY]++;
                         } else {
                             // Hardware limit: More than 32 sprites on one line triggers Range Over
-                            this.scanlineRangeOver[screenY] = 1;
+                            ppu.scanlineRangeOver[screenY] = 1;
                         }
                     }
                 }
             }
             index = (index - 2) & 0xff;
         }
-    };
+    }
 
     /**
      * Highly optimized Sprite Renderer.
      * Consumes the pre-evaluated OAM cache and fast pre-decoded VRAM bitplanes.
+     * @param {SnesPpu} ppu - The parent PPU instance context.
+     * @param {number} line - The active scanline index.
      */
-    SnesPpu.prototype.evaluateSprites = function(line) {
+    static evaluateSprites(ppu, line) {
         // Rebuild the sprite cache only once per frame
-        if (this.snes.frames !== this.spriteCacheFrame) {
-            this.buildSpriteCache();
-            this.spriteCacheFrame = this.snes.frames;
+        if (ppu.snes.frames !== ppu.spriteCacheFrame) {
+            this.buildSpriteCache(ppu);
+            ppu.spriteCacheFrame = ppu.snes.frames;
         }
 
         if (line >= 240) return; // Failsafe for overscan bounds
 
         // Hardware Range Over Flag
-        if (this.scanlineRangeOver[line] === 1) {
-            this.rangeOver = true;
+        if (ppu.scanlineRangeOver[line] === 1) {
+            ppu.rangeOver = true;
         }
 
-        let count = this.scanlineSpriteCount[line];
+        let count = ppu.scanlineSpriteCount[line];
         let sliverCount = 0;
 
         // Iterate ONLY over the sprites that actually touch this scanline
         for (let i = 0; i < count; i++) {
-            let index = this.scanlineSprites[line][i];
+            let index = ppu.scanlineSprites[line][i];
 
-            let x = this.oam[index] & 0xff;
-            let y = (this.oam[index] & 0xff00) >> 8;
-            let tile = this.oam[index + 1] & 0xff;
-            let ex = (this.oam[index + 1] & 0xff00) >> 8;
+            let x = ppu.oam[index] & 0xff;
+            let y = (ppu.oam[index] & 0xff00) >> 8;
+            let tile = ppu.oam[index + 1] & 0xff;
+            let ex = (ppu.oam[index + 1] & 0xff00) >> 8;
             
-            x |= (this.highOam[index >> 4] >> (index & 0xf) & 0x1) << 8;
-            let big = (this.highOam[index >> 4] >> (index & 0xf) & 0x2) > 0;
+            x |= (ppu.highOam[index >> 4] >> (index & 0xf) & 0x1) << 8;
+            let big = (ppu.highOam[index >> 4] >> (index & 0xf) & 0x2) > 0;
             x = x > 255 ? -(512 - x) : x;
 
-            let size = SnesPpu.spriteSizes[this.objSize + (big ? 8 : 0)];
+            let size = SnesPpu.spriteSizes[ppu.objSize + (big ? 8 : 0)];
             let sprRow = line - y;
             
-            if (sprRow < 0 || sprRow >= size * (this.objInterlace ? 4 : 8)) {
+            if (sprRow < 0 || sprRow >= size * (ppu.objInterlace ? 4 : 8)) {
                 sprRow = line + (256 - y);
             }
 
-            sprRow = this.objInterlace ? sprRow * 2 + (this.evenFrame ? 1 : 0) : sprRow;
-            let adr = this.sprAdr1 + ((ex & 0x1) > 0 ? this.sprAdr2 : 0);
+            sprRow = ppu.objInterlace ? sprRow * 2 + (ppu.evenFrame ? 1 : 0) : sprRow;
+            let adr = ppu.sprAdr1 + ((ex & 0x1) > 0 ? ppu.sprAdr2 : 0);
             sprRow = ((ex & 0x80) > 0) ? (size * 8) - 1 - sprRow : sprRow;
             let tileRow = sprRow >> 3;
             sprRow &= 0x7;
@@ -140,13 +145,13 @@
                     
                     for (let j = 0; j < 8; j++) {
                         // Decodes 4bpp pixel instantly combining the pre-decoded 2bpp bitplanes
-                        const tileData = this.vramCache[p1Idx + j] | (this.vramCache[p2Idx + j] << 2);
+                        const tileData = ppu.vramCache[p1Idx + j] | (ppu.vramCache[p2Idx + j] << 2);
                         
                         if (tileData > 0) {
                             let xInd = x + k * 8 + j;
                             if (xInd < 256 && xInd >= 0) {
-                                this.spriteLineBuffer[xInd] = 0x80 + paletteOffset + tileData;
-                                this.spritePrioBuffer[xInd] = prio;
+                                ppu.spriteLineBuffer[xInd] = 0x80 + paletteOffset + tileData;
+                                ppu.spritePrioBuffer[xInd] = prio;
                             }
                         }
                     }
@@ -154,9 +159,9 @@
                 }
             }
             if (sliverCount === 35) {
-                this.timeOver = true; // Hardware Time Over Flag
+                ppu.timeOver = true; // Hardware Time Over Flag
                 break;
             }
         }
-    };
+    }
 }

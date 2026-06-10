@@ -4,25 +4,17 @@
  * File: js/shared/presentation/UniversalInputManager.js
  * 
  * Role:
- * Presentation Layer: Universal Input Manager Service.
+ * Presentation/Infrastructure Layer: Universal Input Manager Service.
  * Centralizes keyboard event listeners, polls the HTML5 Gamepad API (gamepads), 
  * handles analog deadzones, and normalizes input triggers into a clean semantic 
  * virtual button map.
  * 
  * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Exclusively responsible for capturing, 
+ * - Single Responsibility Principle (SRP): Exclusively responsible for capturing, 
  *    monitoring, and translating physical inputs into generic semantic buttons. 
- *    It contains no knowledge of emulator register structures or execution loops.
- * 2. Open/Closed Principle (OCP): New keyboard configurations or custom gamepad 
- *    mappings can be registered in the mapping dictionary without modifying 
- *    the core event capture loops.
- * 3. Liskov Substitution Principle (LSP): Offers a clean, standardized read interface 
- *    (isPressed) that can be easily mocked or replaced for unit tests or automated macros.
- * 4. Interface Segregation Principle (ISP): Exposes only essential read-only button 
- *    states to client UIControllers, keeping the API minimal and targeted.
- * 5. Dependency Inversion Principle (DIP): UIControllers depend on this high-level 
- *    input abstraction rather than directly binding low-level DOM keyboard listeners 
- *    or hardcoding raw controller hardware offsets.
+ *    Completely decoupled from DOM/UI rendering logic (Toasts/Notifications).
+ * - Dependency Inversion Principle (DIP): Dispatches CustomEvents to communicate 
+ *    state changes to the presentation layers without coupling to UI components (Observer Pattern).
  */
 
 class UniversalInputManager {
@@ -106,16 +98,25 @@ class UniversalInputManager {
 
     /**
      * Sets up hardware connection triggers to detect Gamepads.
+     * Dispatches decoupled CustomEvents to the DOM instead of rendering UI.
      */
     bindGamepadConnectionEvents() {
         window.addEventListener("gamepadconnected", (e) => {
             console.log(`[UniversalInputManager] Gamepad connected: [${e.gamepad.id}]`);
-            this.showNotification(`Controller detected: ${e.gamepad.id.substring(0, 24)}...`);
+            
+            // SOLID Fix: Dispatch decoupled CustomEvent (Observer Pattern)
+            window.dispatchEvent(new CustomEvent("eggstation-gamepad-event", {
+                detail: { connected: true, id: e.gamepad.id }
+            }));
         });
 
         window.addEventListener("gamepaddisconnected", (e) => {
             console.log(`[UniversalInputManager] Gamepad disconnected: [${e.gamepad.id}]`);
-            this.showNotification(`Controller disconnected: ${e.gamepad.id.substring(0, 24)}...`);
+            
+            // SOLID Fix: Dispatch decoupled CustomEvent
+            window.dispatchEvent(new CustomEvent("eggstation-gamepad-event", {
+                detail: { connected: false, id: e.gamepad.id }
+            }));
             this.gamepadActive = null;
         });
     }
@@ -192,49 +193,6 @@ class UniversalInputManager {
      */
     isPressed(buttonName) {
         return this.virtualButtons[buttonName.toUpperCase()] === true;
-    }
-
-    /**
-     * Displays a retro-neon styled toast notification on Gamepad connections.
-     * @param {string} message - Notification text.
-     */
-    showNotification(message) {
-        let toast = document.getElementById('eggstation-gamepad-toast');
-        if (!toast) {
-            toast = document.createElement('div');
-            toast.id = 'eggstation-gamepad-toast';
-            toast.style.position = 'fixed';
-            toast.style.bottom = '24px';
-            toast.style.right = '24px';
-            toast.style.backgroundColor = 'rgba(20, 10, 35, 0.95)';
-            toast.style.border = '2px solid #ff007f';
-            toast.style.color = '#fff';
-            toast.style.padding = '14px 24px';
-            toast.style.borderRadius = '8px';
-            toast.style.fontFamily = 'monospace';
-            toast.style.fontSize = '0.9rem';
-            toast.style.fontWeight = 'bold';
-            toast.style.boxShadow = '0 0 20px rgba(255, 0, 127, 0.6)';
-            toast.style.zIndex = '99999';
-            toast.style.transition = 'opacity 0.3s ease, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
-            toast.style.transform = 'translateY(100px)';
-            toast.style.opacity = '0';
-            document.body.appendChild(toast);
-        }
-        toast.innerHTML = `<span style="color: #ff007f;">[EGGStation]</span> ${message}`;
-        
-        requestAnimationFrame(() => {
-            toast.style.transform = 'translateY(0)';
-            toast.style.opacity = '1';
-        });
-
-        if (toast.timeoutId) {
-            clearTimeout(toast.timeoutId);
-        }
-        toast.timeoutId = setTimeout(() => {
-            toast.style.transform = 'translateY(100px)';
-            toast.style.opacity = '0';
-        }, 4000);
     }
 }
 

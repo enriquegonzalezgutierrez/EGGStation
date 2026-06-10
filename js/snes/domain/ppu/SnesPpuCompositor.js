@@ -1,63 +1,72 @@
 /**
  * Project: EGGStation - Super Nintendo (SNES) Emulator
- * Component: SnesPpuCompositor (Scanlines Compositing & Canvas Output Extension)
+ * Author: Enrique González Gutiérrez
+ * File: js/snes/domain/ppu/SnesPpuCompositor.js
  * 
- * ROLE:
- * Handles window masks configurations, color blending equations, scanline rastering,
- * I/O ports reading/writing, and canvas blitting.
+ * Domain Layer: Super Nintendo (SNES) PPU Video Compositor
  * 
- * OPTIMIZATIONS APPLIED:
- * - PHASE 1: getColor and getColorFast now return the pre-allocated `this.pixelOutputCache` 
- *   instead of creating new short-lived arrays.
- * - PHASE 3: Fixed prototype collision. Intercepts VRAM writes at registers 0x18 and 0x19 
- *   inside the prototype `write` method to update `this.vramCache` in real-time.
+ * Role:
+ * Composites active backgrounds and prioritized sprites into a final scanline, 
+ * resolving window masking, mosaic, and advanced color blending mathematics 
+ * (transparency, addition, subtraction, half-color division).
+ * 
+ * SOLID Principles Applied:
+ * - Single Responsibility Principle (SRP): Exclusively responsible for scanline 
+ *   layer compositing and color blending calculations, delegating background 
+ *   fetching to SnesPpuBackground, sprites to SnesPpuSprite, and Mode 7 coordinates 
+ *   to SnesPpuMode7.
  */
 
-{
-    SnesPpu.prototype.renderLine = function(line) {
+class SnesPpuCompositor {
+    /**
+     * Composites a single scanline row, resolving layers priorities and color blending.
+     * @param {SnesPpu} ppu - The parent PPU instance context (DIP).
+     * @param {number} line - The active scanline index.
+     */
+    static renderLine(ppu, line) {
         if (line === 0) {
-            this.rangeOver = false;
-            this.timeOver = false;
-            this.frameOverscan = false;
-            this.frameInterlace = false;
-            this.spriteLineBuffer.fill(0);
-            if (!this.forcedBlank) {
-                this.evaluateSprites(0);
+            ppu.rangeOver = false;
+            ppu.timeOver = false;
+            ppu.frameOverscan = false;
+            ppu.frameInterlace = false;
+            ppu.spriteLineBuffer.fill(0);
+            if (!ppu.forcedBlank) {
+                SnesPpuSprite.buildSpriteCache(ppu);
             }
-        } else if (line === (this.frameOverscan ? 240 : 225)) {
-            if (!this.forcedBlank) {
-                this.oamAdr = this.oamRegAdr;
-                this.oamInHigh = this.oamRegInHigh;
-                this.oamSecond = false;
+        } else if (line === (ppu.frameOverscan ? 240 : 225)) {
+            if (!ppu.forcedBlank) {
+                ppu.oamAdr = ppu.oamRegAdr;
+                ppu.oamInHigh = ppu.oamRegInHigh;
+                ppu.oamSecond = false;
             }
-            this.frameInterlace = this.interlace;
-            this.evenFrame = !this.evenFrame;
-        } else if (line > 0 && line < (this.frameOverscan ? 240 : 225)) {
+            ppu.frameInterlace = ppu.interlace;
+            ppu.evenFrame = !ppu.evenFrame;
+        } else if (line > 0 && line < (ppu.frameOverscan ? 240 : 225)) {
             if (line === 1) {
-                this.mosaicStartLine = 1;
+                ppu.mosaicStartLine = 1;
             }
-            if (this.mode === 7) {
-                this.generateMode7Coords(line);
+            if (ppu.mode === 7) {
+                SnesPpuMode7.generateMode7Coords(ppu, line);
             }
 
             // High-speed window masks mapping
             for (let l = 0; l < 6; l++) {
-                const w1Enabled = this.window1Enabled[l];
-                const w2Enabled = this.window2Enabled[l];
-                const mask = this.windowMasks[l];
+                const w1Enabled = ppu.window1Enabled[l];
+                const w2Enabled = ppu.window2Enabled[l];
+                const mask = ppu.windowMasks[l];
                 
                 if (!w1Enabled && !w2Enabled) {
                     mask.fill(0);
                     continue;
                 }
 
-                const w1Inv = this.window1Inversed[l];
-                const w2Inv = this.window2Inversed[l];
-                const left1 = this.window1Left;
-                const right1 = this.window1Right;
-                const left2 = this.window2Left;
-                const right2 = this.window2Right;
-                const logic = this.windowMaskLogic[l];
+                const w1Inv = ppu.window1Inversed[l];
+                const w2Inv = ppu.window2Inversed[l];
+                const left1 = ppu.window1Left;
+                const right1 = ppu.window1Right;
+                const left2 = ppu.window2Left;
+                const right2 = ppu.window2Right;
+                const logic = ppu.windowMaskLogic[l];
 
                 for (let x = 0; x < 256; x++) {
                     let w1test = w1Enabled && (x >= left1 && x <= right1);
@@ -82,26 +91,26 @@
                 }
             }
 
-            this.lastTileFetchedX.fill(-1);
-            this.lastTileFetchedY.fill(-1);
-            this.optHorBuffer.fill(0);
-            this.optVerBuffer.fill(0);
-            this.lastOrigTileX.fill(-1);
+            ppu.lastTileFetchedX.fill(-1);
+            ppu.lastTileFetchedY.fill(-1);
+            ppu.optHorBuffer.fill(0);
+            ppu.optVerBuffer.fill(0);
+            ppu.lastOrigTileX.fill(-1);
 
-            const bMult = SnesPpu.brightnessMults[this.brightness];
+            const bMult = SnesPpu.brightnessMults[ppu.brightness];
             const lineOffset = line * 1536;
-            const colorClipValue = this.colorClip;
-            const colMask5 = this.windowMasks[5];
-            const pixelOut = this.pixelOutput;
-            const modeNum = this.mode;
-            const isPseudoHires = this.pseudoHires;
-            const isSubEnabled = this.addSub;
+            const colorClipValue = ppu.colorClip;
+            const colMask5 = ppu.windowMasks[5];
+            const pixelOut = ppu.pixelOutput;
+            const modeNum = ppu.mode;
+            const isPseudoHires = ppu.pseudoHires;
+            const isSubEnabled = ppu.addSub;
 
-            const useScanlineFastPath = !this.pseudoHires && (modeNum === 0 || modeNum === 1 || modeNum === 3);
+            const useScanlineFastPath = !ppu.pseudoHires && (modeNum === 0 || modeNum === 1 || modeNum === 3);
 
-            if (useScanlineFastPath && !this.forcedBlank) {
+            if (useScanlineFastPath && !ppu.forcedBlank) {
                 for (let l = 0; l < 4; l++) {
-                    this.renderBgScanline(l, line);
+                    SnesPpuBackground.renderBgScanline(ppu, l, line);
                 }
             }
 
@@ -110,8 +119,8 @@
                 let r1 = 0, g1 = 0, b1 = 0;
                 let r2 = 0, g2 = 0, b2 = 0;
 
-                if (!this.forcedBlank) {
-                    const colLay = useScanlineFastPath ? this.getColorFast(false, i, line) : this.getColor(false, i, line);
+                if (!ppu.forcedBlank) {
+                    const colLay = useScanlineFastPath ? this.getColorFast(ppu, false, i, line) : this.getColor(ppu, false, i, line);
                     const color = colLay[0];
                     const activeLayer = colLay[1];
                     const activePal = colLay[2];
@@ -129,13 +138,13 @@
                     }
 
                     let secondLayerNum = 5;
-                    const mathEnabled = this.getMathEnabled(i, activeLayer, activePal);
+                    const mathEnabled = this.getMathEnabled(ppu, i, activeLayer, activePal);
                     
                     if (
                         modeNum === 5 || modeNum === 6 || isPseudoHires ||
                         (mathEnabled && isSubEnabled)
                     ) {
-                        const secondLay = useScanlineFastPath ? this.getColorFast(true, i, line) : this.getColor(true, i, line);
+                        const secondLay = useScanlineFastPath ? this.getColorFast(ppu, true, i, line) : this.getColor(ppu, true, i, line);
                         r1 = secondLay[0] & 0x1f;
                         g1 = (secondLay[0] & 0x3e0) >> 5;
                         b1 = (secondLay[0] & 0x7c00) >> 10;
@@ -144,17 +153,17 @@
 
                     if (mathEnabled) {
                         const useSecondColor = isSubEnabled && secondLayerNum < 5;
-                        const mathR = useSecondColor ? r1 : this.fixedColorR;
-                        const mathG = useSecondColor ? g1 : this.fixedColorG;
-                        const mathB = useSecondColor ? b1 : this.fixedColorB;
+                        const mathR = useSecondColor ? r1 : ppu.fixedColorR;
+                        const mathG = useSecondColor ? g1 : ppu.fixedColorG;
+                        const mathB = useSecondColor ? b1 : ppu.fixedColorB;
 
-                        if (this.subtractColors) {
+                        if (ppu.subtractColors) {
                             r2 -= mathR; g2 -= mathG; b2 -= mathB;
                         } else {
                             r2 += mathR; g2 += mathG; b2 += mathB;
                         }
 
-                        if (this.halfColors && (secondLayerNum < 5 || !isSubEnabled)) {
+                        if (ppu.halfColors && (secondLayerNum < 5 || !isSubEnabled)) {
                             r2 >>= 1; g2 >>= 1; b2 >>= 1;
                         }
                         if (r2 > 31) r2 = 31; else if (r2 < 0) r2 = 0;
@@ -178,26 +187,29 @@
                 i++;
             }
 
-            this.spriteLineBuffer.fill(0);
-            if (!this.forcedBlank) {
-                this.evaluateSprites(line);
+            ppu.spriteLineBuffer.fill(0);
+            if (!ppu.forcedBlank) {
+                SnesPpuSprite.evaluateSprites(ppu, line);
             }
         }
-    };
+    }
 
-    SnesPpu.prototype.getColorFast = function(sub, x, y) {
-        let modeIndex = this.layer3Prio && this.mode === 1 ? 96 : 12 * this.mode;
-        modeIndex = this.mode7ExBg && this.mode === 7 ? 108 : modeIndex;
-        let count = SnesPpu.layercountPerMode[this.mode];
+    /**
+     * Fast-path pixel color selector (bypasses heavy pseudo-hires and scaling transformations).
+     */
+    static getColorFast(ppu, sub, x, y) {
+        let modeIndex = ppu.layer3Prio && ppu.mode === 1 ? 96 : 12 * ppu.mode;
+        modeIndex = ppu.mode7ExBg && ppu.mode === 7 ? 108 : modeIndex;
+        let count = SnesPpu.layercountPerMode[ppu.mode];
 
         let pixel = 0;
         let layer = 5;
 
-        const subEnabled = this.subScreenEnabled;
-        const mainEnabled = this.mainScreenEnabled;
-        const subWindow = this.subScreenWindow;
-        const mainWindow = this.mainScreenWindow;
-        const winMasks = this.windowMasks;
+        const subEnabled = ppu.subScreenEnabled;
+        const mainEnabled = ppu.mainScreenEnabled;
+        const subWindow = ppu.subScreenWindow;
+        const mainWindow = ppu.mainScreenWindow;
+        const winMasks = ppu.windowMasks;
 
         let j;
         for (j = 0; j < count; j++) {
@@ -207,17 +219,17 @@
 
             if (isVisible && (!isWindowRestricted || winMasks[layer][x] === 0)) {
                 if (layer < 4) {
-                    const priority = this.bgPriorityBuffers[layer][x];
+                    const priority = ppu.bgPriorityBuffers[layer][x];
                     if (priority === SnesPpu.prioPerMode[modeIndex + j]) {
-                        const colorIdx = this.bgBuffers[layer][x];
+                        const colorIdx = ppu.bgBuffers[layer][x];
                         if (colorIdx !== 0) {
                             pixel = colorIdx;
                             break;
                         }
                     }
                 } else {
-                    if (this.spritePrioBuffer[x] === SnesPpu.prioPerMode[modeIndex + j]) {
-                        const colorIdx = this.spriteLineBuffer[x];
+                    if (ppu.spritePrioBuffer[x] === SnesPpu.prioPerMode[modeIndex + j]) {
+                        const colorIdx = ppu.spriteLineBuffer[x];
                         if (colorIdx !== 0) {
                             pixel = colorIdx;
                             break;
@@ -228,11 +240,11 @@
         }
 
         layer = j === count ? 5 : layer;
-        let color = this.cgram[pixel & 0xff];
+        let color = ppu.cgram[pixel & 0xff];
         
         if (
-            this.directColor && layer < 4 &&
-            SnesPpu.bitPerMode[this.mode * 4 + layer] === 8
+            ppu.directColor && layer < 4 &&
+            SnesPpu.bitPerMode[ppu.mode * 4 + layer] === 8
         ) {
             let r = ((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7);
             let g = ((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8);
@@ -240,28 +252,31 @@
             color = (b << 10) | (g << 5) | r;
         }
 
-        this.pixelOutputCache[0] = color;
-        this.pixelOutputCache[1] = layer;
-        this.pixelOutputCache[2] = pixel;
-        return this.pixelOutputCache;
-    };
+        ppu.pixelOutputCache[0] = color;
+        ppu.pixelOutputCache[1] = layer;
+        ppu.pixelOutputCache[2] = pixel;
+        return ppu.pixelOutputCache;
+    }
 
-    SnesPpu.prototype.getColor = function(sub, x, y) {
-        let modeIndex = this.layer3Prio && this.mode === 1 ? 96 : 12 * this.mode;
-        modeIndex = this.mode7ExBg && this.mode === 7 ? 108 : modeIndex;
-        let count = SnesPpu.layercountPerMode[this.mode];
+    /**
+     * Full-path pixel color selector (supports advanced interlace, mosaic, and offsets-per-tile).
+     */
+    static getColor(ppu, sub, x, y) {
+        let modeIndex = ppu.layer3Prio && ppu.mode === 1 ? 96 : 12 * ppu.mode;
+        modeIndex = ppu.mode7ExBg && ppu.mode === 7 ? 108 : modeIndex;
+        let count = SnesPpu.layercountPerMode[ppu.mode];
 
         let pixel = 0;
         let layer = 5;
-        if (this.interlace && (this.mode === 5 || this.mode === 6)) {
-            y = y * 2 + (this.evenFrame ? 1 : 0);
+        if (ppu.interlace && (ppu.mode === 5 || ppu.mode === 6)) {
+            y = y * 2 + (ppu.evenFrame ? 1 : 0);
         }
 
-        const subEnabled = this.subScreenEnabled;
-        const mainEnabled = this.mainScreenEnabled;
-        const subWindow = this.subScreenWindow;
-        const mainWindow = this.mainScreenWindow;
-        const winMasks = this.windowMasks;
+        const subEnabled = ppu.subScreenEnabled;
+        const mainEnabled = ppu.mainScreenEnabled;
+        const subWindow = ppu.subScreenWindow;
+        const mainWindow = ppu.mainScreenWindow;
+        const winMasks = ppu.windowMasks;
 
         let j;
         for (j = 0; j < count; j++) {
@@ -273,56 +288,59 @@
             const isWindowRestricted = sub ? subWindow[layer] : mainWindow[layer];
 
             if (isVisible && (!isWindowRestricted || winMasks[layer][lx] === 0)) {
-                if (this.mosaicEnabled[layer]) {
-                    lx -= lx % this.mosaicSize;
-                    ly -= (ly - this.mosaicStartLine) % this.mosaicSize;
+                if (ppu.mosaicEnabled[layer]) {
+                    lx -= lx % ppu.mosaicSize;
+                    ly -= (ly - ppu.mosaicStartLine) % ppu.mosaicSize;
                 }
-                lx += this.mode === 7 ? 0 : this.bgHoff[layer];
-                ly += this.mode === 7 ? 0 : this.bgVoff[layer];
-                let optX = lx - this.bgHoff[layer];
-                if ((this.mode === 5 || this.mode === 6) && layer < 4) {
+                lx += ppu.mode === 7 ? 0 : ppu.bgHoff[layer];
+                ly += ppu.mode === 7 ? 0 : ppu.bgVoff[layer];
+                let optX = lx - ppu.bgHoff[layer];
+                if ((ppu.mode === 5 || ppu.mode === 6) && layer < 4) {
                     lx = lx * 2 + (sub ? 0 : 1);
                     optX = optX * 2 + (sub ? 0 : 1);
                 }
 
-                if ((this.mode === 2 || this.mode === 4 || this.mode === 6) && layer < 2) {
+                if ((ppu.mode === 2 || ppu.mode === 4 || ppu.mode === 6) && layer < 2) {
                     let andVal = layer === 0 ? 0x2000 : 0x4000;
                     if (x === 0) {
-                        this.lastOrigTileX[layer] = lx >> 3;
+                        ppu.lastOrigTileX[layer] = lx >> 3;
                     }
                     let tileStartX = optX - (lx - (lx & 0xfff8));
-                    if ((lx >> 3) !== this.lastOrigTileX[layer] && x > 0) {
-                        this.fetchTileInBuffer(
-                            this.bgHoff[2] + ((tileStartX - 1) & 0x1f8),
-                            this.bgVoff[2], 2, true
+                    if ((lx >> 3) !== ppu.lastOrigTileX[layer] && x > 0) {
+                        SnesPpuBackground.fetchTileInBuffer(
+                            ppu,
+                            ppu.bgHoff[2] + ((tileStartX - 1) & 0x1f8),
+                            ppu.bgVoff[2], 2, true
                         );
-                        this.optHorBuffer[layer] = this.tilemapBuffer[2];
-                        if (this.mode === 4) {
-                            if ((this.optHorBuffer[layer] & 0x8000) > 0) {
-                                this.optVerBuffer[layer] = this.optHorBuffer[layer];
-                                this.optHorBuffer[layer] = 0;
+                        ppu.optHorBuffer[layer] = ppu.tilemapBuffer[2];
+                        if (ppu.mode === 4) {
+                            if ((ppu.optHorBuffer[layer] & 0x8000) > 0) {
+                                ppu.optVerBuffer[layer] = ppu.optHorBuffer[layer];
+                                ppu.optHorBuffer[layer] = 0;
                             } else {
-                                this.optVerBuffer[layer] = 0;
+                                ppu.optVerBuffer[layer] = 0;
                             }
                         } else {
-                            this.fetchTileInBuffer(
-                                this.bgHoff[2] + ((tileStartX - 1) & 0x1f8),
-                                this.bgVoff[2] + 8, 2, true
+                            SnesPpuBackground.fetchTileInBuffer(
+                                ppu,
+                                ppu.bgHoff[2] + ((tileStartX - 1) & 0x1f8),
+                                ppu.bgVoff[2] + 8, 2, true
                             );
-                            this.optVerBuffer[layer] = this.tilemapBuffer[2];
+                            ppu.optVerBuffer[layer] = ppu.tilemapBuffer[2];
                         }
-                        this.lastOrigTileX[layer] = lx >> 3;
+                        ppu.lastOrigTileX[layer] = lx >> 3;
                     }
-                    if ((this.optHorBuffer[layer] & andVal) > 0) {
+                    if ((ppu.optHorBuffer[layer] & andVal) > 0) {
                         let add = ((tileStartX + 7) & 0x1f8);
-                        lx = (lx & 0x7) + ((this.optHorBuffer[layer] + add) & 0x1ff8);
+                        lx = (lx & 0x7) + ((ppu.optHorBuffer[layer] + add) & 0x1ff8);
                     }
-                    if ((this.optVerBuffer[layer] & andVal) > 0) {
-                        ly = (this.optVerBuffer[layer] & 0x1fff) + (ly - this.bgVoff[layer]);
+                    if ((ppu.optVerBuffer[layer] & andVal) > 0) {
+                        ly = (ppu.optVerBuffer[layer] & 0x1fff) + (ly - ppu.bgVoff[layer]);
                     }
                 }
 
                 pixel = this.getPixelForLayer(
+                    ppu,
                     lx, ly,
                     layer,
                     SnesPpu.prioPerMode[modeIndex + j]
@@ -333,10 +351,10 @@
             }
         }
         layer = j === count ? 5 : layer;
-        let color = this.cgram[pixel & 0xff];
+        let color = ppu.cgram[pixel & 0xff];
         if (
-            this.directColor && layer < 4 &&
-            SnesPpu.bitPerMode[this.mode * 4 + layer] === 8
+            ppu.directColor && layer < 4 &&
+            SnesPpu.bitPerMode[ppu.mode * 4 + layer] === 8
         ) {
             let r = ((pixel & 0x7) << 2) | ((pixel & 0x100) >> 7);
             let g = ((pixel & 0x38) >> 1) | ((pixel & 0x200) >> 8);
@@ -344,563 +362,107 @@
             color = (b << 10) | (g << 5) | r;
         }
 
-        this.pixelOutputCache[0] = color;
-        this.pixelOutputCache[1] = layer;
-        this.pixelOutputCache[2] = pixel;
-        return this.pixelOutputCache;
-    };
+        ppu.pixelOutputCache[0] = color;
+        ppu.pixelOutputCache[1] = layer;
+        ppu.pixelOutputCache[2] = pixel;
+        return ppu.pixelOutputCache;
+    }
 
-    SnesPpu.prototype.getWindowState = function(x, l) {
-        return this.windowMasks[l][x] === 1;
-    };
+    static getWindowState(ppu, x, l) {
+        return ppu.windowMasks[l][x] === 1;
+    }
 
-    SnesPpu.prototype.getMathEnabled = function(x, l, pal) {
+    /**
+     * Checks if color math operations are enabled for the target pixel.
+     */
+    static getMathEnabled(ppu, x, l, pal) {
         if (
-            this.preventMath === 3 ||
-            (this.preventMath === 2 && this.windowMasks[5][x] === 1) ||
-            (this.preventMath === 1 && this.windowMasks[5][x] === 0)
+            ppu.preventMath === 3 ||
+            (ppu.preventMath === 2 && ppu.windowMasks[5][x] === 1) ||
+            (ppu.preventMath === 1 && ppu.windowMasks[5][x] === 0)
         ) {
             return false;
         }
-        if (this.mathEnabled[l] && (l !== 4 || pal >= 0xc0)) {
+        if (ppu.mathEnabled[l] && (l !== 4 || pal >= 0xc0)) {
             return true;
         }
         return false;
-    };
+    }
 
-    SnesPpu.prototype.getPixelForLayer = function(x, y, l, p) {
+    /**
+     * Returns the color index and priority for the target active background/sprite layer.
+     */
+    static getPixelForLayer(ppu, x, y, l, p) {
         if (l > 3) {
-            if (this.spritePrioBuffer[x] !== p) {
+            if (ppu.spritePrioBuffer[x] !== p) {
                 return 0;
             }
-            return this.spriteLineBuffer[x];
+            return ppu.spriteLineBuffer[x];
         }
 
-        if (this.mode === 7) {
-            return this.getMode7Pixel(x, y, l, p);
+        if (ppu.mode === 7) {
+            return SnesPpuMode7.getMode7Pixel(ppu, x, y, l, p);
         }
 
         const currentXTile = x >> 3;
         if (
-            currentXTile !== this.lastTileFetchedX[l] ||
-            y !== this.lastTileFetchedY[l]
+            currentXTile !== ppu.lastTileFetchedX[l] ||
+            y !== ppu.lastTileFetchedY[l]
         ) {
-            this.fetchTileInBuffer(x, y, l, false);
-            this.lastTileFetchedX[l] = currentXTile;
-            this.lastTileFetchedY[l] = y;
+            SnesPpuBackground.fetchTileInBuffer(ppu, x, y, l, false);
+            ppu.lastTileFetchedX[l] = currentXTile;
+            ppu.lastTileFetchedY[l] = y;
         }
 
-        let mapWord = this.tilemapBuffer[l];
+        let mapWord = ppu.tilemapBuffer[l];
         if (((mapWord & 0x2000) >> 13) !== p) {
             return 0;
         }
 
-        const tileData = this.decodedRow[l][x & 0x7];
+        const tileData = ppu.decodedRow[l][x & 0x7];
         if (tileData === 0) return 0;
 
         let paletteNum = (mapWord & 0x1c00) >> 10;
-        paletteNum += this.mode === 0 ? l * 8 : 0;
+        paletteNum += ppu.mode === 0 ? l * 8 : 0;
 
-        let bits = SnesPpu.bitPerMode[this.mode * 4 + l];
+        let bits = SnesPpu.bitPerMode[ppu.mode * 4 + l];
         let mul = bits === 2 ? 4 : (bits === 4 ? 16 : 256);
 
         return paletteNum * mul + tileData;
-    };
-
-    SnesPpu.prototype.read = function(adr) {
-        switch (adr) {
-            case 0x34: {
-                return this.multResult & 0xff;
-            }
-            case 0x35: {
-                return (this.multResult & 0xff00) >> 8;
-            }
-            case 0x36: {
-                return (this.multResult & 0xff0000) >> 16;
-            }
-            case 0x37: {
-                if (this.snes.ppuLatch) {
-                    this.latchedHpos = this.snes.xPos >> 2;
-                    this.latchedVpos = this.snes.yPos;
-                    this.countersLatched = true;
-                }
-                return this.snes.openBus;
-            }
-            case 0x38: {
-                let val;
-                if (!this.oamSecond) {
-                    if (this.oamInHigh) {
-                        val = this.highOam[this.oamAdr & 0xf] & 0xff;
-                    } else {
-                        val = this.oam[this.oamAdr] & 0xff;
-                    }
-                    this.oamSecond = true;
-                } else {
-                    if (this.oamInHigh) {
-                        val = this.highOam[this.oamAdr & 0xf] >> 8;
-                    } else {
-                        val = this.oam[this.oamAdr] >> 8;
-                    }
-                    this.oamAdr++;
-                    this.oamAdr &= 0xff;
-                    this.oamInHigh = (
-                        this.oamAdr === 0
-                    ) ? !this.oamInHigh : this.oamInHigh;
-                    this.oamSecond = false;
-                }
-                return val;
-            }
-            case 0x39: {
-                let val = this.vramReadBuffer;
-                if (!this.vramIncOnHigh) {
-                    this.vramReadBuffer = this.vram[this.getVramRemap()];
-                    this.vramAdr += this.vramInc;
-                    this.vramAdr &= 0xffff;
-                }
-                return val & 0xff;
-            }
-            case 0x3a: {
-                let val = this.vramReadBuffer;
-                if (this.vramIncOnHigh) {
-                    this.vramReadBuffer = this.vram[this.getVramRemap()];
-                    this.vramAdr += this.vramInc;
-                    this.vramAdr &= 0xffff;
-                }
-                return (val & 0xff00) >> 8;
-            }
-            case 0x3b: {
-                let val;
-                if (!this.cgramSecond) {
-                    val = this.cgram[this.cgramAdr] & 0xff;
-                    this.cgramSecond = true;
-                } else {
-                    val = this.cgram[this.cgramAdr++] >> 8;
-                    this.cgramAdr &= 0xff;
-                    this.cgramSecond = false;
-                }
-                return val;
-            }
-            case 0x3c: {
-                let val;
-                if (!this.latchHsecond) {
-                    val = this.latchedHpos & 0xff;
-                    this.latchHsecond = true;
-                } else {
-                    val = (this.latchedHpos & 0xff00) >> 8;
-                    this.latchHsecond = false;
-                }
-                return val;
-            }
-            case 0x3d: {
-                let val;
-                if (!this.latchVsecond) {
-                    val = this.latchedVpos & 0xff;
-                    this.latchVsecond = true;
-                } else {
-                    val = (this.latchedVpos & 0xff00) >> 8;
-                    this.latchVsecond = false;
-                }
-                return val;
-            }
-            case 0x3e: {
-                let val = this.timeOver ? 0x80 : 0;
-                val |= this.rangeOver ? 0x40 : 0;
-                val |= this.isPal ? 0x10 : 0;
-                return val | 0x1;
-            }
-            case 0x3f: {
-                let val = this.evenFrame ? 0x80 : 0;
-                val |= this.countersLatched ? 0x40 : 0;
-                val |= this.isPal ? 0x10 : 0;
-                if (this.snes.ppuLatch) {
-                    this.countersLatched = false;
-                }
-                this.latchHsecond = false;
-                this.latchVsecond = false;
-                return val | 0x3;
-            }
-        }
-        return this.snes.openBus;
     }
 
-    SnesPpu.prototype.write = function(adr, value) {
-        switch (adr) {
-            case 0x00: {
-                this.forcedBlank = (value & 0x80) > 0;
-                this.brightness = value & 0xf;
-                return;
-            }
-            case 0x01: {
-                this.sprAdr1 = (value & 0x7) << 13;
-                this.sprAdr2 = ((value & 0x18) + 8) << 9;
-                this.objSize = (value & 0xe0) >> 5;
-                return;
-            }
-            case 0x02: {
-                this.oamAdr = value;
-                this.oamRegAdr = this.oamAdr;
-                this.oamInHigh = this.oamRegInHigh;
-                this.oamSecond = false;
-                return;
-            }
-            case 0x03: {
-                this.oamInHigh = (value & 0x1) > 0;
-                this.objPriority = (value & 0x80) > 0;
-                this.oamAdr = this.oamRegAdr;
-                this.oamRegInHigh = this.oamInHigh;
-                this.oamSecond = false;
-                return;
-            }
-            case 0x04: {
-                if (!this.oamSecond) {
-                    if (this.oamInHigh) {
-                        this.highOam[this.oamAdr & 0xf] = (this.highOam[this.oamAdr & 0xf] & 0xff00) | value;
-                    } else {
-                        this.oamBuffer = (this.oamBuffer & 0xff00) | value;
-                    }
-                    this.oamSecond = true;
-                } else {
-                    if (this.oamInHigh) {
-                        this.highOam[this.oamAdr & 0xf] = (this.highOam[this.oamAdr & 0xf] & 0xff) | (value << 8);
-                    } else {
-                        this.oamBuffer = (this.oamBuffer & 0xff) | (value << 8);
-                        this.oam[this.oamAdr] = this.oamBuffer;
-                    }
-                    this.oamAdr++;
-                    this.oamAdr &= 0xff;
-                    this.oamInHigh = (this.oamAdr === 0) ? !this.oamInHigh : this.oamInHigh;
-                    this.oamSecond = false;
-                }
-                return;
-            }
-            case 0x05: {
-                this.mode = value & 0x7;
-                this.layer3Prio = (value & 0x08) > 0;
-                this.bigTiles[0] = (value & 0x10) > 0;
-                this.bigTiles[1] = (value & 0x20) > 0;
-                this.bigTiles[2] = (value & 0x40) > 0;
-                this.bigTiles[3] = (value & 0x80) > 0;
-                return;
-            }
-            case 0x06: {
-                this.mosaicEnabled[0] = (value & 0x1) > 0;
-                this.mosaicEnabled[1] = (value & 0x2) > 0;
-                this.mosaicEnabled[2] = (value & 0x4) > 0;
-                this.mosaicEnabled[3] = (value & 0x8) > 0;
-                this.mosaicSize = ((value & 0xf0) >> 4) + 1;
-                this.mosaicStartLine = this.snes.yPos;
-                return;
-            }
-            case 0x07:
-            case 0x08:
-            case 0x09:
-            case 0x0a: {
-                this.tilemapWider[adr - 7] = (value & 0x1) > 0;
-                this.tilemapHigher[adr - 7] = (value & 0x2) > 0;
-                this.tilemapAdr[adr - 7] = (value & 0xfc) << 8;
-                return;
-            }
-            case 0x0b: {
-                this.tileAdr[0] = (value & 0xf) << 12;
-                this.tileAdr[1] = (value & 0xf0) << 8;
-                return;
-            }
-            case 0x0c: {
-                this.tileAdr[2] = (value & 0xf) << 12;
-                this.tileAdr[3] = (value & 0xf0) << 8;
-                return;
-            }
-            case 0x0d: {
-                this.mode7Hoff = this.get13Signed((value << 8) | this.mode7Prev);
-                this.mode7Prev = value;
-            }
-            case 0x0f:
-            case 0x11:
-            case 0x13: {
-                this.bgHoff[(adr - 0xd) >> 1] = (value << 8) | (this.offPrev1 & 0xf8) | (this.offPrev2 & 0x7);
-                this.offPrev1 = value;
-                this.offPrev2 = value;
-                return;
-            }
-            case 0x0e: {
-                this.mode7Voff = this.get13Signed((value << 8) | this.mode7Prev);
-                this.mode7Prev = value;
-            }
-            case 0x10:
-            case 0x12:
-            case 0x14: {
-                this.bgVoff[(adr - 0xe) >> 1] = (value << 8) | (this.offPrev1 & 0xff);
-                this.offPrev1 = value;
-                return;
-            }
-            case 0x15: {
-                let incVal = value & 0x3;
-                if (incVal === 0) {
-                    this.vramInc = 1;
-                } else if (incVal === 1) {
-                    this.vramInc = 32;
-                } else {
-                    this.vramInc = 128;
-                }
-                this.vramRemap = (value & 0x0c) >> 2;
-                this.vramIncOnHigh = (value & 0x80) > 0;
-                return;
-            }
-            case 0x16: {
-                this.vramAdr = (this.vramAdr & 0xff00) | value;
-                this.vramReadBuffer = this.vram[this.getVramRemap()];
-                return;
-            }
-            case 0x17: {
-                this.vramAdr = (this.vramAdr & 0xff) | (value << 8);
-                this.vramReadBuffer = this.vram[this.getVramRemap()];
-                return;
-            }
-            case 0x18: {
-                let adrV = this.getVramRemap();
-                this.vram[adrV] = (this.vram[adrV] & 0xff00) | value;
-                
-                // CACHE INTERCEPT TRIGGERED FROM PROTOTYPE
-                this.updateVramCache(adrV, this.vram[adrV]);
-
-                if (!this.vramIncOnHigh) {
-                    this.vramAdr += this.vramInc;
-                    this.vramAdr &= 0xffff;
-                }
-                return;
-            }
-            case 0x19: {
-                let adrV = this.getVramRemap();
-                this.vram[adrV] = (this.vram[adrV] & 0xff) | (value << 8);
-                
-                // CACHE INTERCEPT TRIGGERED FROM PROTOTYPE
-                this.updateVramCache(adrV, this.vram[adrV]);
-
-                if (this.vramIncOnHigh) {
-                    this.vramAdr += this.vramInc;
-                    this.vramAdr &= 0xffff;
-                }
-                return;
-            }
-            case 0x1a: {
-                this.mode7LargeField = (value & 0x80) > 0;
-                this.mode7Char0fill = (value & 0x40) > 0;
-                this.mode7FlipY = (value & 0x2) > 0;
-                this.mode7FlipX = (value & 0x1) > 0;
-                return;
-            }
-            case 0x1b: {
-                this.mode7A = this.get16Signed((value << 8) | this.mode7Prev);
-                this.mode7Prev = value;
-                this.multResult = this.getMultResult(this.mode7A, this.mode7B);
-                return;
-            }
-            case 0x1c: {
-                this.mode7B = this.get16Signed((value << 8) | this.mode7Prev);
-                this.mode7Prev = value;
-                this.multResult = this.getMultResult(this.mode7A, this.mode7B);
-                return;
-            }
-            case 0x1d: {
-                this.mode7C = this.get16Signed((value << 8) | this.mode7Prev);
-                this.mode7Prev = value;
-                return;
-            }
-            case 0x1e: {
-                this.mode7D = this.get16Signed((value << 8) | this.mode7Prev);
-                this.mode7Prev = value;
-                return;
-            }
-            case 0x1f: {
-                this.mode7X = this.get13Signed((value << 8) | this.mode7Prev);
-                this.mode7Prev = value;
-                return;
-            }
-            case 0x20: {
-                this.mode7Y = this.get13Signed((value << 8) | this.mode7Prev);
-                this.mode7Prev = value;
-                return;
-            }
-            case 0x21: {
-                this.cgramAdr = value;
-                this.cgramSecond = false;
-                return;
-            }
-            case 0x22: {
-                if (!this.cgramSecond) {
-                    this.cgramBuffer = (this.cgramBuffer & 0xff00) | value;
-                    this.cgramSecond = true;
-                } else {
-                    this.cgramBuffer = (this.cgramBuffer & 0xff) | (value << 8);
-                    this.cgram[this.cgramAdr++] = this.cgramBuffer;
-                    this.cgramAdr &= 0xff;
-                    this.cgramSecond = false;
-                }
-                return;
-            }
-            case 0x23: {
-                this.window1Inversed[0] = (value & 0x01) > 0;
-                this.window1Enabled[0] = (value & 0x02) > 0;
-                this.window2Inversed[0] = (value & 0x04) > 0;
-                this.window2Enabled[0] = (value & 0x08) > 0;
-                this.window1Inversed[1] = (value & 0x10) > 0;
-                this.window1Enabled[1] = (value & 0x20) > 0;
-                this.window2Inversed[1] = (value & 0x40) > 0;
-                this.window2Enabled[1] = (value & 0x80) > 0;
-                return;
-            }
-            case 0x24: {
-                this.window1Inversed[2] = (value & 0x01) > 0;
-                this.window1Enabled[2] = (value & 0x02) > 0;
-                this.window2Inversed[2] = (value & 0x04) > 0;
-                this.window2Enabled[2] = (value & 0x08) > 0;
-                this.window1Inversed[3] = (value & 0x10) > 0;
-                this.window1Enabled[3] = (value & 0x20) > 0;
-                this.window2Inversed[3] = (value & 0x40) > 0;
-                this.window2Enabled[3] = (value & 0x80) > 0;
-                return;
-            }
-            case 0x25: {
-                this.window1Inversed[4] = (value & 0x01) > 0;
-                this.window1Enabled[4] = (value & 0x02) > 0;
-                this.window2Inversed[4] = (value & 0x04) > 0;
-                this.window2Enabled[4] = (value & 0x08) > 0;
-                this.window1Inversed[5] = (value & 0x10) > 0;
-                this.window1Enabled[5] = (value & 0x20) > 0;
-                this.window2Inversed[5] = (value & 0x40) > 0;
-                this.window2Enabled[5] = (value & 0x80) > 0;
-                return;
-            }
-            case 0x26: {
-                this.window1Left = value;
-                return;
-            }
-            case 0x27: {
-                this.window1Right = value;
-                return;
-            }
-            case 0x28: {
-                this.window2Left = value;
-                return;
-            }
-            case 0x29: {
-                this.window2Right = value;
-                return;
-            }
-            case 0x2a: {
-                this.windowMaskLogic[0] = value & 0x3;
-                this.windowMaskLogic[1] = (value & 0xc) >> 2;
-                this.windowMaskLogic[2] = (value & 0x30) >> 4;
-                this.windowMaskLogic[3] = (value & 0xc0) >> 6;
-                return;
-            }
-            case 0x2b: {
-                this.windowMaskLogic[4] = value & 0x3;
-                this.windowMaskLogic[5] = (value & 0xc) >> 2;
-                return;
-            }
-            case 0x2c: {
-                this.mainScreenEnabled[0] = (value & 0x1) > 0;
-                this.mainScreenEnabled[1] = (value & 0x2) > 0;
-                this.mainScreenEnabled[2] = (value & 0x4) > 0;
-                this.mainScreenEnabled[3] = (value & 0x8) > 0;
-                this.mainScreenEnabled[4] = (value & 0x10) > 0;
-                return;
-            }
-            case 0x2d: {
-                this.subScreenEnabled[0] = (value & 0x1) > 0;
-                this.subScreenEnabled[1] = (value & 0x2) > 0;
-                this.subScreenEnabled[2] = (value & 0x4) > 0;
-                this.subScreenEnabled[3] = (value & 0x8) > 0;
-                this.subScreenEnabled[4] = (value & 0x10) > 0;
-                return;
-            }
-            case 0x2e: {
-                this.mainScreenWindow[0] = (value & 0x1) > 0;
-                this.mainScreenWindow[1] = (value & 0x2) > 0;
-                this.mainScreenWindow[2] = (value & 0x4) > 0;
-                this.mainScreenWindow[3] = (value & 0x8) > 0;
-                this.mainScreenWindow[4] = (value & 0x10) > 0;
-                return;
-            }
-            case 0x2f: {
-                this.subScreenWindow[0] = (value & 0x1) > 0;
-                this.subScreenWindow[1] = (value & 0x2) > 0;
-                this.subScreenWindow[2] = (value & 0x4) > 0;
-                this.subScreenWindow[3] = (value & 0x8) > 0;
-                this.subScreenWindow[4] = (value & 0x10) > 0;
-                return;
-            }
-            case 0x30: {
-                this.colorClip = (value & 0xc0) >> 6;
-                this.preventMath = (value & 0x30) >> 4;
-                this.addSub = (value & 0x2) > 0;
-                this.directColor = (value & 0x1) > 0;
-                return;
-            }
-            case 0x31: {
-                this.subtractColors = (value & 0x80) > 0;
-                this.halfColors = (value & 0x40) > 0;
-                this.mathEnabled[0] = (value & 0x1) > 0;
-                this.mathEnabled[1] = (value & 0x2) > 0;
-                this.mathEnabled[2] = (value & 0x4) > 0;
-                this.mathEnabled[3] = (value & 0x8) > 0;
-                this.mathEnabled[4] = (value & 0x10) > 0;
-                this.mathEnabled[5] = (value & 0x20) > 0;
-                return;
-            }
-            case 0x32: {
-                if ((value & 0x80) > 0) {
-                    this.fixedColorB = value & 0x1f;
-                }
-                if ((value & 0x40) > 0) {
-                    this.fixedColorG = value & 0x1f;
-                }
-                if ((value & 0x20) > 0) {
-                    this.fixedColorR = value & 0x1f;
-                }
-                return;
-            }
-            case 0x33: {
-                this.mode7ExBg = (value & 0x40) > 0;
-                this.pseudoHires = (value & 0x08) > 0;
-                this.overscan = (value & 0x04) > 0;
-                this.objInterlace = (value & 0x02) > 0;
-                this.interlace = (value & 0x01) > 0;
-                return;
-            }
-        }
-    };
-
-    SnesPpu.prototype.setPixels = function(arr) {
-        if (!this.frameOverscan) {
+    /**
+     * High-speed copy of raw pixels buffer into the canvas ImageData object.
+     */
+    static setPixels(ppu, arr) {
+        if (!ppu.frameOverscan) {
             arr.fill(0, 0, 32768);
             arr.fill(0, 950272, 983040);
         }
 
-        let addY = this.frameOverscan ? 0 : 14;
+        let addY = ppu.frameOverscan ? 0 : 14;
 
-        for (let i = 512; i < 512 * (this.frameOverscan ? 240 : 225); i++) {
+        for (let i = 512; i < 512 * (ppu.frameOverscan ? 240 : 225); i++) {
             let x = i % 512;
             let y = (i >> 9) * 2;
             let ind = ((y + addY) * 512 + x) * 4;
-            let r = this.pixelOutput[i * 3];
-            let g = this.pixelOutput[i * 3 + 1];
-            let b = this.pixelOutput[i * 3 + 2];
+            let r = ppu.pixelOutput[i * 3];
+            let g = ppu.pixelOutput[i * 3 + 1];
+            let b = ppu.pixelOutput[i * 3 + 2];
             
-            if (!this.frameInterlace || this.evenFrame) {
+            if (!ppu.frameInterlace || ppu.evenFrame) {
                 arr[ind] = r;
                 arr[ind + 1] = g;
                 arr[ind + 2] = b;
                 arr[ind + 3] = 255;
             }
             ind += 2048;
-            if (!this.frameInterlace || !this.evenFrame) {
+            if (!ppu.frameInterlace || !ppu.evenFrame) {
                 arr[ind] = r;
                 arr[ind + 1] = g;
                 arr[ind + 2] = b;
                 arr[ind + 3] = 255;
             }
         }
-    };
+    }
 }
