@@ -9,7 +9,7 @@ Welcome, developer! This manual is designed to explain the inner physical workin
 
 To understand how the Sega Genesis functions, think of it as a **dual-engine sports car**:
 
-```
+```text
 +-------------------------------------------------------------------------+
 |                               THE CAR                                   |
 |                                                                         |
@@ -52,7 +52,7 @@ The main CPU of the Genesis is the **Motorola 68000**, running at **7.67 MHz** (
 ### CPU Registers (D0-D7 and A0-A7)
 The 68000 contains 16 main 32-bit registers:
 
-```
+```text
         Data Registers (D0 - D7)              Address Registers (A0 - A7)
 +-----------------------------------+     +-----------------------------------+
 |  D0 (Data / Math)                 |     |  A0 (Pointer / Offset)            |
@@ -83,7 +83,7 @@ To prevent the primary 68000 CPU from wasting cycles processing music, Sega incl
 ### The BUSREQ and RESET Handshake (Sharing the Road)
 Because both CPUs are connected to the motherboard, they cannot read and write to the same memory spaces at the same time without colliding. To prevent this, they communicate using hardware handshakes:
 
-```
+```text
         68000 CPU                                 Z80 CPU
 +------------------------+                +---------------------+
 | Needs to load music    | === BUSREQ ==> | Suspends execution  |
@@ -112,7 +112,7 @@ Unlike older consoles, the Genesis can dynamically change its horizontal screen 
 ### The Display Planes Stacking
 The VDP renders the screen by stacking four independent graphical planes:
 
-```
+```text
        [ TOP LAYER ]   Sprite / OBJ  (Supports 4 priorities)
              ^
              |         Window Plane  (Overrides Plane A within boundaries)
@@ -144,7 +144,7 @@ The **YM2612** is a 6-channel Frequency Modulation (FM) synthesizer:
 *   **FM Operator Synthesis:** Instead of just adding square waves together, FM synthesis uses **Operators**. An operator consists of an oscillator (generating a sine wave) and an envelope generator (shaping the volume).
 *   **Algorithms:** The YM2612 groups 4 operators per channel into 8 different routing layouts called **Algorithms**:
 
-```
+```text
             ALGORITHM 0 (Serial Modulation)
             
    [ Operator 1 ] (Modulates frequency of Op 2)
@@ -171,14 +171,14 @@ To complement the FM synthesizer and preserve Sega Master System audio compatibi
 
 ## 6. Chapter 5: On-Board Controller Ports (Sega 315-5309)
 
-The Sega Genesis connects to controllers through the **Sega 315-5309 I/O controller chip**, mapped to registers `$A10000 - `$A1001F`.
+The Sega Genesis connects to controllers through the **Sega 315-5309 I/O controller chip**, mapped to registers `$A10000 - $A1001F`.
 
 ### The TH-Pin Multiplexing (How 12 Buttons fit in 6 Wires)
 A standard SNES controller plug has 12 separate wires for its buttons. But a Sega controller port only has **9 physical pins** (of which only 6 are data lines). How do we read a 3-button or 6-button controller over only 6 data lines?
 
 It uses **Multiplexing** controlled by the **TH Pin** (Pin 7):
 
-```
+```text
        TH PIN STATE                             DATA READOUT
        
    TH = 1 (HIGH)   ===> Read:  [ Start ] [ A ] [ 0 ] [ 0 ] [ Down ] [ Up ]
@@ -195,7 +195,33 @@ It uses **Multiplexing** controlled by the **TH Pin** (Pin 7):
 
 ---
 
-## 7. Sega Genesis Architecture Quick Reference
+## 7. Software Architecture: How EGGStation Emulates the Sega Genesis
+
+To model this sophisticated dual-engine hardware with extreme performance and modularity, EGGStation's Sega Genesis core implements decoupled software patterns:
+
+### Dynamic Core Registration (`ConsoleRegistry` - OCP)
+The Sega Genesis core implements the **Open/Closed Principle (OCP)**. It does not exist as a hardcoded branch inside the main application startup pipeline.
+*   Upon script load, `GenesisUIController.js` automatically registers itself into the global, self-initializing `ConsoleRegistry` under the `"GEN"` key.
+*   This encapsulates the instantiation of both `GenesisOrchestrator` and `GenesisUIController` entirely within the Sega Genesis codebase boundaries, keeping the general bootstrap engine closed to modification.
+
+### Asynchronous Dual-Bus Handshake (`GenesisBusZ80` - DIP)
+To simulate the physical bus contention between the Motorola 68000 and the Zilog Z80 processors without introducing synchronous JavaScript thread stalls, the buses use **Dependency Inversion**:
+*   `GenesisBusZ80.js` does not couple directly to the master M68K bus. Instead, it accepts two abstract read/write functional delegates at boot time.
+*   When the 68000 CPU asserts a `BUSREQ` and resets the Z80, the JS master bus routes memory commands through these high-speed delegate pointers, ensuring 100% thread-safe asynchronous memory transitions on the WASM heap.
+
+### Cycle-Accurate Gamepad Multiplexer (`GenesisController` - SRP)
+The unrolled multiplexing logic and the **1.5ms watchdog timer** of standard 3/6-button gamepads are emulated in `GenesisController.js`.
+*   It measures the absolute elapsed M68K CPU cycles between consecutive falling edges of the TH pin.
+*   If the cycle offset exceeds the threshold of `11505` cycles (~1.5ms on a 7.67MHz clock), the controller manager's internal state machine automatically resets the strobe phase, guaranteeing perfect compatibility with demanding game software polling loops.
+
+### Decoupled State Memento (`serializeState` - SRP)
+To support real-time temporal physics (Rewinding), each active hardware core in the Genesis context implements complete self-serialization.
+*   The `M68000` CPU, `GenesisVdp` video core, and WASM-backed `SegaPsg` and `GenesisYm2612` audio modules serialize their registers, buffers, and phase accumulators independently.
+*   The `GenesisOrchestrator` acts strictly as a conductor, simply collecting these independent payloads during savestate operations without knowledge of their inner memory configurations.
+
+---
+
+## 8. Sega Genesis Architecture Quick Reference
 
 *   **Master Clock:** 53.693175 MHz (NTSC) / 53.203424 MHz (PAL)
 *   **Primary CPU Clock (M68K):** 7.67 MHz (Master Clock / 7)

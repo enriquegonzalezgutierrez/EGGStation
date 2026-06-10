@@ -9,7 +9,7 @@ Welcome, developer! This manual is designed to explain the inner physical workin
 
 To understand how a retro console functions, think of the Sega Master System as a live theater play:
 
-```
+```text
 +-------------------------------------------------------------------------+
 |                              THE THEATER                                |
 |                                                                         |
@@ -55,7 +55,7 @@ It means the CPU's brain processes data in chunks of 8 bits (1 byte) at a time.
 ### CPU Registers (The Conductor's Pockets)
 The CPU contains ultra-fast internal storage slots called **registers**. Think of them as the pockets on the conductor's jacket—easily accessible, but very small.
 
-```
+```text
        8-Bit Registers                       Special 16-Bit Registers
 +----------------+----------------+       +-----------------------------------+
 |  A (Accumulator|   F (Flags)    |       |       PC (Program Counter)        |
@@ -90,7 +90,7 @@ Because $2^{16} = 65,536$, the CPU has a physical memory limit of **64KB**. It c
 ### The System Memory Map
 To make use of this 64KB space, the motherboard routes different address ranges to different physical chips:
 
-```
+```text
 $0000 +-----------------------------------+
       |                                   |
       |   Slot 0: Cartridge ROM Page 0    | (Protected 1KB at boot)
@@ -133,7 +133,7 @@ It uses **Mappers**. Think of a mapper as a book holder:
 
 The **Sega 315-5124 VDP** is the graphics chip. The CPU cannot write directly to the TV screen; instead, it writes graphical data to a dedicated **16KB VRAM (Video RAM)** buffer attached directly to the VDP.
 
-```
+```text
        Z80 CPU                                Sega VDP
 +-------------------+                  +---------------------+
 | Reads Code        |                  |  VRAM (16KB)        |
@@ -160,7 +160,7 @@ Inside the 16KB of VRAM, the VDP arranges its graphics into three structures:
 ### Scanlines, H-Blank, and V-Blank (The CRT Ray)
 To draw an image, the TV's electron gun sweeps across the screen from left to right, line by line (scanlines), from top to bottom.
 
-```
+```text
 Scanline 0   =========================> H-Blank (Electron gun returns left)
 Scanline 1   =========================> H-Blank
 ...
@@ -187,7 +187,7 @@ The **Sega 315-5124 PSG** is a sound generator integrated into the system. It co
 *   **Three Tone Channels:** Generate square waves.
 *   **One Noise Channel:** Generates white or periodic noise (static/snare drums).
 
-```
+```text
                       PSG SQUARE WAVE SYNTHESIS
                       
    State=1 (HIGH)  +-------+       +-------+       +-------+
@@ -219,7 +219,7 @@ The noise channel does not use a simple counter; it uses a **16-bit Linear Feedb
 
 The Master System connects to controllers through the **Sega 315-5297 I/O chip**, mapped to Ports **`$DC`** and **`$DD`**.
 
-```
+```text
 Port $DC Read:  [ Player 2 Down ] [ Player 2 Up ] [ Player 1 Fire 2 ] [ Player 1 Fire 1 ] [ Player 1 Right ] [ Player 1 Left ] [ Player 1 Down ] [ Player 1 Up ]
 Port $DD Read:  [ Link Port TR ]  [ Link Port TH ] [ Player 2 Fire 2 ] [ Player 2 Fire 1 ] [ Player 2 Right ] [ Player 2 Left ]  [ VDP V-Counter Latch ] [ Rest ]
 ```
@@ -240,7 +240,29 @@ The Master System Light Phaser (lightgun) operates on a clever hardware trick:
 
 ---
 
-## 7. SMS Architecture Quick Reference
+## 7. Software Architecture: How EGGStation Emulates the Sega Master System
+
+EGGStation relies on a highly decoupled Domain-Driven Design (DDD) to model the Sega Master System, isolating the complex hardware cycle timings within a dedicated C++ WebAssembly module.
+
+### Zero-Copy WebAssembly Bridge (`Sega315_5124WasmBridge.cpp`)
+To prevent the notorious JavaScript Garbage Collection (GC) pauses associated with passing massive arrays between execution environments, EGGStation implements a **Zero-Copy memory mapping architecture**:
+*   The C++ VDP domain calculates scanlines and writes 32-bit packed ABGR pixels directly into its isolated Emscripten `uint32_t frameBuffer` heap.
+*   On the JavaScript presentation layer, the engine instantiates a `Uint8ClampedArray` directly over the exported pointer address of this C++ heap.
+*   This achieves zero-overhead rendering: WebGL and HTML5 Canvases draw the C++ memory array instantaneously, bypassing data serialization entirely.
+
+### Inversion of Control via EM_JS Bus Pointers (DIP)
+The Z80 microprocessor must fetch instructions from memory at 3.58 million times per second.
+*   Instead of hardcoding memory pointers inside C++, EGGStation injects JavaScript bus delegates natively into the WASM binary during compilation using `EM_JS` macros.
+*   The C++ CPU executes `js_read_addr()` dynamically, asking the outer orchestrator what memory values reside at a physical address. This satisfies the **Dependency Inversion Principle (DIP)** and allows the same C++ CPU core to be reused identically for Sega Genesis co-processors.
+
+### Decoupled State Memento (`serializeState` - SRP)
+To support real-time temporal physics (Rewinding) and offline IndexedDB saving, the Master System cores implement clean Memento patterns.
+*   The Orchestrator acts purely as a commander; it does not parse memory.
+*   Instead, it calls `.serializeState()` on the VDP and CPU adapters, which invoke the corresponding `vdp_get_internal_state` C++ exports. The state dumps are binary-safe arrays pushed into the browser's persistent storage engine, ensuring 100% deterministic savestate restoration.
+
+---
+
+## 8. SMS Architecture Quick Reference
 
 *   **Master Clock:** 10.73858 MHz (NTSC) / 10.73858 MHz (PAL)
 *   **CPU Clock:** 3.58 MHz (Master Clock / 3)

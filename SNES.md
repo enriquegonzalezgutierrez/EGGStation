@@ -9,7 +9,7 @@ Welcome, developer! This manual is designed to explain the inner physical workin
 
 If an 8-bit console is like a theater play, the 16-bit Super Nintendo is like a full **film studio**:
 
-```
+```text
 +-------------------------------------------------------------------------+
 |                            THE FILM STUDIO                              |
 |                                                                         |
@@ -61,7 +61,7 @@ The SNES address bus can run at different cycle speeds:
 ### DMA and HDMA (The Conveyor Belts)
 Instead of forcing the CPU to copy large amounts of data manually, the Ricoh 5A22 contains 8 hardware **DMA (Direct Memory Access)** channels:
 
-```
+```text
                TRADITIONAL CPU COPY
 +----------+       +--------------+       +----------+
 | Read WRAM| ====> | CPU Registry | ====> |Write VRAM|  (Slow: 16 cycles per byte)
@@ -82,13 +82,13 @@ Instead of forcing the CPU to copy large amounts of data manually, the Ricoh 5A2
 
 The SNES uses a **24-bit Address Bus**, meaning the CPU can address up to $2^{24} = 16,777,216$ bytes (**16 Megabytes**) of memory space, divided into 256 banks of 64KB each.
 
-```
+```text
 Address: [ Bank: 8 bits ] [ Offset: 16 bits ] (e.g. $7E:0000)
 ```
 
 The system memory is mapped across these banks using standard hardware rules:
 
-```
+```text
 Bank $00-$3F | Bank $80-$BF (Low Banks)   Bank $7E-$7F (Work RAM Banks)
 +-----------------------------------+     +-----------------------------------+
 | $0000 - $1FFF: 8KB WRAM Mirror    |     |                                   |
@@ -126,7 +126,7 @@ The SNES can configure its background layers into 8 distinct modes:
 *   **Mode 3:** Used for detailed backgrounds (like *Metroid*). It provides one 256-color plane (8bpp) and one 16-color plane (4bpp).
 *   **Mode 7 (The Affine Matrix Mode):** The SNES's signature mode. It provides a single 256-color background plane that can be rotated, scaled, stretched, skewed, and projected in real-time.
 
-```
+```text
                         MODE 7 AFFINE MATRIX MATH
                         
     [ x' ]   [ A   B ]   [ x - x0 ]   [ x0 ]
@@ -146,7 +146,7 @@ By calculating this matrix equation for every pixel on the scanline, the PPU can
 
 Once the PPU has rendered the backgrounds (BGs) and sprites (OBJ), it must stack them onto the screen.
 
-```
+```text
        [ TOP LAYER ]   Sprite / OBJ  (Highest priority)
              ^
              |         Background 1  (High priority)
@@ -178,7 +178,7 @@ The SNES has two hardware **Windows** that can mask or clip specific regions of 
 
 The SNES audio subsystem (APU) is a completely self-contained computer. It operates independently of the main CPU, having its own dedicated CPU, DSP, and RAM.
 
-```
+```text
    Ricoh 5A22 CPU                            Sony APU
 +-------------------+   I/O Ports $2140      +-------------------+
 | Runs Game Code    | =====================> | SPC700 CPU        | === Wave Data ===> SnesDsp Synthesizer === Audio Out
@@ -202,7 +202,30 @@ The **Sound DSP** is a dedicated 8-channel synthesizer:
 
 ---
 
-## 7. SNES Architecture Quick Reference
+## 7. Software Architecture: How EGGStation Emulates the SNES
+
+To support the highly complex co-processing architectures of the SNES on a web platform, EGGStation implements state-of-the-art software engineering patterns:
+
+### Polymorphic Console Registration (`ConsoleRegistry` - OCP)
+The SNES core implements the **Open/Closed Principle (OCP)** to eliminate monolithic bootstrap structures.
+*   During initialization, `SnesUIController.js` registers itself dynamically into the global, self-initializing `ConsoleRegistry` under the `"SNES"` key.
+*   This registers the construction factory for `SnesOrchestrator` and `SnesUIController` on the fly, allowing developers to extend the multi-system container with new systems (such as Game Boy) without changing the core application swappers.
+
+### Shared APU RAM Pointer Mapping (Zero-Copy Sync)
+Emulating the SPC700 CPU in JS and the 8-channel DSP in C++ WebAssembly creates a significant bottleneck: both processors need to read and write to the same 64KB APU RAM continuously. EGGStation solves this via **Zero-Copy memory-sharing pointers**:
+*   Upon DSP WASM instantiation, `SnesDsp.js` allocates a 64KB block natively on the WASM Heap (`_dsp_set_apuram_ptr`).
+*   It then intercepts JavaScript references to the APU and SPC700 RAM, redefining `this.apu.ram` and `this.apu.spc.ram` using a shared `syncRamGetter` that points directly to the C++ heap subarray.
+*   This allows the JS SPC700 CPU to read/write sound commands and the C++ DSP to decompress BRR waves natively over the **exact same memory space at native speeds without copy cycles**.
+
+### Decoupled State Memento (`serializeState` - SRP)
+To cleanly support real-time temporal physics (Rewinding) without bloating the orchestrator file, the SNES core implements the **Memento Pattern**:
+*   `SnesCpu`, `SnesPpu`, and `SnesApu` implement their own `.serializeState()` and `.deserializeState()` methods.
+*   `SnesPpu.js` encapsulating its own state restoration automatically handles rebuilding the fast planar pattern cache (`rebuildVramCache()`) upon loading, separating this from the orchestrator.
+*   This completely isolates chip-specific memory layouts from the `SnesOrchestrator` control loops, maintaining a strict **Single Responsibility Principle (SRP)**.
+
+---
+
+## 8. SNES Architecture Quick Reference
 
 *   **Master Clock:** 21.47727 MHz (NTSC) / 21.28137 MHz (PAL)
 *   **CPU Clock:** Variable (3.58 MHz / 2.68 MHz / 1.79 MHz)
