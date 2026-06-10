@@ -240,10 +240,14 @@ class GenesisVdpRenderer {
             let w_pic_w = 0;
 
             const windowMaskY = vdp.windowVerticalBoundary;
-            const isWindowY = (scanline < windowMaskY) != vdp.windowAlignedBottom;
+            
+            // HARDWARE FIX: Force vertical window mapping to false if size is 0 (prevents "Window Fantasma" glitch)
+            const isWindowY = (windowMaskY !== 0) && ((scanline < windowMaskY) !== vdp.windowAlignedBottom);
 
             for (let wx = 0; wx < w_display_xsize; wx++) {
-                const isWindowX = ((wx >> 4) < vdp.windowHorizontalBoundary) != vdp.windowAlignedRight;
+                
+                // HARDWARE FIX: Force horizontal window mapping to false if size is 0
+                const isWindowX = (vdp.windowHorizontalBoundary !== 0) && (((wx >> 4) < vdp.windowHorizontalBoundary) !== vdp.windowAlignedRight);
                 const isWindowActive = (isWindowY || isWindowX) && !vdp.configWindowDisabled;
 
                 if (isWindowActive) {

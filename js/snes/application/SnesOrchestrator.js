@@ -6,16 +6,9 @@
  * ROLE:
  * Application Layer: SnesOrchestrator (High-Performance Revision)
  * 
- * APPLIED OPTIMIZATIONS:
- * 1. Dynamic Intelligent Frameskip: Automatically bypasses heavy PPU rendering 
- *    when lag is detected.
- * 2. AUDIO FIX: Audio generation decoupled from Frameskip. Audio samples are now 
- *    pushed continuously to prevent buffer underruns and "stuttering".
- * 3. CANVAS FIX: Added resolution reset for Fast-Path modes (1x) to prevent 
- *    shrinking bugs when returning from hardware scaled modes (4x).
- * 4. Additive Color Conversion: Rewrote convertOriginalRGBToRGBA to use 
- *    flat pointer addition instead of multiplication.
- * 5. 32-Bit Framebuffer Views: Packs color channels into single 32-bit writes.
+ * SOLID Principles Applied:
+ * - Single Responsibility Principle (SRP): Exclusively coordinates execution loops, 
+ *   cycles scheduling, and dynamic frameskip algorithms.
  */
 
 class SnesOrchestrator {
@@ -55,6 +48,9 @@ class SnesOrchestrator {
         this.samplesPerFrame = Math.floor(this.audioProcessor.samplesPerFrame);
         this.transferBufferL = new Float32Array(this.samplesPerFrame);
         this.transferBufferR = new Float32Array(this.samplesPerFrame);
+
+        // Dynamic Frameskip Control Safeguard (SOLID SRP)
+        this.lastFrameSkipped = false;
 
         this.injectOptimizedPixelCopier();
 
@@ -114,7 +110,9 @@ class SnesOrchestrator {
     }
     setAudioEnabled(enabled) { if (this.audioProcessor) this.audioProcessor.setAudioEnabled(enabled); }
     updateShaderUniforms(curvature, scanlines, phosphor, bloom) {
-        if (this.postProcessor) this.postProcessor.updateShaderUniforms(curvature, scanlines, phosphor, bloom);
+        if (this.postProcessor) {
+            this.postProcessor.updateShaderUniforms(curvature, scanlines, phosphor, bloom);
+        }
     }
 
     /**
@@ -176,9 +174,9 @@ class SnesOrchestrator {
         const targetFps = (this.hardware.ppu && this.hardware.ppu.isPal) ? 50.0 : 60.098;
         const targetFrameDuration = 1000.0 / targetFps;
 
-        // Death Spiral Protection
-        if (this.accumulatedTime > targetFrameDuration * 2) {
-            this.accumulatedTime = targetFrameDuration * 2;
+        // Death Spiral Protection: Extended boundary to 4 frame intervals to absorb minor browser jitters
+        if (this.accumulatedTime > targetFrameDuration * 4) {
+            this.accumulatedTime = targetFrameDuration * 4;
         }
 
         const isFastForward = window.UniversalInput && window.UniversalInput.isPressed("FAST_FORWARD");
@@ -189,12 +187,10 @@ class SnesOrchestrator {
             this.audioProcessor.setAudioEnabled(false);
             for (let i = 0; i < 3; i++) {
                 this.pollInputs();
-                // We pass 'true' to runFrame (noPpu) to bypass PPU composition during Fast-Forward
                 this.hardware.runFrame(true); 
                 this.fpsCount++;
                 framesRun++;
             }
-            // Draw only the final state to the screen
             this.hardware.ppu.setPixels();
             renderedThisFrame = true;
             this.accumulatedTime = 0; 
@@ -204,12 +200,16 @@ class SnesOrchestrator {
                 if (!this.isPaused) {
                     this.pollInputs();
 
-                    // DYNAMIC FRAMESKIP: Skip PPU rendering if we are lagging
-                    const skipRendering = this.accumulatedTime >= (targetFrameDuration * 1.5);
+                    // DYNAMIC FRAMESKIP with Consecutive Skip Protection
+                    let skipRendering = this.accumulatedTime >= (targetFrameDuration * 1.5);
+                    if (skipRendering && this.lastFrameSkipped) {
+                        skipRendering = false; // Force render if previous frame was skipped
+                    }
 
                     this.hardware.runFrame(skipRendering);
+                    this.lastFrameSkipped = skipRendering;
 
-                    // AUDIO FIX: ALWAYS fetch and push audio samples to keep the WebAudio buffer full!
+                    // ALWAYS fetch and push audio samples to keep the WebAudio buffer full
                     this.hardware.setSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
                     this.audioProcessor.pushSamples(this.transferBufferL, this.transferBufferR, this.samplesPerFrame);
                     
@@ -231,7 +231,7 @@ class SnesOrchestrator {
             if (this.postProcessMode === 0 || this.postProcessMode === 1) {
                 this.hardware.ppu.setPixels(); 
 
-                // FIX: Guarantee internal canvas resolution is restored to 1x boundaries
+                // Guarantee internal canvas resolution is restored to 1x boundaries
                 if (this.ctx.canvas.width !== 512 || this.ctx.canvas.height !== 480) {
                     this.ctx.canvas.width = 512;
                     this.ctx.canvas.height = 480;
@@ -290,7 +290,7 @@ class SnesOrchestrator {
                 dst32[dstIdx + nextRowOffset] = pixel;
                 dstIdx++;
             }
-            dstIdx += width; // Safely skip the duplicate row we just filled
+            dstIdx += width; 
         }
     }
 
@@ -342,7 +342,6 @@ class SnesOrchestrator {
                         mode: this.hardware.ppu.mode,
                         forcedBlank: this.hardware.ppu.forcedBlank,
                         brightness: this.hardware.ppu.brightness,
-                        // Advanced PPU layers properties
                         tilemapWider: Array.from(this.hardware.ppu.tilemapWider),
                         tilemapHigher: Array.from(this.hardware.ppu.tilemapHigher),
                         tilemapAdr: Array.from(this.hardware.ppu.tilemapAdr),
@@ -354,7 +353,6 @@ class SnesOrchestrator {
                         ram: Array.from(this.hardware.apu.ram),
                         spc_r: Array.from(this.hardware.apu.spc.r),
                         spc_br: Array.from(this.hardware.apu.spc.br),
-                        // SPC700 Register Flags
                         spc_flags: {
                             n: this.hardware.apu.spc.n, v: this.hardware.apu.spc.v, p: this.hardware.apu.spc.p,
                             b: this.hardware.apu.spc.b, h: this.hardware.apu.spc.h, i: this.hardware.apu.spc.i,
@@ -409,7 +407,7 @@ class SnesOrchestrator {
                     return;
                 }
 
-                // 1. Reconstitute CPU
+                // Restore CPU
                 this.hardware.cpu.r.set(state.cpu.r);
                 this.hardware.cpu.br.set(state.cpu.br);
                 this.hardware.cpu.n = state.cpu.flags.n;
@@ -425,7 +423,7 @@ class SnesOrchestrator {
                 this.hardware.cpu.waiting = state.cpu.waiting;
                 this.hardware.cpu.cyclesLeft = state.cpu.cyclesLeft;
 
-                // 2. Reconstitute PPU
+                // Restore PPU
                 this.hardware.ppu.vram.set(state.ppu.vram);
                 this.hardware.ppu.rebuildVramCache();
                 this.hardware.ppu.cgram.set(state.ppu.cgram);
@@ -437,7 +435,6 @@ class SnesOrchestrator {
                 this.hardware.ppu.forcedBlank = state.ppu.forcedBlank;
                 this.hardware.ppu.brightness = state.ppu.brightness;
                 
-                // Advanced PPU layers properties
                 this.hardware.ppu.tilemapWider = state.ppu.tilemapWider;
                 this.hardware.ppu.tilemapHigher = state.ppu.tilemapHigher;
                 this.hardware.ppu.tilemapAdr = state.ppu.tilemapAdr;
@@ -445,12 +442,11 @@ class SnesOrchestrator {
                 this.hardware.ppu.bgHoff = state.ppu.bgHoff;
                 this.hardware.ppu.bgVoff = state.ppu.bgVoff;
 
-                // 3. Reconstitute APU & SPC700
+                // Restore APU & SPC700
                 this.hardware.apu.ram.set(state.apu.ram);
                 this.hardware.apu.spc.r.set(state.apu.spc_r);
                 this.hardware.apu.spc.br.set(state.apu.spc_br);
                 
-                // SPC700 Register Flags
                 this.hardware.apu.spc.n = state.apu.spc_flags.n;
                 this.hardware.apu.spc.v = state.apu.spc_flags.v;
                 this.hardware.apu.spc.p = state.apu.spc_flags.p;
@@ -462,7 +458,7 @@ class SnesOrchestrator {
 
                 this.hardware.apu.dsp.ram.set(state.apu.dsp_ram);
 
-                // 4. Reconstitute System RAM & Cartridge SRAM
+                // Restore System RAM & Cartridge SRAM
                 this.hardware.ram.set(state.ram);
                 this.hardware.cart.sram.set(state.sram);
 
@@ -472,10 +468,6 @@ class SnesOrchestrator {
             }
         }
     }
-
-    // ========================================================================
-    // DEVELOPER SUITE DIAGNOSTICS HOOKS
-    // ========================================================================
 
     getRegisters() {
         if (!this.hardware || !this.hardware.cpu) return {};

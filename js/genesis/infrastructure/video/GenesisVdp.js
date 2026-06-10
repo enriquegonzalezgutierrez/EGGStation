@@ -417,11 +417,21 @@ class GenesisVdp {
                     this.v30Enabled = (data & 0x08) !== 0;
                     this.megaDriveModeEnabled = (data & 0x04) !== 0;
                     break;
-                case 2: this.planeAAddress = (data & 0x78) << 10; break;
-                case 3: this.windowAddress = (data & 0x7E) << 10; break;
-                case 4: this.planeBAddress = (data & 0x0F) << 13; break;
+                case 2: 
+                    // HARDWARE FIX: Mask 0x38 isolates the exact address lines of Scroll A Name Table
+                    this.planeAAddress = (data & 0x38) << 10; 
+                    break;
+                case 3: 
+                    // HARDWARE FIX: Mask 0x3E isolates the exact address lines of Window Name Table
+                    this.windowAddress = (data & 0x3E) << 10; 
+                    break;
+                case 4: 
+                    // HARDWARE FIX: Mask 0x07 isolates the exact address lines of Scroll B Name Table
+                    this.planeBAddress = (data & 0x07) << 13; 
+                    break;
                 case 5: 
-                    this.spriteTableAddress = data << 9; 
+                    // HARDWARE FIX: Mask 0x7F isolates the exact address lines of the Sprite Attribute Table (SAT)
+                    this.spriteTableAddress = (data & 0x7F) << 9; 
                     this.spriteRowCacheNeedsUpdating = true; 
                     break;
                 case 6: this.spriteTileIndexRebase = (data & 0x20) !== 0; break;
@@ -431,28 +441,34 @@ class GenesisVdp {
                     break;
                 case 11:
                     this.vscrollMode = (data & 4) !== 0 ? 1 : 0;
-                    this.hscrollMask = [0x00, 0x00, 0xF8, 0xFF][data & 3]; 
+                    this.hscrollMask = [0x00, 0xFF, 0xF8, 0xFF][data & 3]; 
                     break;
                 case 12:
-                    this.h40Enabled = (data & 0x80) !== 0;
+                    // HARDWARE FIX: Check Bit 0 (RS0) is the real hardware selector for H40 (320px) vs H32 (256px)
+                    this.h40Enabled = (data & 0x01) !== 0;
                     this.shadowHighlightEnabled = (data & 0x08) !== 0;
                     this.doubleResolutionEnabled = ((data >> 1) & 3) === 3;
                     break;
-                case 13: this.hscrollAddress = (data & 0x7F) << 10; break;
+                case 13: 
+                    // HARDWARE FIX: Mask 0x3F isolates the exact address lines of the Horizontal Scroll Table
+                    this.hscrollAddress = (data & 0x3F) << 10; 
+                    break;
                 case 14:
                     this.planeATileIndexRebase = (data & 0x01) !== 0;
                     this.planeBTileIndexRebase = (data & 0x10) !== 0 && this.planeATileIndexRebase;
                     break;
                 case 15: this.accessIncrement = data; break;
-                case 16:
-                    this.planeHeightBitmask = (data << 1) | 0x1F;
-                    switch (data & 3) {
-                        case 0: this.planeWidthShift = 5; this.planeHeightBitmask &= 0x7F; break;
-                        case 1: this.planeWidthShift = 6; this.planeHeightBitmask &= 0x3F; break;
-                        case 2: this.planeWidthShift = 5; this.planeHeightBitmask &= 0; break;
-                        case 3: this.planeWidthShift = 7; this.planeHeightBitmask &= 0x1F; break;
-                    }
+                case 16: {
+                    // HARDWARE FIX: Correctly decode width/height exponents (Reg 16) without fallthrough corruption
+                    const wCode = data & 3;
+                    const hCode = (data >> 4) & 3;
+                    
+                    this.planeWidthShift = (wCode === 0) ? 5 : (wCode === 1 ? 6 : 7);
+                    
+                    const heightTiles = (hCode === 0) ? 32 : (hCode === 1) ? 64 : 128;
+                    this.planeHeightBitmask = heightTiles - 1;
                     break;
+                }
                 case 17:
                     this.windowAlignedRight = (data & 0x80) !== 0;
                     this.windowHorizontalBoundary = Math.min(32, data & 0x1F);
@@ -482,11 +498,17 @@ class GenesisVdp {
         this.vsramCache[1] = this.vsram[1];
     }
 
+    /**
+     * Resolves vertical scroll registers with column alignment.
+     * BUGFIX: Replaced (col * 2) multiplication with (col & ~1) bitmasking to 
+     * correctly map interleaved Plane A / Plane B 16-pixel column channels 
+     * and prevent memory out-of-bounds heap reading.
+     */
     getVScroll(planeIndex, col) {
         if (this.vscrollMode === 0) {
             return this.vsramCache[planeIndex];
         } else {
-            return this.vsram[planeIndex + (col * 2)];
+            return this.vsram[((col & ~1) + planeIndex) & 0x3F];
         }
     }
 
@@ -495,6 +517,41 @@ class GenesisVdp {
      */
     endScanline(scanline, scanlineRenderedCallback, callbackUserData) {
         GenesisVdpRenderer.renderScanline(this, scanline, scanlineRenderedCallback);
+    }
+
+    /**
+     * Generates active 4bpp VRAM pattern tiles.
+     * FIX: Restored check for local properties rather than missing "this.vdp" reference.
+     */
+    rasterizeVramTiles(ctx) {
+        const vram = this.vRam;
+        if (!vram) return;
+        const imgData = ctx.createImageData(128, 192); 
+
+        for (let tileIdx = 0; tileIdx < 384; tileIdx++) {
+            const tileX = tileIdx % 16;
+            const tileY = Math.floor(tileIdx / 16);
+            const destBaseX = tileX * 8;
+            const destBaseY = tileY * 8;
+
+            for (let row = 0; row < 8; row++) {
+                const rowAddr = tileIdx * 32 + row * 4;
+                for (let col = 0; col < 8; col++) {
+                    const byteOffset = rowAddr + Math.floor(col / 2);
+                    const byte = vram[byteOffset & 0xFFFF];
+                    
+                    const pixelNibble = (col % 2 === 0) ? (byte >> 4) : (byte & 0x0F);
+                    const rgb = pixelNibble * 17;
+                    const destIdx = ((destBaseX + col) + ((destBaseY + row) * 128)) * 4;
+
+                    imgData.data[destIdx] = rgb;
+                    imgData.data[destIdx + 1] = rgb;
+                    imgData.data[destIdx + 2] = rgb;
+                    imgData.data[destIdx + 3] = 255;
+                }
+            }
+        }
+        ctx.putImageData(imgData, 0, 0);
     }
 
     // ========================================================================
