@@ -7,14 +7,12 @@
  * Domain Layer: M68K CPU Data Transfer Instructions.
  * Implements the registration and execution logic for the entire M68K 
  * data movement instruction family (MOVE, MOVEA, MOVEQ, MOVEM, LEA, PEA, 
- * EXG, SWAP, LINK, UNLK, and Status Register transfers).
+ * EXG, SWAP, LINK, UNLK, MOVEP, and Status Register transfers).
  * 
  * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Exclusively responsible for the 
- *    definition, registration, and execution of the data movement instruction subset.
- * 2. Interface Segregation Principle (ISP): Depends on a thin, unified opcode 
- *    mapping dictionary (registry) instead of relying on the complete, heavy 
- *    execution loop of the M68000 class.
+ * - Single Responsibility Principle (SRP): Exclusively responsible for the 
+ *    definition, registration, and execution of the data movement instruction subset, 
+ *    now including the peripheral byte-transfer instruction MOVEP (SRP Fix).
  */
 
 class M68kDataTransfer {
@@ -45,19 +43,15 @@ class M68kDataTransfer {
                 }
 
                 opcodeTable[opcode] = () => {
-                    // Size mapping: 1 = Byte, 3 = Word, 2 = Long
                     const size = moveSize === 3 ? 2 : (moveSize === 2 ? 3 : 1);
                     const srcEa = cpu.resolveEA(srcMode, srcReg, size);
                     let value = cpu.readEA(srcEa, size);
 
-                    // Ensure value is properly masked to its logical size before operating
                     const sizeMask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
                     value &= sizeMask;
 
                     if (destMode === 1) {
                         // MOVEA: Destination is Address Register Direct (An)
-                        // Word-sized loads to address registers are always sign-extended to 32 bits.
-                        // Important: MOVEA does NOT modify any CCR flags.
                         if (size === 2) {
                             value = (value << 16) >> 16;
                         }
@@ -76,7 +70,7 @@ class M68kDataTransfer {
                                  ((value & 0x80000000) !== 0 ? 1 : 0));
                     }
 
-                    return size === 3 ? 12 : 8; // Return baseline execution cycles
+                    return size === 3 ? 12 : 8; 
                 };
                 continue;
             }
@@ -96,7 +90,7 @@ class M68kDataTransfer {
                     cpu.fV = 0;
                     cpu.fC = 0;
                     
-                    return 4; // MOVEQ executes in 4 cycles
+                    return 4; 
                 };
                 continue;
             }
@@ -111,11 +105,9 @@ class M68kDataTransfer {
                 const reg = opcode & 7;
 
                 opcodeTable[opcode] = () => {
-                    // Fetch the 16-bit register mask word from the program stream
                     const regMask = cpu.bus.readWord(cpu.pc, cpu.pc) & 0xFFFF;
                     cpu.pc = (cpu.pc + 2) & 0xFFFFFF;
 
-                    // Calculate total number of registers to transfer
                     let count = 0;
                     for (let i = 0; i < 16; i++) {
                         if (regMask & (1 << i)) count++;
@@ -125,13 +117,10 @@ class M68kDataTransfer {
                     let ea = 0;
                     let cycles = 12;
 
-                    // 1:1 hardware-accurate register mapping aligned with BlastEm's memory sequencing
                     if (mode === 4) { // Pre-decrement -(An)
-                        // In pre-decrement mode, registers are stored from A7-A0, then D7-D0.
-                        // Puntero is decremented BEFORE each write.
                         let currentEa = cpu.a[reg];
                         for (let i = 0; i < 16; i++) {
-                            const regIdx = 15 - i; // Reverse order (A7 down to D0)
+                            const regIdx = 15 - i; 
                             if (regMask & (1 << i)) {
                                 const val = regIdx < 8 ? cpu.d[regIdx] : cpu.a[regIdx - 8];
                                 currentEa = (currentEa - step) & 0xFFFFFF;
@@ -139,9 +128,8 @@ class M68kDataTransfer {
                                 cycles += isWord ? 4 : 8;
                             }
                         }
-                        cpu.a[reg] = currentEa; // Update base register with the final address
+                        cpu.a[reg] = currentEa; 
                     } else {
-                        // Post-increment (An)+ or other standard addressing modes
                         if (mode === 3) { 
                             ea = cpu.a[reg];
                             cpu.a[reg] = (cpu.a[reg] + (count * step)) & 0xFFFFFF;
@@ -188,7 +176,7 @@ class M68kDataTransfer {
                 const reg = opcode & 7;
 
                 opcodeTable[opcode] = () => {
-                    const ea = cpu.resolveEA(mode, reg, 3); // Resolve long address
+                    const ea = cpu.resolveEA(mode, reg, 3); 
                     cpu.a[aReg] = ea;
                     return 8; 
                 };
@@ -225,7 +213,7 @@ class M68kDataTransfer {
                 const reg = opcode & 7;
 
                 opcodeTable[opcode] = () => {
-                    const ea = cpu.resolveEA(mode, reg, 3); // EA is 32-bit (Long)
+                    const ea = cpu.resolveEA(mode, reg, 3); 
                     cpu.pushLong(ea);
                     return 16; 
                 };
@@ -266,7 +254,7 @@ class M68kDataTransfer {
             if ((opcode & 0xFFF8) === 0x4E50) {
                 const reg = opcode & 7;
                 opcodeTable[opcode] = () => {
-                    const offset = (cpu.bus.readWord(cpu.pc, cpu.pc) << 16) >> 16; // Sign-extended
+                    const offset = (cpu.bus.readWord(cpu.pc, cpu.pc) << 16) >> 16; 
                     cpu.pc = (cpu.pc + 2) & 0xFFFFFF;
                     
                     cpu.pushLong(cpu.a[reg]);
@@ -297,7 +285,7 @@ class M68kDataTransfer {
                 opcodeTable[opcode] = () => {
                     const ea = cpu.resolveEA(mode, reg, 2); 
                     const val = cpu.readEA(ea, 2);
-                    cpu.setCCR(val & 0xFF); // Only lower byte affects CCR
+                    cpu.setCCR(val & 0xFF); 
                     return 12;
                 };
                 continue;
@@ -312,7 +300,6 @@ class M68kDataTransfer {
                     const ea = cpu.resolveEA(mode, reg, 2);
                     const val = cpu.readEA(ea, 2);
                     
-                    // Privilege check (MOVE to SR is privileged)
                     if ((cpu.sr & 0x2000) === 0) {
                         cpu.triggerException(8); 
                         return 34;
@@ -365,6 +352,47 @@ class M68kDataTransfer {
                 continue;
             }
 
+            // --- 14. MOVEP (Move Peripheral Data) ---
+            // Format: [0000][dReg:3][opmode:3][001][aReg:3]
+            // SOLID Fix: Re-located from M68kSystemExceptions.js into its cohesive, correct DataTransfer module
+            if ((opcode & 0xF138) === 0x0108) {
+                const dReg = (opcode >> 9) & 7;
+                const opmode = (opcode >> 6) & 7;
+                const aReg = opcode & 7;
+
+                if (opmode >= 4) {
+                    opcodeTable[opcode] = () => {
+                        const displacement = (cpu.bus.readWord(cpu.pc, cpu.pc) << 16) >> 16;
+                        cpu.pc = (cpu.pc + 2) & 0xFFFFFF;
+                        let ea = (cpu.a[aReg] + displacement) & 0xFFFFFF;
+                        
+                        const isLong = (opmode & 1) !== 0;
+                        const toMemory = (opmode & 2) !== 0;
+
+                        if (toMemory) {
+                            if (isLong) {
+                                cpu.bus.writeByte(ea, (cpu.d[dReg] >> 24) & 0xFF, cpu.pc); ea += 2;
+                                cpu.bus.writeByte(ea, (cpu.d[dReg] >> 16) & 0xFF, cpu.pc); ea += 2;
+                            }
+                            cpu.bus.writeByte(ea, (cpu.d[dReg] >> 8) & 0xFF, cpu.pc); ea += 2;
+                            cpu.bus.writeByte(ea, cpu.d[dReg] & 0xFF, cpu.pc);
+                        } else {
+                            let res = 0;
+                            if (isLong) {
+                                res |= cpu.bus.readByte(ea, cpu.pc) << 24; ea += 2;
+                                res |= cpu.bus.readByte(ea, cpu.pc) << 16; ea += 2;
+                            }
+                            res |= cpu.bus.readByte(ea, cpu.pc) << 8; ea += 2;
+                            res |= cpu.bus.readByte(ea, cpu.pc);
+                            
+                            if (isLong) cpu.d[dReg] = res;
+                            else cpu.d[dReg] = (cpu.d[dReg] & 0xFFFF0000) | (res & 0xFFFF);
+                        }
+                        return isLong ? 24 : 16;
+                    };
+                    continue;
+                }
+            }
         }
     }
 }

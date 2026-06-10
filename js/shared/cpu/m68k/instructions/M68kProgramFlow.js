@@ -6,15 +6,12 @@
  * Role:
  * Domain Layer: M68K CPU Program Flow Instructions.
  * Implements the registration and execution logic for the M68K program flow 
- * control instruction family (JMP, JSR, BSR, RTS, RTE, RTR, Bcc, DBcc, Scc).
+ * control instruction family (JMP, JSR, BSR, RTS, RTE, RTR, Bcc, DBcc, Scc, and TRAP).
  * 
  * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Exclusively responsible for the 
+ * - Single Responsibility Principle (SRP): Exclusively responsible for the 
  *    definition, registration, and execution of the program branching, subroutines, 
- *    and system returns instruction subset.
- * 2. Interface Segregation Principle (ISP): Depends on a thin, unified opcode 
- *    mapping dictionary (registry) instead of relying on the complete, heavy 
- *    execution loop of the M68000 class.
+ *    and system returns instruction subset, now including the system call TRAP instructions (SRP Fix).
  */
 
 class M68kProgramFlow {
@@ -37,7 +34,7 @@ class M68kProgramFlow {
 
         opcodeTable[0x4E73] = () => { // RTE: Return from Exception (Privileged)
             if ((cpu.sr & 0x2000) === 0) { 
-                cpu.triggerException(8); // Privilege Violation Exception
+                cpu.triggerException(8); 
                 return 34; 
             }
             const srVal = cpu.bus.readWord(cpu.a[7], cpu.pc) & 0xFFFF;
@@ -47,7 +44,7 @@ class M68kProgramFlow {
             return 24;
         };
 
-        opcodeTable[0x4E77] = () => { // RTR: Return and Restore Codes (Allowed in User Mode)
+        opcodeTable[0x4E77] = () => { // RTR: Return and Restore Codes
             const ccrVal = cpu.bus.readWord(cpu.a[7], cpu.pc) & 0xFF;
             cpu.a[7] = (cpu.a[7] + 2) & 0xFFFFFF;
             cpu.pc = cpu.popLong() & 0xFFFFFF;
@@ -65,7 +62,7 @@ class M68kProgramFlow {
                 const reg = opcode & 7;
                 opcodeTable[opcode] = () => {
                     const ea = cpu.resolveEA(mode, reg, 3);
-                    cpu.pushLong(cpu.pc); // Return address points to next linear instruction
+                    cpu.pushLong(cpu.pc); 
                     cpu.pc = ea;
                     return 16;
                 };
@@ -94,13 +91,10 @@ class M68kProgramFlow {
                     let actualOffset = offset;
                     const basePc = cpu.pc; 
 
-                    // 68000 Hardware Rule: ONLY 8-bit and 16-bit displacements are supported.
-                    // If the 8-bit displacement is 0, the next 16-bit word is read.
                     if (offset === 0) {
-                        actualOffset = (cpu.bus.readWord(cpu.pc, cpu.pc) << 16) >> 16; // Sign-extend 16-bit
+                        actualOffset = (cpu.bus.readWord(cpu.pc, cpu.pc) << 16) >> 16; 
                         cpu.pc = (cpu.pc + 2) & 0xFFFFFF;
                     } else {
-                        // Sign-extend 8-bit offset directly to 32-bit bounds
                         actualOffset = (offset << 24) >> 24; 
                     }
 
@@ -116,7 +110,7 @@ class M68kProgramFlow {
                         cpu.pc = (basePc + actualOffset) & 0xFFFFFF;
                         return cond === 1 ? 18 : 10;
                     }
-                    return 8; // Cycles consumed if branch is not taken
+                    return 8; 
                 };
                 continue;
             }
@@ -127,15 +121,15 @@ class M68kProgramFlow {
                 const cond = (opcode >> 8) & 0xF;
                 const reg = opcode & 7;
                 opcodeTable[opcode] = () => {
-                    const offset = (cpu.bus.readWord(cpu.pc, cpu.pc) << 16) >> 16; // Sign-extended displacement
+                    const offset = (cpu.bus.readWord(cpu.pc, cpu.pc) << 16) >> 16; 
                     const basePc = cpu.pc;
                     cpu.pc = (cpu.pc + 2) & 0xFFFFFF;
                     
                     let conditionMet = false;
                     if (cond === 0) {
-                        conditionMet = true;       // DBT: Decrement and Branch True (exits loop immediately)
+                        conditionMet = true;       
                     } else if (cond === 1) {
-                        conditionMet = false;      // DBF / DBRA: Decrement and Branch False / Always
+                        conditionMet = false;      
                     } else {
                         conditionMet = cpu.resolveCondition(cond);
                     }
@@ -143,13 +137,13 @@ class M68kProgramFlow {
                     if (!conditionMet) {
                         const count = (cpu.d[reg] - 1) & 0xFFFF;
                         cpu.d[reg] = (cpu.d[reg] & 0xFFFF0000) | count;
-                        if (count !== 0xFFFF) { // If result is not -1 (0xFFFF), branch is taken (loop continues)
-                            cpu.pc = (basePc + offset) & 0xFFFFFF; // Loop back
+                        if (count !== 0xFFFF) { 
+                            cpu.pc = (basePc + offset) & 0xFFFFFF; 
                             return 10;
                         }
-                        return 14; // Loop counter expired (decremented past 0 to -1)
+                        return 14; 
                     }
-                    return 12; // Condition met, loop terminated early
+                    return 12; 
                 };
                 continue;
             }
@@ -163,9 +157,9 @@ class M68kProgramFlow {
                 opcodeTable[opcode] = () => {
                     let conditionMet = false;
                     if (cond === 0) {
-                        conditionMet = true;       // ST: Set True (Always 0xFF)
+                        conditionMet = true;       
                     } else if (cond === 1) {
-                        conditionMet = false;      // SF: Set False (Always 0x00)
+                        conditionMet = false;      
                     } else {
                         conditionMet = cpu.resolveCondition(cond);
                     }
@@ -178,6 +172,18 @@ class M68kProgramFlow {
                         cpu.writeEA(cpu.resolveEA(mode, reg, 1), result, 1);
                         return 8;
                     }
+                };
+                continue;
+            }
+
+            // --- 7. TRAP (Software Exception Vector) ---
+            // Format: [0100][1110][0100][vector:4]
+            // SOLID Fix: Re-located from M68kSystemExceptions.js into its cohesive, correct ProgramFlow module
+            if ((opcode & 0xFFF0) === 0x4E40) {
+                const trapVector = opcode & 0xF;
+                opcodeTable[opcode] = () => {
+                    cpu.triggerException(32 + trapVector); // Vectors 32 to 47 are TRAPs
+                    return 34;
                 };
                 continue;
             }

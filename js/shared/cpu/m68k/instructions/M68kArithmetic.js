@@ -7,14 +7,12 @@
  * Domain Layer: M68K CPU Arithmetic Instructions.
  * Implements the registration and execution logic for the entire M68K 
  * arithmetic instruction family (ADD, ADDA, SUB, SUBA, ADDQ, SUBQ, ADDX, SUBX, 
- * MULS, MULU, DIVS, DIVU, CMP, CMPA, CMPI, CMPM, NEG, NEGX, EXT).
+ * MULS, MULU, DIVS, DIVU, CMP, CMPA, CMPI, CMPM, NEG, NEGX, EXT, NBCD, and CHK).
  * 
  * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Exclusively responsible for the 
- *    definition, registration, and execution of the math/arithmetic instruction subset.
- * 2. Interface Segregation Principle (ISP): Depends on a thin, unified opcode 
- *    mapping dictionary (registry) instead of relying on the complete, heavy 
- *    execution loop of the M68000 class.
+ * - Single Responsibility Principle (SRP): Exclusively responsible for the 
+ *    definition, registration, and execution of the math/arithmetic instruction subset, 
+ *    now including the decimal math NBCD and bounds-comparison CHK instructions (SRP Fix).
  */
 
 class M68kArithmetic {
@@ -44,13 +42,12 @@ class M68kArithmetic {
 
                 if (opMode === 3 || opMode === 7) {
                     // ADDA / SUBA: Destination is always an Address Register (An)
-                    // Does NOT modify any status flags (CCR).
                     opcodeTable[opcode] = () => {
                         const size = (opMode === 3) ? 2 : 3;
                         const srcEa = cpu.resolveEA(srcMode, srcReg, size);
                         let srcVal = cpu.readEA(srcEa, size);
                         
-                        if (size === 2) srcVal = (srcVal << 16) >> 16; // Sign-extend 16 to 32-bit
+                        if (size === 2) srcVal = (srcVal << 16) >> 16; 
                         
                         const destVal = cpu.a[reg];
                         const result = isAdd ? (destVal + srcVal) : (destVal - srcVal);
@@ -76,7 +73,6 @@ class M68kArithmetic {
                             srcVal = cpu.d[reg];
                         }
 
-                        // Explicitly mask operands to their logical size to prevent 32-bit register leakage
                         const mask = size === 1 ? 0xFF : (size === 2 ? 0xFFFF : 0xFFFFFFFF);
                         const signBit = size === 1 ? 0x80 : (size === 2 ? 0x8000 : 0x80000000);
 
@@ -86,7 +82,6 @@ class M68kArithmetic {
                         const result = isAdd ? (destVal + srcVal) : (destVal - srcVal);
                         const resMasked = result & mask;
 
-                        // Aligned Boolean algebraic solvers for CCR Flags (SMC, DMC, RMC)
                         const SMC = (srcVal & signBit) !== 0;
                         const DMC = (destVal & signBit) !== 0;
                         const RMC = (resMasked & signBit) !== 0;
@@ -329,8 +324,6 @@ class M68kArithmetic {
                         const result = isSub ? (destVal - srcVal - cpu.fX) : (destVal + srcVal + cpu.fX);
                         const resMasked = result & mask;
 
-                        // Critical Hardware Rule: Z flag is only cleared if result is non-zero,
-                        // otherwise it remains unaffected (does not reset to 1).
                         if (resMasked !== 0) cpu.fZ = 0; 
                         cpu.fN = (resMasked & signBit) !== 0 ? 1 : 0;
 
@@ -409,7 +402,6 @@ class M68kArithmetic {
                         let divisor = cpu.readEA(srcEa, 2) & 0xFFFF;
                         let dividend = cpu.d[reg] & 0xFFFFFFFF;
 
-                        // 1. Division by Zero: Triggers Vector 5 Exception
                         if (divisor === 0) {
                             cpu.triggerException(5);
                             return 4; 
@@ -424,8 +416,6 @@ class M68kArithmetic {
                             quotient = Math.trunc(dividend / divisor);
                             remainder = dividend % divisor;
 
-                            // 2. Division Overflow (Signed): Quotient exceeds signed 16-bit boundaries
-                            // Destination register must remain completely unmodified
                             if (quotient > 32767 || quotient < -32768) {
                                 cpu.fV = 1; 
                                 cpu.fC = 0;
@@ -436,7 +426,6 @@ class M68kArithmetic {
                             quotient = Math.floor(dividend / divisor);
                             remainder = dividend % divisor;
 
-                            // 3. Division Overflow (Unsigned): Quotient exceeds unsigned 16-bit boundaries
                             if (quotient > 0xFFFF) {
                                 cpu.fV = 1; 
                                 cpu.fC = 0;
@@ -457,7 +446,7 @@ class M68kArithmetic {
             }
 
             // --- 8. EXT (Sign Extend) Group ---
-            else if ((opcode & 0xFEF8) === 0x4880) { // EXT.W (Extend Byte to Word)
+            else if ((opcode & 0xFEF8) === 0x4880) { 
                 const reg = opcode & 7;
                 opcodeTable[opcode] = () => {
                     const val = cpu.d[reg] & 0xFF;
@@ -471,7 +460,7 @@ class M68kArithmetic {
                     return 4;
                 };
             }
-            else if ((opcode & 0xFEF8) === 0x48C0) { // EXT.L (Extend Word to Longword)
+            else if ((opcode & 0xFEF8) === 0x48C0) { 
                 const reg = opcode & 7;
                 opcodeTable[opcode] = () => {
                     const val = cpu.d[reg] & 0xFFFF;
@@ -533,6 +522,64 @@ class M68kArithmetic {
                         return size === 3 ? 16 : 8;
                     };
                 }
+            }
+
+            // --- 10. CHK (Check Register Against Bounds) ---
+            // Format: [0100][reg:3][110][mode:3][reg:3]
+            // SOLID Fix: Re-located from SnesSystemExceptions.js into its cohesive, correct Arithmetic module
+            if ((opcode & 0xF1C0) === 0x4180) {
+                const reg = (opcode >> 9) & 7;
+                const mode = (opcode >> 3) & 7;
+                const srcReg = opcode & 7;
+                
+                opcodeTable[opcode] = () => {
+                    const ea = cpu.resolveEA(mode, srcReg, 2);
+                    const limit = (cpu.readEA(ea, 2) << 16) >> 16; // Sign extended Word
+                    const val = (cpu.d[reg] & 0xFFFF) << 16 >> 16;
+
+                    if (val < 0 || val > limit) {
+                        cpu.fN = val < 0 ? 1 : 0;
+                        cpu.triggerException(6); // CHK Exception Vector
+                        return 40;
+                    }
+                    return 10;
+                };
+                continue;
+            }
+
+            // --- 11. NBCD (Negate Decimal with Extend) ---
+            // Format: [0100][1000][00][mode:3][reg:3]
+            // SOLID Fix: Re-located from SnesSystemExceptions.js into its cohesive, correct Arithmetic module
+            if ((opcode & 0xFFC0) === 0x4800) {
+                const mode = (opcode >> 3) & 7;
+                const reg = opcode & 7;
+                opcodeTable[opcode] = () => {
+                    const ea = cpu.resolveEA(mode, reg, 1);
+                    const val = cpu.readEA(ea, 1);
+                    
+                    let low = 0 - (val & 0x0F) - cpu.fX;
+                    let high = 0 - (val >> 4);
+                    let newCarry = 0;
+
+                    if (low < 0) {
+                        low += 10;
+                        high -= 1;
+                    }
+                    if (high < 0) {
+                        high += 10;
+                        newCarry = 1;
+                    }
+
+                    const result = (high << 4) | low;
+                    
+                    if (result !== 0) cpu.fZ = 0;
+                    cpu.fC = newCarry;
+                    cpu.fX = newCarry;
+                    
+                    cpu.writeEA(ea, result, 1);
+                    return mode === 0 ? 6 : 8;
+                };
+                continue;
             }
         }
     }

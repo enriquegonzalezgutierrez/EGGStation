@@ -6,14 +6,12 @@
  * Role:
  * Domain Layer: M68K CPU Logical Instructions.
  * Implements the registration and execution logic for the entire M68K 
- * logical instruction family (AND, OR, EOR, NOT, TST, CLR, NEG, NEGX, ANDI, ORI, EORI).
+ * logical instruction family (AND, OR, EOR, NOT, TST, CLR, NEG, NEGX, ANDI, ORI, EORI, and TAS).
  * 
  * SOLID Principles Applied:
- * 1. Single Responsibility Principle (SRP): Exclusively responsible for the 
- *    definition, registration, and execution of the logical and clear instruction subset.
- * 2. Interface Segregation Principle (ISP): Depends on a thin, unified opcode 
- *    mapping dictionary (registry) instead of relying on the complete, heavy 
- *    execution loop of the M68000 class.
+ * - Single Responsibility Principle (SRP): Exclusively responsible for the 
+ *    definition, registration, and execution of the logical and clear instruction subset, 
+ *    now including the atomic bit-test TAS instruction (SRP Fix).
  */
 
 class M68kLogical {
@@ -27,40 +25,34 @@ class M68kLogical {
         for (let opcode = 0; opcode < 65536; opcode++) {
             
             // --- 1. Immediate to CCR / SR (ORI, ANDI, EORI to Status Registers) ---
-            // Format ORI/ANDI/EORI to CCR = 0x003C, 0x023C, 0x0A3C (Byte size)
-            // Format ORI/ANDI/EORI to SR  = 0x007C, 0x027C, 0x0A7C (Word size)
             if (opcode === 0x003C || opcode === 0x007C || opcode === 0x023C || opcode === 0x027C || opcode === 0x0A3C || opcode === 0x0A7C) {
-                const isSR = (opcode & 0x0040) !== 0; // Bit 6 determines if it targets SR (1) or CCR (0)
-                const immediateOpType = (opcode >> 8) & 0xF; // 0=ORI, 2=ANDI, A=EORI
+                const isSR = (opcode & 0x0040) !== 0; 
+                const immediateOpType = (opcode >> 8) & 0xF; 
 
                 opcodeTable[opcode] = () => {
                     const size = isSR ? 2 : 1;
-                    
-                    // Fetch immediate operand directly following the instruction word
                     const immEa = cpu.resolveEA(7, 4, size); 
                     const srcVal = cpu.readEA(immEa, size);
 
-                    // Writing to the Status Register (SR) is a privileged operation
                     if (isSR && (cpu.sr & 0x2000) === 0) {
-                        cpu.triggerException(8); // Privilege violation exception
+                        cpu.triggerException(8); 
                         return 34;
                     }
 
                     let currentVal = isSR ? cpu.sr : cpu.getCCR();
                     let result = 0;
 
-                    if (immediateOpType === 0x0) result = currentVal | srcVal;      // ORI to SR/CCR
-                    else if (immediateOpType === 2) result = currentVal & srcVal; // ANDI to SR/CCR
-                    else if (immediateOpType === 0xA) result = currentVal ^ srcVal; // EORI to SR/CCR
+                    if (immediateOpType === 0x0) result = currentVal | srcVal;      
+                    else if (immediateOpType === 2) result = currentVal & srcVal; 
+                    else if (immediateOpType === 0xA) result = currentVal ^ srcVal; 
 
                     if (isSR) {
-                        // Updates stack pointers if supervisor mode status changed
                         cpu.syncStackPointers(result);
                     } else {
                         cpu.setCCR(result & 0xFF);
                     }
 
-                    return 20; // Word-size immediate to SR consumes 20 cycles
+                    return 20; 
                 };
                 continue;
             }
@@ -68,18 +60,16 @@ class M68kLogical {
             // --- 2. AND / OR Group ---
             // Format: [opType:4][reg:3][opMode:3][src_mode:3][src_reg:3]
             const opType = (opcode >> 12) & 0xF;
-            if (opType === 0xC || opType === 0x8) { // AND = 0xC, OR = 0x8
+            if (opType === 0xC || opType === 0x8) { 
                 const reg = (opcode >> 9) & 7;
                 const opMode = (opcode >> 6) & 7;
                 const srcMode = (opcode >> 3) & 7;
                 const srcReg = opcode & 7;
 
-                // Exclude only modes 3 and 7 (which belong to MUL, DIV, ABCD, SBCD instruction groups)
                 if (opMode === 3 || opMode === 7) {
                     continue; 
                 }
                 
-                // Extra protection: EXG (Exchange) overlaps with opType 0xC (AND) when opMode is 5 or 6 and srcMode is 1.
                 if (opType === 0xC && srcMode === 1 && (opMode === 5 || opMode === 6)) {
                     continue;
                 }
@@ -99,7 +89,6 @@ class M68kLogical {
 
                         const result = isAnd ? (destVal & srcVal) : (destVal | srcVal);
 
-                        // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
                         cpu.fZ = result === 0 ? 1 : 0;
@@ -115,7 +104,6 @@ class M68kLogical {
 
                         const result = isAnd ? (destVal & srcVal) : (destVal | srcVal);
 
-                        // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
                         cpu.fZ = result === 0 ? 1 : 0;
@@ -137,7 +125,6 @@ class M68kLogical {
                 const mode = (opcode >> 3) & 7;
                 const srcReg = opcode & 7;
 
-                // Protect CMPM overlapping with EOR
                 if (sizeRaw !== 3 && mode !== 1) { 
                     opcodeTable[opcode] = () => {
                         const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
@@ -151,7 +138,6 @@ class M68kLogical {
 
                         const result = destVal ^ srcVal;
 
-                        // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
                         cpu.fZ = result === 0 ? 1 : 0;
@@ -166,9 +152,8 @@ class M68kLogical {
             }
 
             // --- 4. Immediate Logicals (ANDI, ORI, EORI) to Data/Memory ---
-            // Format: [0000][opType:2][00][size:2][mode:3][reg:3]
             if ((opcode & 0xFF00) === 0x0200 || (opcode & 0xFF00) === 0x0000 || (opcode & 0xFF00) === 0x0A00) {
-                const immediateOpType = (opcode >> 9) & 7; // 0=ORI, 1=ANDI, 5=EORI (0x0A)
+                const immediateOpType = (opcode >> 9) & 7; 
                 const sizeRaw = (opcode >> 6) & 3;
                 
                 if (sizeRaw !== 3) {
@@ -177,11 +162,9 @@ class M68kLogical {
                     const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
 
                     opcodeTable[opcode] = () => {
-                        // Fetch Immediate Operand
                         const immEa = cpu.resolveEA(7, 4, size);
                         let srcVal = cpu.readEA(immEa, size);
                         
-                        // Fetch Destination Operand
                         const destEa = cpu.resolveEA(mode, reg, size);
                         let destVal = cpu.readEA(destEa, size);
 
@@ -192,11 +175,10 @@ class M68kLogical {
                         destVal &= mask;
 
                         let result = 0;
-                        if (immediateOpType === 0) result = destVal | srcVal;      // ORI
-                        else if (immediateOpType === 1) result = destVal & srcVal; // ANDI
-                        else result = destVal ^ srcVal;                            // EORI
+                        if (immediateOpType === 0) result = destVal | srcVal;      
+                        else if (immediateOpType === 1) result = destVal & srcVal; 
+                        else result = destVal ^ srcVal;                            
 
-                        // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
                         cpu.fZ = result === 0 ? 1 : 0;
@@ -218,8 +200,6 @@ class M68kLogical {
                     const mode = (opcode >> 3) & 7;
                     const reg = opcode & 7;
 
-                    // Standard 68000 Rule: TST does NOT support Address Register Direct (An) mode (mode === 1).
-                    // If mode === 1, we skip registration to let the core throw an Illegal Instruction exception.
                     if (mode !== 1) {
                         opcodeTable[opcode] = () => {
                             const size = sizeRaw === 0 ? 1 : (sizeRaw === 1 ? 2 : 3);
@@ -231,7 +211,6 @@ class M68kLogical {
 
                             val &= mask;
 
-                            // Update CCR Status Flags
                             cpu.fV = 0;
                             cpu.fC = 0;
                             cpu.fZ = val === 0 ? 1 : 0;
@@ -245,7 +224,7 @@ class M68kLogical {
             }
 
             // --- 6. CLR (Clear Operand) Group ---
-            // Format: [0100][0010][size:2][mode:3][reg:3]
+            // Format: [0100][0012][size:2][mode:3][reg:3]
             if ((opcode & 0xFF00) === 0x4200) {
                 const sizeRaw = (opcode >> 6) & 3;
                 if (sizeRaw !== 3) {
@@ -257,7 +236,6 @@ class M68kLogical {
                         const ea = cpu.resolveEA(mode, reg, size);
                         cpu.writeEA(ea, 0, size);
 
-                        // Update CCR Status Flags
                         cpu.fN = 0;
                         cpu.fZ = 1;
                         cpu.fV = 0;
@@ -338,7 +316,6 @@ class M68kLogical {
                         const result = (~val) & mask;
                         cpu.writeEA(ea, result, size);
 
-                        // Update CCR Status Flags
                         cpu.fV = 0;
                         cpu.fC = 0;
                         cpu.fZ = result === 0 ? 1 : 0;
@@ -347,6 +324,29 @@ class M68kLogical {
                         return size === 3 ? 10 : 6;
                     };
                 }
+                continue;
+            }
+
+            // --- 9. TAS (Test and Set) ---
+            // Format: [0100][1010][11][mode:3][reg:3]
+            // SOLID Fix: Re-located from M68kSystemExceptions.js into its cohesive, correct Logical module
+            if ((opcode & 0xFFC0) === 0x4AC0) {
+                const mode = (opcode >> 3) & 7;
+                const reg = opcode & 7;
+                opcodeTable[opcode] = () => {
+                    const ea = cpu.resolveEA(mode, reg, 1);
+                    let val = cpu.readEA(ea, 1);
+                    
+                    cpu.fZ = val === 0 ? 1 : 0;
+                    cpu.fN = (val & 0x80) !== 0 ? 1 : 0;
+                    cpu.fV = 0;
+                    cpu.fC = 0;
+
+                    val |= 0x80; // Set MSB atomically (replicates RMW bus cycle)
+                    cpu.writeEA(ea, val, 1);
+                    
+                    return mode === 0 ? 4 : 14;
+                };
                 continue;
             }
         }
