@@ -59,7 +59,7 @@ For an in-depth, low-level explanation of each console's physical hardware, cust
 ### Sega Master System / Sega Mark III
 The Sega Master System relies on a central Zilog Z80 processor interacting with dedicated hardware chips over a shared 16-bit Address Bus and 8-bit Data Bus.
 
-```text
+```mermaid
 graph TB
     subgraph Core System
         CPU[Shared Zilog Z80 CPU Core] <-->|Memory & Port cycles| BUS[Sega Master System Bus]
@@ -76,12 +76,19 @@ graph TB
         BUS --->|/IORQ: 0x40 - 0x7F| PSG[Shared Sega PSG]
         BUS <-->|/IORQ: 0xC0 - 0xFF| IO[Sega 315-5297 Controller Chip]
     end
+
+    style CPU fill:#29292e,stroke:#3e3e46,stroke-width:2px,color:#fff
+    style BUS fill:#7f00ff,stroke:#5a00b3,stroke-width:2px,color:#fff
+    style VDP fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style PSG fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style IO fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style MAPPER fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
 ```
 
 ### Sega Genesis / Mega Drive
 The Sega Genesis coordinates execution between two distinct Central Processing Units (a primary Motorola 68000 and a secondary Zilog Z80) communicating via asynchronous bus request lines, and synchronizes synthesis commands with the Yamaha YM2612 FM and TI SN76489 PSG chips:
 
-```text
+```mermaid
 graph TB
     subgraph Core System
         M68K[Shared Motorola 68000 CPU] <-->|Memory & I/O cycles| MBUS[Genesis Bus M68K]
@@ -98,12 +105,20 @@ graph TB
         MBUS <-->|VDP Port Registers $C00000| VDP[Genesis VDP Video Core]
         VDP <-->|Render Line| VRAM[VRAM / CRAM / VSRAM]
     end
+
+    style M68K fill:#29292e,stroke:#3e3e46,stroke-width:2px,color:#fff
+    style MBUS fill:#7f00ff,stroke:#5a00b3,stroke-width:2px,color:#fff
+    style ZBUS fill:#5a00b3,stroke:#3e3e46,stroke-width:2px,color:#fff
+    style Z80 fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style YM fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style PSG fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style VDP fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
 ```
 
 ### Super Nintendo (SNES) / Super Famicom
 The Super Nintendo relies on the 16-bit Ricoh 5A22 CPU coordinating execution alongside the Sony SPC700 sound CPU and a dual-chip custom Picture Processing Unit (PPU) over a multi-bus architecture:
 
-```text
+```mermaid
 graph TB
     subgraph Core System
         CPU[Ricoh 5A22 65816 CPU Core] <-->|Memory & Bus cycles| BUS[Unified System Memory Bus]
@@ -124,6 +139,14 @@ graph TB
         BUS <-->|Cartridge Address space| CART[SnesCartridge Strategy]
         CART <-->|Auto-mapping| ROM[ROM Buffer]
     end
+
+    style CPU fill:#29292e,stroke:#3e3e46,stroke-width:2px,color:#fff
+    style BUS fill:#7f00ff,stroke:#5a00b3,stroke-width:2px,color:#fff
+    style APU fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style SPC fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style DSP fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style PPU fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
+    style CART fill:#1d1d22,stroke:#29292e,stroke-width:2px,color:#fff
 ```
 
 ---
